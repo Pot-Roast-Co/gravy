@@ -26,11 +26,14 @@ func run(args []string) error {
 	case "version", "--version", "-v":
 		fmt.Println("gravy", version)
 		return nil
+	case "try":
+		// A smoke test for the pieces built so far: worktree, agent, diff. Not the product.
+		return runTry(args[1:])
 	case "", "serve":
 		// The TUI (GR-024) and the daemon (GR-018) do not exist yet. Until they do, the
 		// binary exists to prove the build, not to do anything.
 		return fmt.Errorf("not implemented yet: gravy is pre-alpha (see docs/MILESTONES.md)")
 	default:
-		return fmt.Errorf("unknown command %q", cmd)
+		return fmt.Errorf("unknown command %q (try: version, try)", cmd)
 	}
 }
