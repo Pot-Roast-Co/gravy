@@ -55,9 +55,11 @@ func TestCheck(t *testing.T) {
 			want:  0,
 		},
 		{
-			name:  "core may not import bubbletea",
+			// bubbletea in core breaks both the presentation rule and core purity; both are
+			// reported, because each names a different reason the import is wrong.
+			name:  "core may not import bubbletea, and breaks two rules by doing so",
 			files: map[string]string{"internal/core/ticket.go": teaSrc},
-			want:  1,
+			want:  2,
 		},
 		{
 			name:  "lipgloss subpackage is caught",
@@ -78,12 +80,36 @@ func TestCheck(t *testing.T) {
 			want:  1,
 		},
 		{
+			name:  "core may import the standard library",
+			files: map[string]string{"internal/core/state.go": "package p\n\nimport (\n\t_ \"errors\"\n\t_ \"time\"\n\t_ \"encoding/json\"\n)\n"},
+			want:  0,
+		},
+		{
+			name:  "core may not import a third-party module",
+			files: map[string]string{"internal/core/state.go": "package p\n\nimport _ \"gopkg.in/yaml.v3\"\n"},
+			want:  1,
+		},
+		{
+			// core depends on nothing, including Gravy's own packages: whatever core imports,
+			// every other package inherits.
+			name:  "core may not import another gravy package",
+			files: map[string]string{"internal/core/state.go": "package p\n\nimport _ \"github.com/bobbybrady/gravy/internal/store\"\n"},
+			want:  1,
+		},
+		{
+			name:  "packages other than core may import third-party modules",
+			files: map[string]string{"internal/store/store.go": "package p\n\nimport _ \"modernc.org/sqlite\"\n"},
+			want:  0,
+		},
+		{
 			name: "violations are counted per import, across files",
 			files: map[string]string{
-				"internal/core/a.go":  execSrc,
-				"internal/store/b.go": teaSrc,
-				"internal/host/c.go":  execSrc,
-				"internal/tui/d.go":   teaSrc,
+				// os/exec is standard library, so core importing it breaks the execution
+				// rule only; core purity is about non-stdlib dependencies.
+				"internal/core/a.go":  execSrc, // rule 1
+				"internal/store/b.go": teaSrc,  // rule 2
+				"internal/host/c.go":  execSrc, // permitted
+				"internal/tui/d.go":   teaSrc,  // permitted
 			},
 			want: 2,
 		},
@@ -107,6 +133,27 @@ func TestCheck(t *testing.T) {
 }
 
 // TestCheckReportsLocation guards the part a human actually reads: the file and line.
+func TestIsStdlib(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"errors", true},
+		{"os/exec", true},
+		{"encoding/json", true},
+		{"database/sql", true},
+		{"github.com/charmbracelet/bubbletea", false},
+		{"modernc.org/sqlite", false},
+		{"gopkg.in/yaml.v3", false},
+		{"github.com/bobbybrady/gravy/internal/core", false},
+	}
+	for _, tt := range tests {
+		if got := isStdlib(tt.path); got != tt.want {
+			t.Errorf("isStdlib(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestCheckReportsLocation(t *testing.T) {
 	dir := t.TempDir()
 	writeGo(t, dir, "internal/agentrun/run.go", "package p\n\nimport (\n\t_ \"fmt\"\n\t_ \"os/exec\"\n)\n")

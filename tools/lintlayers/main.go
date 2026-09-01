@@ -22,40 +22,88 @@ import (
 	"strings"
 )
 
-// rule forbids a set of imports everywhere except under an allowed set of path prefixes.
+// rule is one layering constraint: which directories it applies to, and which imports it
+// forbids there.
 type rule struct {
-	name    string
-	reason  string
-	allowed []string // slash-separated dir prefixes, relative to module root
-	// forbidden reports whether an import path violates this rule.
+	name   string
+	reason string
+	// scope describes, for humans, where the rule bites.
+	scope string
+	// applies reports whether a package directory is subject to this rule.
+	applies func(dir string) bool
+	// forbidden reports whether an import path violates it.
 	forbidden func(importPath string) bool
+}
+
+// except returns a predicate matching every directory outside the given prefixes.
+func except(prefixes ...string) func(string) bool {
+	return func(dir string) bool { return !under(dir, prefixes) }
+}
+
+// only returns a predicate matching directories at or beneath the given prefixes.
+func only(prefixes ...string) func(string) bool {
+	return func(dir string) bool { return under(dir, prefixes) }
+}
+
+// under reports whether dir sits at or beneath one of the prefixes. It compares whole path
+// segments, so internal/hostile does not match internal/host.
+func under(dir string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if dir == p || strings.HasPrefix(dir, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// isStdlib reports whether an import path belongs to the standard library. Every module path
+// has a dot in its first segment (github.com/..., modernc.org/...); no standard library package
+// does. Gravy's own packages are module-qualified, so they are correctly treated as non-stdlib.
+func isStdlib(importPath string) bool {
+	first, _, _ := strings.Cut(importPath, "/")
+	return !strings.Contains(first, ".")
+}
+
+func anyPrefix(importPath string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if importPath == p || strings.HasPrefix(importPath, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 var rules = []rule{
 	{
 		name:    "Rule 1 (execution)",
-		reason:  "all execution must go through internal/host — see ARCHITECTURE.md §1.1",
-		allowed: []string{"internal/host"},
+		reason:  "all execution must go through internal/host - see ARCHITECTURE.md 1.1",
+		scope:   "permitted only under: internal/host",
+		applies: except("internal/host"),
 		forbidden: func(p string) bool {
 			return p == "os/exec"
 		},
 	},
 	{
 		name:    "Rule 2 (presentation)",
-		reason:  "core must never import presentation — see ARCHITECTURE.md §1.1",
-		allowed: []string{"internal/tui", "cmd"},
+		reason:  "core must never import presentation - see ARCHITECTURE.md 1.1",
+		scope:   "permitted only under: internal/tui, cmd",
+		applies: except("internal/tui", "cmd"),
 		forbidden: func(p string) bool {
-			for _, ui := range []string{
+			return anyPrefix(p, []string{
 				"github.com/charmbracelet/bubbletea",
 				"github.com/charmbracelet/lipgloss",
 				"github.com/charmbracelet/bubbles",
-			} {
-				if p == ui || strings.HasPrefix(p, ui+"/") {
-					return true
-				}
-			}
-			return false
+			})
 		},
+	},
+	{
+		// ARCHITECTURE.md 2: core depends on nothing. It is the vocabulary of the whole
+		// system, so anything it imports every other package inherits.
+		name:      "Rule 3 (core purity)",
+		reason:    "internal/core may import only the standard library - see ARCHITECTURE.md 2",
+		scope:     "applies to: internal/core",
+		applies:   only("internal/core"),
+		forbidden: func(p string) bool { return !isStdlib(p) },
 	},
 }
 
@@ -79,7 +127,7 @@ func main() {
 	}
 
 	if len(violations) == 0 {
-		fmt.Println("lint-layers: ok — both layering rules hold")
+		fmt.Println("lint-layers: ok — all layering rules hold")
 		return
 	}
 
@@ -93,7 +141,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s:%d: %s violates %s\n", v.file, v.line, strconv.Quote(v.imp), v.rule)
 	}
 	for _, r := range rules {
-		fmt.Fprintf(os.Stderr, "\n%s: %s\n  permitted only under: %s\n", r.name, r.reason, strings.Join(r.allowed, ", "))
+		fmt.Fprintf(os.Stderr, "\n%s: %s\n  %s\n", r.name, r.reason, r.scope)
 	}
 	fmt.Fprintf(os.Stderr, "\n%d violation(s).\n", len(violations))
 	os.Exit(1)
@@ -135,7 +183,7 @@ func check(root string) ([]violation, error) {
 				continue
 			}
 			for _, r := range rules {
-				if !r.forbidden(imp) || allows(r, dir) {
+				if !r.applies(dir) || !r.forbidden(imp) {
 					continue
 				}
 				out = append(out, violation{
@@ -149,14 +197,4 @@ func check(root string) ([]violation, error) {
 		return nil
 	})
 	return out, err
-}
-
-// allows reports whether dir sits under one of the rule's permitted prefixes.
-func allows(r rule, dir string) bool {
-	for _, a := range r.allowed {
-		if dir == a || strings.HasPrefix(dir, a+"/") {
-			return true
-		}
-	}
-	return false
 }

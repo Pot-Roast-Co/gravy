@@ -1,0 +1,183 @@
+package core
+
+import "time"
+
+// Project is a registered repository and the policy Gravy applies to it.
+type Project struct {
+	ID           string
+	Slug         string
+	Name         string
+	RepoPath     string
+	TargetBranch string
+	MergeMode    LandMode
+
+	// Requirements a host must satisfy to run this project's tickets (OS, tools).
+	Requirements Requirements
+	// Validation steps run inside the worktree, in order.
+	Validation []Step
+	// Allowlist is what an agent may do here without asking.
+	Allowlist Allowlist
+	// Routes overrides the global route table for this project.
+	Routes map[Route][]Choice
+
+	// ParallelMode opts this project out of the conservative default of one ticket in flight
+	// through merge. Conflicts become possible and are the human's to handle.
+	ParallelMode bool
+	// MaxConcurrency is consulted only when ParallelMode is set.
+	MaxConcurrency int
+
+	CreatedAt time.Time
+}
+
+// Requirements constrain which hosts can run a project's or a ticket's work.
+type Requirements struct {
+	OS    []string          // empty means any
+	Tools map[string]string // name -> minimum version, "" for any version
+}
+
+// Step is one validation command.
+type Step struct {
+	Name     string // build, test, lint, typecheck
+	Cmd      string
+	Timeout  time.Duration
+	Required bool // a failed optional step warns; it does not fail the run
+}
+
+// Allowlist is what an agent may do in a project without escalating. Everything not permitted
+// here stops the agent and asks the human; nothing is ever auto-granted.
+type Allowlist struct {
+	ReadPaths  []string // globs, relative to the worktree
+	WritePaths []string
+	Commands   []Pattern
+	Network    bool
+}
+
+// Pattern is an allowed shell command, as a glob or a ^-prefixed regex.
+type Pattern struct {
+	Match string
+	// Note is shown in Needs You when this rule is what allowed an action, so a human can see
+	// why something was permitted without reading configuration.
+	Note string
+}
+
+// Choice is a concrete provider and model a route can resolve to.
+type Choice struct {
+	ProviderID string
+	Model      string
+	// Why records how this choice was reached, surfaced verbatim in the TUI. Every automated
+	// decision in Gravy must be answerable.
+	Why []string
+}
+
+// Ticket is a unit of work.
+type Ticket struct {
+	ID        string
+	ProjectID string
+	Title     string
+	Body      string
+	State     State
+	Priority  int
+	// Position orders the queue. It is fractional so reordering is a single row update
+	// (average the neighbours) rather than renumbering the queue.
+	Position float64
+	Route    Route
+
+	Requirements Requirements
+	// HostOverride is an explicit human choice and is honoured unconditionally.
+	HostOverride string
+
+	WorktreePath string
+	Branch       string
+	// RetryCount is the self-correction budget consumed so far.
+	RetryCount int
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Run is one execution of an agent against a ticket.
+type Run struct {
+	ID         string
+	TicketID   string
+	HostID     string
+	ProviderID string
+	Model      string
+	// SessionRef is the provider's opaque session identifier, and is what makes resuming a
+	// blocked ticket possible rather than restarting it.
+	SessionRef string
+	State      State
+
+	FailureClass FailureClass
+	// FailureNote records the evidence that produced FailureClass, so a misclassification is
+	// diagnosable rather than mysterious.
+	FailureNote string
+
+	PID       int
+	Turns     int
+	TokensIn  int
+	TokensOut int
+	// CostUSD is nil when the provider does not report cost.
+	CostUSD *float64
+
+	StartedAt time.Time
+	EndedAt   *time.Time
+}
+
+// Summary is the durable account of what a run changed.
+type Summary struct {
+	TicketID string
+	RunID    string
+	Branch   string
+	Commits  []string
+	Files    []FileChange
+	// Narrative is markdown generated from the diff — never from the agent's transcript. A
+	// self-report from the party with a motive to declare success is not evidence.
+	Narrative string
+	// Assumptions the agent recorded while working.
+	Assumptions []string
+	CreatedAt   time.Time
+}
+
+// FileChange is one file's contribution to a diff.
+type FileChange struct {
+	Path      string
+	Status    string // added, modified, deleted, renamed
+	Additions int
+	Deletions int
+}
+
+// Attention is one entry in the Needs You queue.
+type Attention struct {
+	ID        string
+	ProjectID string
+	TicketID  string
+	RunID     string
+	Reason    AttentionReason
+	// Payload carries whatever the reason needs to be acted on without hunting: the question
+	// and its options, the requested command, the conflicting paths, diff stats.
+	Payload   map[string]any
+	Resolved  bool
+	CreatedAt time.Time
+}
+
+// Caps describes what a host can do. Hosts are filtered against project and ticket
+// Requirements before a ticket is assigned.
+type Caps struct {
+	OS        string // darwin, linux, windows
+	Arch      string
+	RAMBytes  uint64
+	GPU       string
+	Tools     map[string]string // name -> version
+	Providers map[string]bool   // provider id -> installed
+}
+
+// ProviderAvailability records a model cooled down after a genuine provider-side failure.
+type ProviderAvailability struct {
+	ProviderID string
+	Model      string
+	Class      FailureClass
+	// Until is when the cooldown expires. A provider-reported reset time is preferred over a
+	// guessed backoff whenever one is available.
+	Until time.Time
+	Note  string
+}
