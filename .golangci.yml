@@ -1,0 +1,44 @@
+# golangci-lint v2 configuration.
+# Deliberately close to the defaults: standard Go, boring choices (CLAUDE.md).
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    # defaults: errcheck, govet, ineffassign, staticcheck, unused
+    - revive        # exported identifiers get doc comments
+    - bodyclose
+    - errorlint     # errors must wrap with %w, and be compared with errors.Is/As
+    - misspell
+    - unconvert
+    - nolintlint    # a //nolint must say which linter and why
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments: ["disableStutteringCheck"]
+        - name: error-strings
+        - name: context-as-argument
+        - name: indent-error-flow
+    errcheck:
+      check-type-assertions: true
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests may be noisier than production code.
+      - path: _test\.go
+        linters: [errcheck, revive]
+
+formatters:
+  enable:
+    - gofmt
