@@ -68,6 +68,29 @@ func (r *LocalRepo) Fetch(ctx context.Context) error {
 	return nil
 }
 
+// TargetRef returns the ref that represents freshly-fetched target state for a branch.
+//
+// After a fetch it is the remote-tracking ref, origin/<branch>, NOT the local branch: a local
+// branch does not move when you fetch, so cutting a worktree from it silently reuses whatever
+// state the clone was last pulled to. That is precisely the bug that makes a queued ticket miss
+// the work merged just before it — the ticket branches from yesterday and either reimplements
+// the previous ticket or conflicts with it.
+//
+// A repository with no remote falls back to the local branch, which is correct there: with
+// nothing to fetch from, the local branch is the target.
+func (r *LocalRepo) TargetRef(ctx context.Context, branch string) (string, error) {
+	for _, candidate := range []string{"origin/" + branch, branch} {
+		res, err := r.runner.run(ctx, r.repoPath, "rev-parse", "--verify", "--quiet", candidate+"^{commit}")
+		if err != nil {
+			return "", err
+		}
+		if res.code == 0 {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("target branch %q does not resolve locally or on origin", branch)
+}
+
 // CreateWorktree creates a branch at base and checks it out in its own directory.
 //
 // base is honoured as given and is never silently replaced with the target branch. That is what

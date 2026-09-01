@@ -1,0 +1,603 @@
+package agentrun
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/bobbybrady/gravy/internal/git"
+	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/bobbybrady/gravy/internal/validate"
+)
+
+// Store is what the orchestrator needs from persistence.
+type Store interface {
+	GetTicket(ctx context.Context, id string) (core.Ticket, error)
+	UpdateTicket(ctx context.Context, t core.Ticket) error
+	SetTicketState(ctx context.Context, id string, ev core.Event) (core.State, error)
+	GetProject(ctx context.Context, id string) (core.Project, error)
+	CreateRun(ctx context.Context, r core.Run) error
+	UpdateRun(ctx context.Context, r core.Run) error
+	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
+	OpenAttention(ctx context.Context, a core.Attention) error
+	SetProviderUnavailable(ctx context.Context, a core.ProviderAvailability) error
+}
+
+// Repos supplies a git repository manager per project.
+type Repos interface {
+	For(project core.Project) (Repo, error)
+}
+
+// Repo is the git surface the orchestrator uses.
+type Repo interface {
+	Fetch(ctx context.Context) error
+	// TargetRef resolves the target branch to the ref holding freshly-fetched state.
+	TargetRef(ctx context.Context, branch string) (string, error)
+	CreateWorktree(ctx context.Context, branch, base string) (git.Worktree, error)
+	RemoveWorktree(ctx context.Context, w git.Worktree) error
+	CommitAll(ctx context.Context, w git.Worktree, msg string) (string, error)
+	Diff(ctx context.Context, w git.Worktree, base string) (git.Diff, error)
+}
+
+// Slots is the worker pool a run claims from.
+type Slots interface {
+	TryClaim() bool
+	Release()
+}
+
+// PromptBuilder assembles the prompt for an attempt.
+//
+// GR-015 supplies the real context builder. Until then a minimal builder ships (see
+// SimplePrompt), behind this interface so the orchestrator is written once.
+type PromptBuilder interface {
+	Build(ctx context.Context, t core.Ticket, p core.Project, attempt Attempt) (string, error)
+}
+
+// Attempt describes which try this is, and why the last one failed.
+type Attempt struct {
+	// Number is 1 for the first attempt.
+	Number int
+	// PriorFailure is the validation output from the previous attempt, empty on the first.
+	PriorFailure string
+}
+
+// IDGen generates run identifiers.
+type IDGen func() string
+
+// Config holds the orchestrator's tunables.
+type Config struct {
+	// SelfCorrectionBudget is how many extra attempts a red validation gets before the ticket
+	// parks in Needs You. Zero means one attempt and no retries.
+	SelfCorrectionBudget int
+	// RunTimeout caps a single agent run.
+	RunTimeout time.Duration
+	// MaxTurns caps agent turns.
+	MaxTurns int
+	// RunsDir is where per-run artefacts live, normally ~/.gravy/runs.
+	RunsDir string
+	// CooldownQuota, CooldownRateLimit and CooldownUnavailable are how long a model is
+	// considered unavailable after each kind of provider-side failure.
+	CooldownQuota       time.Duration
+	CooldownRateLimit   time.Duration
+	CooldownUnavailable time.Duration
+	// MaxRouteAttempts bounds how many times a run re-resolves its route after provider-side
+	// failures, so an entirely unavailable provider cannot spin forever.
+	MaxRouteAttempts int
+}
+
+// Orchestrator executes one ticket from Ready to Reviewing.
+type Orchestrator struct {
+	store     Store
+	repos     Repos
+	hosts     map[string]host.Host
+	providers map[string]provider.Provider
+	slots     Slots
+	validator validate.Runner
+	prompts   PromptBuilder
+	cfg       Config
+	newID     IDGen
+
+	mu   sync.Mutex
+	live map[string]*liveRun
+}
+
+// liveRun tracks an executing run so it can be killed.
+type liveRun struct {
+	cancel context.CancelFunc
+	handle provider.Handle
+}
+
+// New returns an orchestrator.
+func New(s Store, repos Repos, slots Slots, v validate.Runner, p PromptBuilder, cfg Config, newID IDGen) *Orchestrator {
+	if cfg.MaxRouteAttempts < 1 {
+		cfg.MaxRouteAttempts = 3
+	}
+	return &Orchestrator{
+		store:     s,
+		repos:     repos,
+		hosts:     map[string]host.Host{},
+		providers: map[string]provider.Provider{},
+		slots:     slots,
+		validator: v,
+		prompts:   p,
+		cfg:       cfg,
+		newID:     newID,
+		live:      map[string]*liveRun{},
+	}
+}
+
+// RegisterHost makes a host available to runs.
+func (o *Orchestrator) RegisterHost(h host.Host) { o.hosts[h.ID()] = h }
+
+// RegisterProvider makes a provider available to runs.
+func (o *Orchestrator) RegisterProvider(p provider.Provider) { o.providers[p.ID()] = p }
+
+// Assignment is what the scheduler decided.
+type Assignment struct {
+	TicketID   string
+	HostID     string
+	ProviderID string
+	Model      string
+}
+
+// Result is how a ticket's run ended.
+type Result struct {
+	TicketID string
+	RunID    string
+	// FinalState is the ticket's state when the orchestrator finished with it.
+	FinalState core.State
+	Attempts   int
+	Validation validate.Results
+	Worktree   git.Worktree
+	// Commit is the hash of the agent's work, empty when it changed nothing.
+	Commit string
+}
+
+// Run executes one ticket end to end.
+//
+// The worker slot is released on every exit path, including a panic in a provider adapter: a
+// leaked slot permanently shrinks the pool, and the failure is invisible until the queue
+// mysteriously stops moving.
+func (o *Orchestrator) Run(ctx context.Context, a Assignment) (res Result, err error) {
+	if !o.slots.TryClaim() {
+		return Result{}, errors.New("agentrun: no worker slot available")
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			o.slots.Release()
+		}
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			release()
+			err = fmt.Errorf("agentrun: panic during run of %q: %v", a.TicketID, p)
+		}
+	}()
+	defer release()
+
+	return o.run(ctx, a)
+}
+
+func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
+	res := Result{TicketID: a.TicketID}
+
+	ticket, err := o.store.GetTicket(ctx, a.TicketID)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	project, err := o.store.GetProject(ctx, ticket.ProjectID)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	h, ok := o.hosts[a.HostID]
+	if !ok {
+		return res, fmt.Errorf("agentrun: host %q is not registered", a.HostID)
+	}
+
+	// Ready -> Assigned -> Running, through the state machine so an illegal path is caught.
+	if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventAssign); err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+
+	repo, err := o.repos.For(project)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+
+	// Fetch, THEN cut the worktree. Per ticket, at claim time — never a batch fetch.
+	//
+	// This ordering is the whole reason queued work builds on whatever merged before it. A
+	// worktree cut from a stale target silently omits the previous ticket's work, and the
+	// agent then reimplements or conflicts with it.
+	if err := repo.Fetch(ctx); err != nil {
+		return res, fmt.Errorf("agentrun: fetch %s: %w", project.Slug, err)
+	}
+
+	// The base is the remote-tracking ref, not the local branch. A local branch does not move
+	// when you fetch, so cutting from it would hand the agent yesterday's target and undo the
+	// entire point of fetching per ticket at claim time.
+	base, err := repo.TargetRef(ctx, project.TargetBranch)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	branch := git.BranchName(ticket.ID, ticket.Title)
+	wt, err := repo.CreateWorktree(ctx, branch, base)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	res.Worktree = wt
+
+	if err := o.updateTicketFields(ctx, ticket.ID, func(t *core.Ticket) {
+		t.WorktreePath = wt.Path
+		t.Branch = wt.Branch
+	}); err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+
+	loop, err := o.attemptLoop(ctx, ticket, project, h, a, repo, wt)
+	res.Attempts, res.Validation, res.Commit, res.RunID = loop.attempts, loop.validation, loop.commit, loop.runID
+	if err != nil {
+		return res, err
+	}
+
+	// A provider-side failure has already parked the ticket in Needs You. Falling through here
+	// would tell the state machine that validation passed on a ticket that never validated.
+	if loop.parked {
+		current, gerr := o.store.GetTicket(ctx, ticket.ID)
+		if gerr != nil {
+			return res, fmt.Errorf("agentrun: %w", gerr)
+		}
+		res.FinalState = current.State
+		return res, nil
+	}
+
+	if !loop.validation.Green() {
+		// Budget exhausted and still red: park it visibly rather than hanging.
+		state, aerr := o.park(ctx, ticket, loop.runID, core.ReasonValidationFailed, map[string]any{
+			"attempts": loop.attempts,
+			"summary":  loop.validation.Summary(),
+		})
+		res.FinalState = state
+		return res, aerr
+	}
+
+	state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventValidationPassed)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	res.FinalState = state
+	return res, nil
+}
+
+// loopResult is what the attempt loop produced.
+type loopResult struct {
+	attempts   int
+	validation validate.Results
+	commit     string
+	runID      string
+	// parked reports that the loop already moved the ticket to Needs You, so the caller must
+	// not apply any further transition.
+	parked bool
+}
+
+// attemptLoop runs the agent and validation, retrying within the self-correction budget.
+func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, project core.Project, h host.Host, a Assignment, repo Repo, wt git.Worktree) (loopResult, error) {
+	var (
+		res          loopResult
+		priorFailure string
+	)
+
+	maxAttempts := o.cfg.SelfCorrectionBudget + 1
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		res.attempts = attempt
+		runID, outcome, err := o.executeAgent(ctx, ticket, project, h, a, wt, Attempt{
+			Number:       attempt,
+			PriorFailure: priorFailure,
+		})
+		res.runID = runID
+		if err != nil {
+			return res, err
+		}
+
+		if outcome.Class != provider.Success {
+			// A provider-side failure is not the agent's fault and must not consume a
+			// self-correction retry. The two budgets are independent: quota has nothing to
+			// do with whether the agent can fix its own build error.
+			if outcome.Class.IsQuotaCondition() {
+				res.parked = true
+				return res, o.handleProviderFailure(ctx, ticket, a, outcome)
+			}
+			// An ordinary task failure: fall through so validation records the state and
+			// the retry budget applies.
+		}
+
+		// Running -> Validating. Every state change goes through the transition table, so a
+		// missing edge fails loudly here rather than corrupting the lifecycle silently.
+		if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventAgentFinished); err != nil {
+			return res, fmt.Errorf("agentrun: %w", err)
+		}
+
+		// Commit whatever the agent produced, so the diff is durable even if the next step
+		// fails. An agent that changed nothing returns an empty hash, which is not an error.
+		c, err := repo.CommitAll(ctx, wt, "gravy: "+ticket.ID+" attempt "+fmt.Sprint(attempt))
+		if err != nil {
+			return res, fmt.Errorf("agentrun: %w", err)
+		}
+		if c != "" {
+			res.commit = c
+		}
+
+		res.validation, err = o.runValidation(ctx, h, project, wt, runID)
+		if err != nil {
+			return res, err
+		}
+
+		if res.validation.Green() && outcome.Class == provider.Success {
+			return res, nil
+		}
+
+		// Feed the failure back to the next attempt, which is the entire point of the budget.
+		priorFailure = failureContext(outcome, res.validation)
+
+		if attempt < maxAttempts {
+			retry := attempt
+			if err := o.updateTicketFields(ctx, ticket.ID, func(t *core.Ticket) {
+				t.RetryCount = retry
+			}); err != nil {
+				return res, fmt.Errorf("agentrun: %w", err)
+			}
+			if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventValidationRetry); err != nil {
+				return res, fmt.Errorf("agentrun: %w", err)
+			}
+		}
+	}
+	return res, nil
+}
+
+// executeAgent performs one agent run and records it.
+func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, project core.Project, h host.Host, a Assignment, wt git.Worktree, attempt Attempt) (string, provider.Outcome, error) {
+	p, ok := o.providers[a.ProviderID]
+	if !ok {
+		return "", provider.Outcome{}, fmt.Errorf("agentrun: provider %q is not registered", a.ProviderID)
+	}
+
+	prompt, err := o.prompts.Build(ctx, ticket, project, attempt)
+	if err != nil {
+		return "", provider.Outcome{}, fmt.Errorf("agentrun: build prompt: %w", err)
+	}
+
+	runID := o.newID()
+	runDir := filepath.Join(o.cfg.RunsDir, runID)
+
+	run := core.Run{
+		ID: runID, TicketID: ticket.ID, HostID: a.HostID, ProviderID: a.ProviderID,
+		Model: a.Model, State: core.StateRunning, StartedAt: time.Now(),
+	}
+	if err := o.store.CreateRun(ctx, run); err != nil {
+		return runID, provider.Outcome{}, fmt.Errorf("agentrun: %w", err)
+	}
+
+	// The first attempt moves Assigned -> Running; later attempts are already Running.
+	if attempt.Number == 1 {
+		if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventStart); err != nil {
+			return runID, provider.Outcome{}, fmt.Errorf("agentrun: %w", err)
+		}
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	handle, err := p.Run(runCtx, h, provider.AgentTask{
+		RunID:        runID,
+		WorktreePath: wt.Path,
+		Prompt:       prompt,
+		Model:        a.Model,
+		Timeout:      o.cfg.RunTimeout,
+		MaxTurns:     o.cfg.MaxTurns,
+		LogPath:      filepath.Join(runDir, "agent.log"),
+		AskPath:      filepath.Join(runDir, "ask.json"),
+		Allowlist:    project.Allowlist,
+	})
+	if err != nil {
+		return runID, provider.Outcome{}, fmt.Errorf("agentrun: start agent: %w", err)
+	}
+
+	o.trackLive(ticket.ID, &liveRun{cancel: cancel, handle: handle})
+	defer o.untrackLive(ticket.ID)
+
+	// Events must be drained or the provider stalls once its buffer fills. GR-011 will
+	// persist these; for now they are consumed so the run proceeds.
+	go func() {
+		for range handle.Events() {
+		}
+	}()
+
+	outcome, waitErr := handle.Wait()
+	ended := time.Now()
+
+	run.State = core.StateValidating
+	run.FailureClass = outcome.Class
+	run.FailureNote = outcome.Note
+	run.SessionRef = outcome.Session.ID
+	run.Turns = outcome.Turns
+	run.TokensIn = outcome.TokensIn
+	run.TokensOut = outcome.TokensOut
+	run.CostUSD = outcome.CostUSD
+	run.EndedAt = &ended
+	if err := o.store.UpdateRun(ctx, run); err != nil {
+		return runID, outcome, fmt.Errorf("agentrun: %w", err)
+	}
+	if waitErr != nil {
+		return runID, outcome, fmt.Errorf("agentrun: agent: %w", waitErr)
+	}
+	return runID, outcome, nil
+}
+
+// runValidation runs the project's steps and records each result.
+func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, project core.Project, wt git.Worktree, runID string) (validate.Results, error) {
+	if len(project.Validation) == 0 {
+		return nil, nil
+	}
+	results, err := o.validator.Run(ctx, h, wt.Path, project.Validation)
+	if err != nil {
+		return results, fmt.Errorf("agentrun: validation: %w", err)
+	}
+	for i, r := range results {
+		id := fmt.Sprintf("%s-%d", runID, i)
+		if err := o.store.AddValidation(ctx, id, runID, r.Step, r.ExitCode, r.Duration.Milliseconds(), r.LogPath); err != nil {
+			return results, fmt.Errorf("agentrun: record validation: %w", err)
+		}
+	}
+	return results, nil
+}
+
+// handleProviderFailure cools down the model and parks the ticket.
+//
+// The self-correction budget is deliberately untouched: it exists for the agent failing at the
+// work, and a quota limit says nothing about whether the agent could fix its own build error.
+// Spending a retry here would silently shorten the budget for the attempt that actually matters.
+func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ticket, a Assignment, outcome provider.Outcome) error {
+	cooldown := o.cooldownFor(outcome.Class)
+	if cooldown > 0 {
+		if err := o.store.SetProviderUnavailable(ctx, core.ProviderAvailability{
+			ProviderID: a.ProviderID,
+			Model:      a.Model,
+			Class:      outcome.Class,
+			Until:      time.Now().Add(cooldown),
+			Note:       outcome.Note,
+		}); err != nil {
+			return fmt.Errorf("agentrun: record cooldown: %w", err)
+		}
+	}
+
+	reason := core.ReasonValidationFailed
+	if outcome.Class == provider.AuthExpired {
+		reason = core.ReasonProviderAuth
+	}
+	_, err := o.park(ctx, ticket, "", reason, map[string]any{
+		"provider": a.ProviderID,
+		"model":    a.Model,
+		"class":    outcome.Class.String(),
+		"note":     outcome.Note,
+	})
+	return err
+}
+
+func (o *Orchestrator) cooldownFor(c core.FailureClass) time.Duration {
+	switch c {
+	case provider.QuotaExhausted:
+		return orDefault(o.cfg.CooldownQuota, time.Hour)
+	case provider.RateLimited:
+		return orDefault(o.cfg.CooldownRateLimit, 5*time.Minute)
+	case provider.ProviderUnavailable, provider.AuthExpired:
+		return orDefault(o.cfg.CooldownUnavailable, 15*time.Minute)
+	default:
+		return 0
+	}
+}
+
+func orDefault(d, fallback time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return fallback
+}
+
+// updateTicketFields re-reads a ticket, applies the change, and writes it back.
+//
+// UpdateTicket writes the whole row, so mutating a struct loaded earlier and saving it would
+// silently revert any state transition made in between — an Assigned ticket would drop back to
+// Ready, and the next legal transition would then be rejected. Read-modify-write is safe here
+// because the orchestrator is the only writer for a ticket while its run is in flight.
+func (o *Orchestrator) updateTicketFields(ctx context.Context, id string, mutate func(*core.Ticket)) error {
+	t, err := o.store.GetTicket(ctx, id)
+	if err != nil {
+		return err
+	}
+	mutate(&t)
+	return o.store.UpdateTicket(ctx, t)
+}
+
+// park moves a ticket to Needs You with a reason, so it is visible rather than hanging.
+func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID string, reason core.AttentionReason, payload map[string]any) (core.State, error) {
+	// The event depends on where the ticket actually is now, which may differ from the struct
+	// the caller is holding.
+	current, err := o.store.GetTicket(ctx, ticket.ID)
+	if err != nil {
+		return "", fmt.Errorf("agentrun: park ticket %q: %w", ticket.ID, err)
+	}
+	ev := core.EventValidationExhausted
+	if current.State == core.StateRunning {
+		ev = core.EventRunFailed
+	}
+
+	state, err := o.store.SetTicketState(ctx, ticket.ID, ev)
+	if err != nil {
+		// Fall back to the other route into Needs You rather than leaving the ticket in
+		// limbo: a ticket stuck mid-flight with no attention row is invisible, which is the
+		// one outcome the queue exists to prevent.
+		if state, err = o.store.SetTicketState(ctx, ticket.ID, core.EventRunFailed); err != nil {
+			return "", fmt.Errorf("agentrun: park ticket %q: %w", ticket.ID, err)
+		}
+	}
+
+	if err := o.store.OpenAttention(ctx, core.Attention{
+		ID:        o.newID(),
+		ProjectID: ticket.ProjectID,
+		TicketID:  ticket.ID,
+		RunID:     runID,
+		Reason:    reason,
+		Payload:   payload,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		return state, fmt.Errorf("agentrun: open attention: %w", err)
+	}
+	return state, nil
+}
+
+// Kill terminates a ticket's live run and everything it spawned.
+func (o *Orchestrator) Kill(ticketID string) error {
+	o.mu.Lock()
+	lr, ok := o.live[ticketID]
+	o.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("agentrun: no live run for ticket %q", ticketID)
+	}
+	lr.cancel()
+	if err := lr.handle.Kill(); err != nil {
+		return fmt.Errorf("agentrun: kill %q: %w", ticketID, err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) trackLive(ticketID string, lr *liveRun) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.live[ticketID] = lr
+}
+
+func (o *Orchestrator) untrackLive(ticketID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.live, ticketID)
+}
+
+// failureContext renders what went wrong for the next attempt's prompt.
+func failureContext(outcome provider.Outcome, results validate.Results) string {
+	var b []byte
+	if outcome.Class != provider.Success {
+		b = append(b, ("The previous attempt ended with: " + outcome.Note + "\n\n")...)
+	}
+	if failure, ok := results.FirstFailure(); ok {
+		b = append(b, ("Validation step " + failure.Step + " failed:\n")...)
+		b = append(b, failure.Output...)
+	}
+	return string(b)
+}
