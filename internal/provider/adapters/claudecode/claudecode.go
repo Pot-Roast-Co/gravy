@@ -357,18 +357,26 @@ func (h *handle) run() {
 		h.err = fmt.Errorf("claude-code: %w", waitErr)
 		return
 	}
+	h.outcome = computeOutcome(h.provider, status, result, stdoutSB.String(), stderr, h.sessionID)
+}
 
+// computeOutcome turns a finished process into an Outcome.
+//
+// It is separated from run so that the judgement can be tested without a live process. That
+// matters more here than anywhere else in the adapter: this function is where a CLI that
+// misreports its own success gets corrected, and every correction it makes is invisible to an
+// integration test that does not reproduce the exact failure.
+func computeOutcome(p *Provider, status host.ExitStatus, result *streamEvent, stdout, stderr, sessionID string) provider.Outcome {
 	out := provider.Outcome{
 		ExitCode: status.Code,
 		TimedOut: status.TimedOut,
-		Session:  provider.SessionRef{ProviderID: ID, ID: h.sessionID},
+		Session:  provider.SessionRef{ProviderID: ID, ID: sessionID},
 	}
 
 	if status.TimedOut {
 		out.Class = provider.Timeout
 		out.Note = fmt.Sprintf("killed after %s without completing", status.Duration.Round(time.Second))
-		h.outcome = out
-		return
+		return out
 	}
 
 	if result != nil {
@@ -389,24 +397,31 @@ func (h *handle) run() {
 
 	// Classification reads the process's exit code and output, not the result object's
 	// subtype, which was observed reporting "success" on hard API errors.
-	class := h.provider.Classify(status.Code, stdoutSB.String(), stderr)
+	//
+	// The result object's own diagnosis is folded into the classified text. The CLI puts its
+	// human-readable error there ("Failed to authenticate. API Error: 401 ..."), and relying
+	// on that string also appearing in the raw stream is a bet, not a guarantee. Losing it
+	// would classify an expired credential as an ordinary bad run: the ticket would burn its
+	// self-correction budget on retries that cannot succeed, and provider_auth would never
+	// reach Needs You.
+	class := p.Classify(status.Code, stdout, stderr+resultDiagnosis(result))
 
-	// A result object claiming failure overrides a zero exit code. is_error is authoritative.
+	// A result object claiming failure overrides a zero exit code. is_error is authoritative;
+	// subtype is not.
 	if class.Class == provider.Success && result != nil && result.IsError {
-		class = h.provider.Classify(1, stdoutSB.String(), stderr+"\n"+result.Result)
-		if class.Class == provider.Success {
-			class = provider.Classification{
-				Class:    provider.TaskFailure,
-				Rule:     "result.is_error",
-				Evidence: truncate(result.Result, 200),
-			}
+		class = provider.Classification{
+			Class:    provider.TaskFailure,
+			Rule:     "result.is_error",
+			Evidence: truncate(result.Result, 200),
 		}
 	}
+
 	// A run whose tool calls were refused has not done its work, whatever it claims.
 	//
-	// Observed: exit 0, is_error false, subtype "success", and a permission_denials array
-	// containing the single Write the task required. Reporting that as Success would send an
-	// empty diff to review described as "no changes" — the agent was not idle, it was blocked.
+	// Observed from the real CLI: exit 0, is_error false, subtype "success", and a
+	// permission_denials array containing the single Write the task required. Reporting that
+	// as Success would send an empty diff to review described as "no changes" — the agent was
+	// not idle, it was blocked, and nothing in the success fields says so.
 	//
 	// GR-035 turns this into a proper escalation with an allowlist prompt. Until then it is a
 	// task failure, which is visible and retried, rather than a silent success.
@@ -420,7 +435,30 @@ func (h *handle) run() {
 
 	out.Class = class.Class
 	out.Note = class.Note()
-	h.outcome = out
+	return out
+}
+
+// resultDiagnosis renders the result object's error fields as text for classification.
+//
+// Returns empty for a run with no result or nothing wrong, so a healthy run's classification is
+// unaffected.
+func resultDiagnosis(result *streamEvent) string {
+	if result == nil {
+		return ""
+	}
+	var b strings.Builder
+	if result.Result != "" {
+		b.WriteString("\n")
+		b.WriteString(result.Result)
+	}
+	if result.APIErrorStatus != nil {
+		fmt.Fprintf(&b, "\napi_error_status: %d", *result.APIErrorStatus)
+	}
+	if result.TerminalReason != "" {
+		b.WriteString("\nterminal_reason: ")
+		b.WriteString(result.TerminalReason)
+	}
+	return b.String()
 }
 
 // denialSummary renders refused tool calls for the run's failure note.
