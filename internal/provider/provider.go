@@ -126,6 +126,32 @@ type Handle interface {
 	Kill() error
 }
 
+// PermissionDenial is a tool call the agent attempted and was not permitted to make.
+//
+// This is the escalation payload GR-035 acts on: what was asked for, with arguments, ready to
+// show a human and to match against an allowlist on "always allow for this project".
+//
+// It is an addition to the Outcome defined in ARCHITECTURE.md §4.2. It is necessary because a
+// CLI can report a run as successful while every tool call in it was denied — observed, with
+// exit 0 and is_error false. Without this field an adapter cannot tell that apart from a run
+// that genuinely had nothing to do.
+type PermissionDenial struct {
+	Tool  string
+	Input map[string]any
+}
+
+// Summary renders a denial for display in Needs You.
+func (d PermissionDenial) Summary() string {
+	for _, key := range []string{"command", "file_path", "path", "url"} {
+		if v, ok := d.Input[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return d.Tool + ": " + s
+			}
+		}
+	}
+	return d.Tool
+}
+
 // Outcome is how a run ended.
 type Outcome struct {
 	Class FailureClass
@@ -141,4 +167,7 @@ type Outcome struct {
 	CostUSD *float64
 	// TimedOut reports that the run was killed by its wall-clock timeout.
 	TimedOut bool
+	// Denials lists tool calls the agent was refused. A run with denials has not done its
+	// work, whatever its exit code claims.
+	Denials []PermissionDenial
 }
