@@ -22,16 +22,20 @@ func TestTransitionLegal(t *testing.T) {
 		{StateReady, EventReject, StateRejected},
 
 		{StateAssigned, EventStart, StateRunning},
+		{StateAssigned, EventKill, StateBacklog},
 
 		{StateRunning, EventAgentFinished, StateValidating},
 		{StateRunning, EventAsk, StateBlocked},
 		{StateRunning, EventRunFailed, StateNeedsYou},
+		{StateRunning, EventKill, StateBacklog},
 
 		{StateValidating, EventValidationPassed, StateReviewing},
 		{StateValidating, EventValidationRetry, StateRunning},
 		{StateValidating, EventValidationExhausted, StateNeedsYou},
+		{StateValidating, EventKill, StateBacklog},
 
 		{StateReviewing, EventReviewed, StateReview},
+		{StateReviewing, EventKill, StateBacklog},
 
 		{StateReview, EventApprove, StateLanding},
 		{StateReview, EventRequestChanges, StateReady},
@@ -83,6 +87,12 @@ func TestTransitionIllegal(t *testing.T) {
 		{"a run cannot land itself", StateRunning, EventApprove},
 		{"needs-you cannot land directly", StateNeedsYou, EventApprove},
 
+		// A kill partway through a rebase-and-push would leave the target branch in a
+		// state nobody chose, so Landing does not accept one.
+		{"landing cannot be killed", StateLanding, EventKill},
+		{"a ticket awaiting review has no run to kill", StateReview, EventKill},
+		{"a blocked ticket holds no worker to free", StateBlocked, EventKill},
+		{"a done ticket cannot be killed", StateDone, EventKill},
 		{"terminal states do not move: done", StateDone, EventRequeue},
 		{"terminal states do not move: rejected", StateRejected, EventRequeue},
 		{"a done ticket cannot be rejected", StateDone, EventReject},
@@ -203,6 +213,46 @@ func walk(t *testing.T, from State, steps []step) {
 			t.Fatalf("step %d: Transition(%q, %q) = %q, want %q", i, cur, s.ev, next, s.want)
 		}
 		cur = next
+	}
+}
+
+// TestKillFreesTheProject covers M0 exit criterion 9's second half: killing a run frees the
+// slot. In serial mode a project is held by any active ticket, so the killed ticket must land
+// somewhere inactive or the repository would stay blocked by a run that no longer exists.
+func TestKillFreesTheProject(t *testing.T) {
+	for _, from := range []State{StateAssigned, StateRunning, StateValidating, StateReviewing} {
+		to, err := Transition(from, EventKill)
+		if err != nil {
+			t.Errorf("Transition(%q, kill): %v", from, err)
+			continue
+		}
+		if IsActive(to) {
+			t.Errorf("killing from %q lands in %q, which is still active; the project stays held "+
+				"by a run that no longer exists", from, to)
+		}
+		if NeedsHuman(to) {
+			t.Errorf("killing from %q lands in %q, which queues an attention item notifying the "+
+				"person who pressed kill", from, to)
+		}
+		if IsTerminal(to) {
+			t.Errorf("killing from %q lands in terminal state %q; the work would be unrecoverable", from, to)
+		}
+	}
+}
+
+// TestKilledTicketIsNotImmediatelyReclaimed: a killed ticket must not be schedulable again
+// without the human saying so, or an idle worker picks it back up within the second.
+func TestKilledTicketIsNotImmediatelyReclaimed(t *testing.T) {
+	to, err := Transition(StateRunning, EventKill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if to == StateReady {
+		t.Fatal("a killed ticket returns to Ready, where the scheduler will immediately re-claim it")
+	}
+	// It must still be recoverable in one deliberate step.
+	if _, err := Transition(to, EventMarkReady); err != nil {
+		t.Errorf("a killed ticket cannot be made Ready again: %v", err)
 	}
 }
 

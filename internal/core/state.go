@@ -88,6 +88,17 @@ const (
 	// EventAnswer is the human answering a question or granting a permission. The ticket
 	// returns to Ready and resumes its prior session rather than starting fresh.
 	EventAnswer Event = "answer"
+	// EventKill is the human stopping a live run from the TUI.
+	//
+	// It sends the ticket to Backlog rather than Ready or NeedsYou. Ready would let an idle
+	// worker re-claim it within the second, which is the opposite of what someone who just
+	// pressed kill wants. NeedsYou would raise an attention item notifying the person who
+	// caused it, adding noise to the queue that is meant to be the product.
+	//
+	// Backlog stops the ticket, releases its worker and its project, and preserves the
+	// worktree and session so the work is not lost. The human re-readies it when they have
+	// adjusted whatever made them intervene.
+	EventKill Event = "kill"
 	// EventRequeue returns an attention item to the queue.
 	EventRequeue Event = "requeue"
 	// EventReturnToReview sends an attention item back to the review queue, for example after
@@ -116,11 +127,16 @@ func (e *TransitionError) Unwrap() error { return ErrIllegalTransition }
 // transitions is the whole state machine. It is an explicit table rather than a switch so that
 // the legal edges can be enumerated, tested exhaustively, and rendered.
 //
-// Two edges from ARCHITECTURE.md §6.1 are deliberately absent. A run that fails on a quota, rate
+// One edge from ARCHITECTURE.md §6.1 is deliberately absent: a run that fails on a quota, rate
 // limit or auth condition is retried by the orchestrator against the next route choice without
-// the ticket leaving Running — re-resolving a route is not a lifecycle change, and the diagram
-// shows no edge for it. Killing a run has no defined target state in the specification; it is
-// left to GR-018/GR-020 rather than invented here.
+// the ticket leaving Running. Re-resolving a route is not a lifecycle change, and the diagram
+// shows no edge for it.
+//
+// EventKill is an addition rather than an omission. The specification requires a kill switch
+// that frees the worker (MILESTONES.md, M0 exit criterion 9) but names no target state, and a
+// ticket whose run was killed cannot be left in Running with no process behind it. Landing
+// deliberately does not accept it: a kill partway through a rebase-and-push would leave the
+// target branch in a state nobody chose.
 var transitions = map[State]map[Event]State{
 	StateDraft: {
 		EventSubmit: StateBacklog,
@@ -135,19 +151,23 @@ var transitions = map[State]map[Event]State{
 	},
 	StateAssigned: {
 		EventStart: StateRunning,
+		EventKill:  StateBacklog,
 	},
 	StateRunning: {
 		EventAgentFinished: StateValidating,
 		EventAsk:           StateBlocked,
 		EventRunFailed:     StateNeedsYou,
+		EventKill:          StateBacklog,
 	},
 	StateValidating: {
 		EventValidationPassed:    StateReviewing,
 		EventValidationRetry:     StateRunning,
 		EventValidationExhausted: StateNeedsYou,
+		EventKill:                StateBacklog,
 	},
 	StateReviewing: {
 		EventReviewed: StateReview,
+		EventKill:     StateBacklog,
 	},
 	StateReview: {
 		EventApprove:        StateLanding,

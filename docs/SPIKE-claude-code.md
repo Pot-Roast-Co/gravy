@@ -231,6 +231,53 @@ Recommendation: the adapter records the latest `rate_limit_info` per provider on
 GR-014 treats it as a first-class input beside error classification. Still M1 — but GR-012 should
 **capture and store these events in M0** so the data is already there when the router lands.
 
+### F5 — three different ways a run reports success having done nothing *(GR-012, GR-015, GR-018, GR-021)*
+
+Added after building the adapter and running it for real. Beyond F1's `subtype`, the CLI reports
+`exit 0`, `is_error: false` and no error of any kind in **three distinct situations where the
+requested work did not happen**:
+
+1. **Every tool call denied.** With no permission mode set, a task requiring `Write` had that
+   call refused; the file was never created. The only evidence is a `permission_denials` array.
+   *Handled:* the adapter classifies a run with denials as `TaskFailure`, never Success.
+2. **A gated command denied mid-run.** Under `--permission-mode acceptEdits`, `curl` was denied
+   as expected. Same shape, same handling.
+3. **The agent stopped to ask a question.** Given a destructive command, the agent explained
+   what it would do and asked for confirmation instead of proceeding. Zero denials, no error,
+   exit 0 — and nothing done. **Nothing in the result object distinguishes this from a run that
+   genuinely had no work to do.**
+
+The third is not yet handled and cannot be handled in the adapter alone:
+
+- **GR-015** must instruct the agent that on a genuine ambiguity it writes `AskPath` and stops
+  (§6.2). That converts case 3 into a detectable file rather than prose in the result.
+- **GR-018** should treat *success with an empty diff* as suspicious in its own right. Since
+  summaries are generated from the diff, an unhandled case 3 becomes a review item that says
+  "no changes" about an agent that was actually waiting for an answer.
+- **GR-021** turns the `AskPath` file into the Blocked state and a Needs You entry.
+
+The general lesson, now observed three times: **this CLI's success fields report that the process
+completed, not that the work happened.** Every consumer should corroborate against something
+external — the diff, the denials array, `AskPath` — rather than trusting the outcome alone.
+
+### F6 — what `acceptEdits` actually gates *(GR-012, GR-035)*
+
+Measured, since the M0 default rests on it:
+
+| Action | Under `acceptEdits` |
+|---|---|
+| Read files in the worktree | allowed |
+| Edit / Write in the worktree | allowed |
+| Ordinary shell (`ls`, `find`, `git diff`) | allowed |
+| Network (`curl`) | **denied** |
+| Destructive shell (`rm` of a tracked file) | agent stops and asks |
+
+This lines up closely with the product's intended default allowlist — read and write anywhere in
+the worktree, common read-only shell, network off — which is why the adapter uses it rather than
+the always-allow hook stub GR-012's scope suggested. An always-allow stub would have removed the
+only brake that exists before GR-035 lands. GR-035 still replaces this with real per-project
+matching; `acceptEdits` is a coarse approximation, not the allowlist.
+
 ---
 
 ## Notes for GR-012

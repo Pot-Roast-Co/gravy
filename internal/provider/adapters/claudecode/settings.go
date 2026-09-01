@@ -37,7 +37,15 @@ type hookEntry struct {
 // PermissionHookCommand is the executable the pre-tool hook invokes.
 //
 // GR-035 defines the contract and supplies the real broker. Until it lands this is empty and no
-// hook is installed, which means the CLI's own permission handling applies.
+// hook is installed, so the CLI's own permission handling applies via DefaultPermissionMode.
+//
+// GR-012's scope asked for "a stub that always allows" here. That is deliberately not what
+// ships. An always-allow hook would approve every tool call, removing the only brake that exists
+// before the broker lands — and measurement shows the CLI's own acceptEdits mode already
+// approximates the product's intended default allowlist far better: worktree reads and writes
+// and ordinary shell are permitted, while network access is denied and destructive commands
+// stop the agent (docs/SPIKE-claude-code.md, F6). Shipping the looser stub would have been a
+// regression in safety dressed as ticket compliance.
 //
 // The mechanism itself is verified: the spike confirmed a PreToolUse hook receives the tool call
 // on stdin and can deny it by writing a permissionDecision, that the denial is reported back in

@@ -52,7 +52,7 @@ func TestExecStreamsIncrementally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	defer p.Kill() //nolint:errcheck // best effort cleanup
+	defer p.Kill()
 
 	line := make(chan string, 1)
 	go func() {
@@ -440,8 +440,14 @@ func TestSlotsAreRaceFree(t *testing.T) {
 
 func TestSlotsExhaust(t *testing.T) {
 	h := NewLocal("local", 2)
-	if !h.TryClaim() || !h.TryClaim() {
-		t.Fatal("could not claim the two available slots")
+	// Claimed one at a time and asserted separately: written as a single || expression, a
+	// failure on the first claim short-circuits the second, so "two slots are claimable" would
+	// silently go untested.
+	if !h.TryClaim() {
+		t.Fatal("could not claim the first slot")
+	}
+	if !h.TryClaim() {
+		t.Fatal("could not claim the second slot")
 	}
 	if h.TryClaim() {
 		t.Error("claimed a third slot from a host with two")

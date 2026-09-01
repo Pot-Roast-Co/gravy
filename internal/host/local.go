@@ -333,7 +333,7 @@ func parseVersion(s string) string {
 		if f == "" {
 			continue
 		}
-		if !(f[0] >= '0' && f[0] <= '9') || !strings.Contains(f, ".") {
+		if f[0] < '0' || f[0] > '9' || !strings.Contains(f, ".") {
 			continue
 		}
 		return strings.TrimRight(f, ",;")

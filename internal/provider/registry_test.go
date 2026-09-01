@@ -282,7 +282,7 @@ func TestFakeContextCancellation(t *testing.T) {
 	cancel()
 
 	done := make(chan struct{})
-	go func() { h.Wait(); close(done) }() //nolint:errcheck // outcome asserted elsewhere
+	go func() { h.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
