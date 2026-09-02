@@ -42,6 +42,14 @@ func run(args []string) error {
 		return runQueue(ctx, args[1:])
 	case "status":
 		return runStatus(ctx, args[1:])
+	case "review":
+		return runReview(ctx, args[1:])
+	case "approve":
+		return runApprove(ctx, args[1:])
+	case "continue":
+		return runContinue(ctx, args[1:])
+	case "reject":
+		return runReject(ctx, args[1:])
 	case "try":
 		// A smoke test for the pieces built so far: worktree, agent, diff. Not the product.
 		return runTry(args[1:])
@@ -70,10 +78,14 @@ func usage() {
   gravy run                    work the queue: agents, validation, stop at review
   gravy run --once             work it until idle, then exit
   gravy status                 what needs you, and what is happening
+  gravy review [<id>]          what is awaiting your judgement, and its diff
+  gravy approve <id>           approve, rebase, squash-merge, push
+  gravy reject <id>            abandon a ticket
+  gravy continue <id>          retry a landing after you resolved a conflict
   gravy try "<task>"           one-off smoke test in a throwaway repo
 
-Nothing merges. Work stops at review and waits for you.
+Nothing merges without "gravy approve". No flag changes that.
 
-Not built yet: the daemon (work stops when you close the terminal), the review
-and approve commands, and the TUI. See docs/MILESTONES.md.`)
+Not built yet: the daemon (work stops when you close the terminal) and the TUI.
+See docs/MILESTONES.md.`)
 }

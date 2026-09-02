@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -101,6 +102,7 @@ type Orchestrator struct {
 	prompts      PromptBuilder
 	cfg          Config
 	newID        IDGen
+	log          *slog.Logger
 
 	mu   sync.Mutex
 	live map[string]*liveRun
@@ -127,8 +129,20 @@ func New(s Store, repos Repos, slots Slots, newValidator func(runID string) vali
 		prompts:      p,
 		cfg:          cfg,
 		newID:        newID,
+		log:          slog.Default(),
 		live:         map[string]*liveRun{},
 	}
+}
+
+// SetLogger replaces the orchestrator's logger.
+func (o *Orchestrator) SetLogger(l *slog.Logger) { o.log = l }
+
+// anyHost returns a registered host, for work not tied to a specific run.
+func (o *Orchestrator) anyHost() host.Host {
+	for _, h := range o.hosts {
+		return h
+	}
+	return nil
 }
 
 // RegisterHost makes a host available to runs.
@@ -258,6 +272,20 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, nil
 	}
 
+	// A run that produced no diff and did not report success has not done the work, whatever
+	// the validation says. Validation on an unchanged tree passes trivially — it is testing
+	// the code that was already there — so treating that as a green ticket would send an empty
+	// diff to review described as "no changes" when the agent was actually blocked.
+	if loop.commit == "" && loop.lastClass != provider.Success {
+		state, aerr := o.park(ctx, ticket, loop.runID, core.ReasonValidationFailed, map[string]any{
+			"attempts": loop.attempts,
+			"reason":   "the agent produced no changes",
+			"note":     loop.lastNote,
+		})
+		res.FinalState = state
+		return res, aerr
+	}
+
 	if !loop.validation.Green() {
 		// Budget exhausted and still red: park it visibly rather than hanging.
 		state, aerr := o.park(ctx, ticket, loop.runID, core.ReasonValidationFailed, map[string]any{
@@ -285,6 +313,10 @@ type loopResult struct {
 	// parked reports that the loop already moved the ticket to Needs You, so the caller must
 	// not apply any further transition.
 	parked bool
+	// lastClass is the final attempt's outcome, needed to tell "nothing to do" apart from
+	// "was prevented from doing anything".
+	lastClass core.FailureClass
+	lastNote  string
 }
 
 // attemptLoop runs the agent and validation, retrying within the self-correction budget.
@@ -302,6 +334,7 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 			PriorFailure: priorFailure,
 		})
 		res.runID = runID
+		res.lastClass, res.lastNote = outcome.Class, outcome.Note
 		if err != nil {
 			return res, err
 		}
@@ -339,7 +372,14 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 			return res, err
 		}
 
-		if res.validation.Green() && outcome.Class == provider.Success {
+		// The diff and the validation results are evidence; the provider's classification is
+		// a report about itself. When they disagree, trust the evidence.
+		//
+		// Observed: an agent was denied one exploratory `find | grep`, worked around it,
+		// produced correct code, and validation passed — and the run was still marked failed,
+		// costing a retry and double the tokens for nothing. A denial matters when the work
+		// did not happen; here it demonstrably did.
+		if res.validation.Green() && (outcome.Class == provider.Success || res.commit != "") {
 			return res, nil
 		}
 
@@ -606,7 +646,21 @@ func effectiveAllowlist(p core.Project) core.Allowlist {
 			Note:  "declared validation step " + step.Name,
 		})
 	}
+	for _, cmd := range readOnlyShell {
+		a.Commands = append(a.Commands, core.Pattern{Match: cmd, Note: "common read-only shell"})
+	}
 	return a
+}
+
+// readOnlyShell is the set of commands the default allowlist grants for looking around
+// (PRODUCT.md §12).
+//
+// Without these an agent is denied on `find` or `git log` while orienting itself, works around
+// it, and the run is marked a failure over a command that could not have changed anything. Every
+// one of these only reads; nothing here writes, deletes, or reaches the network.
+var readOnlyShell = []string{
+	"ls", "cat", "head", "tail", "wc", "find", "grep", "rg", "which", "pwd", "file", "stat",
+	"git status", "git diff", "git log", "git show", "git branch", "git ls-files",
 }
 
 // failureContext renders what went wrong for the next attempt's prompt.

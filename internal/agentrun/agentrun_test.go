@@ -23,16 +23,65 @@ import (
 // ---- harness -------------------------------------------------------------
 
 type harness struct {
-	t        *testing.T
-	db       *store.DB
-	home     string
-	upstream string
+	t    *testing.T
+	db   *store.DB
+	home string
+	// bare is the remote. It is bare because git refuses to push to a branch that is checked
+	// out in a non-bare repository, which is exactly what a real origin looks like.
+	bare string
+	// author is a second working clone, used to simulate other people landing work on target
+	// while a ticket is in flight.
+	author   string
 	repoPath string
 	h        host.Host
 	slots    *countingSlots
 	orch     *agentrun.Orchestrator
 	provider *fake.Provider
+	work     *workBench
 	ids      *idGen
+}
+
+// workBench makes the fake provider actually change files in the worktree.
+//
+// Writing them from the test's own goroutine races the orchestrator: the fake returns
+// immediately, so there is effectively no window between the worktree being created and the
+// commit being taken. Doing the work inside Run is both deterministic and a truer stand-in for
+// an agent, which is exactly a thing that edits the worktree it is handed.
+type workBench struct {
+	inner *fake.Provider
+	t     *testing.T
+
+	mu    sync.Mutex
+	files map[string]string
+}
+
+func (w *workBench) set(files map[string]string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.files = files
+}
+
+func (w *workBench) ID() string { return w.inner.ID() }
+
+func (w *workBench) Run(ctx context.Context, h host.Host, task provider.AgentTask) (provider.Handle, error) {
+	w.mu.Lock()
+	files := w.files
+	w.mu.Unlock()
+	for name, body := range files {
+		writeFile(w.t, task.WorktreePath, name, body)
+	}
+	return w.inner.Run(ctx, h, task)
+}
+
+func (w *workBench) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string) (provider.Handle, error) {
+	return w.inner.Resume(ctx, h, s, msg)
+}
+func (w *workBench) Detect(ctx context.Context, h host.Host) (provider.Availability, error) {
+	return w.inner.Detect(ctx, h)
+}
+func (w *workBench) Models(ctx context.Context) ([]provider.Model, error) { return w.inner.Models(ctx) }
+func (w *workBench) Classify(exit int, stdout, stderr string) provider.Classification {
+	return w.inner.Classify(exit, stdout, stderr)
 }
 
 type idGen struct {
@@ -88,7 +137,7 @@ func gitCmd(t *testing.T, h host.Host, dir string, args ...string) string {
 		Env: map[string]string{
 			"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@example.com",
 			"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@example.com",
-			"GIT_TERMINAL_PROMPT": "0",
+			"GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true",
 		},
 	})
 	if err != nil {
@@ -107,6 +156,31 @@ func gitCmd(t *testing.T, h host.Host, dir string, args ...string) string {
 		t.Fatalf("git %v: exit %d\n%s%s", args, st.Code, out, errOut)
 	}
 	return out
+}
+
+// gitCmdAllowFail runs git and returns its output even when it exits non-zero, for commands
+// whose failure is the thing under test (a conflicting rebase, for instance).
+func gitCmdAllowFail(t *testing.T, h host.Host, dir string, args ...string) string {
+	t.Helper()
+	p, err := h.Exec(context.Background(), host.ExecSpec{
+		Cmd: "git", Args: args, Dir: dir, Timeout: 30 * time.Second,
+		Env: map[string]string{
+			"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@example.com",
+			"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@example.com",
+			"GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true",
+		},
+	})
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	outCh := make(chan string, 1)
+	errCh := make(chan string, 1)
+	go func() { b, _ := readAll(p.Stdout()); outCh <- b }()
+	go func() { b, _ := readAll(p.Stderr()); errCh <- b }()
+	if _, err := p.Wait(); err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return <-outCh + <-errCh
 }
 
 func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
@@ -128,18 +202,19 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 	root := t.TempDir()
 	h := host.NewLocal("local", 8)
 
-	// An upstream so fetch has something real to do.
-	upstream := filepath.Join(root, "upstream")
-	if err := os.MkdirAll(upstream, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitCmd(t, h, upstream, "init", "-q", "-b", "main")
-	writeFile(t, upstream, "README.md", "# project\n")
-	gitCmd(t, h, upstream, "add", "-A")
-	gitCmd(t, h, upstream, "commit", "-q", "-m", "initial")
+	// A bare remote, an author clone that pushes to it, and Gravy's own clone.
+	bare := filepath.Join(root, "origin.git")
+	gitCmd(t, h, root, "init", "-q", "--bare", "-b", "main", bare)
+
+	author := filepath.Join(root, "author")
+	gitCmd(t, h, root, "clone", "-q", bare, author)
+	writeFile(t, author, "README.md", "# project\n")
+	gitCmd(t, h, author, "add", "-A")
+	gitCmd(t, h, author, "commit", "-q", "-m", "initial")
+	gitCmd(t, h, author, "push", "-q", "origin", "main")
 
 	repoPath := filepath.Join(root, "repo")
-	gitCmd(t, h, root, "clone", "-q", upstream, repoPath)
+	gitCmd(t, h, root, "clone", "-q", bare, repoPath)
 
 	db, err := store.Open(ctx, filepath.Join(root, "gravy.db"))
 	if err != nil {
@@ -155,6 +230,7 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 	ids := &idGen{}
 	slots := &countingSlots{total: 4}
 	p := fake.New("fake", fake.WithScripts(scripts...))
+	bench := &workBench{inner: p, t: t}
 
 	orch := agentrun.New(
 		dbStore{db},
@@ -168,12 +244,29 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 		ids.next,
 	)
 	orch.RegisterHost(h)
-	orch.RegisterProvider(p)
+	orch.RegisterProvider(bench)
 
 	return &harness{
-		t: t, db: db, home: home, upstream: upstream, repoPath: repoPath,
-		h: h, slots: slots, orch: orch, provider: p, ids: ids,
+		t: t, db: db, home: home, bare: bare, author: author, repoPath: repoPath,
+		h: h, slots: slots, orch: orch, provider: p, work: bench, ids: ids,
 	}
+}
+
+// landOnTarget simulates someone else's work reaching the target branch while a ticket is in
+// flight: it commits in the author clone and pushes to the remote.
+func (h *harness) landOnTarget(mutate func(dir string), message string) {
+	h.t.Helper()
+	gitCmd(h.t, h.h, h.author, "pull", "-q", "--ff-only", "origin", "main")
+	mutate(h.author)
+	gitCmd(h.t, h.h, h.author, "add", "-A")
+	gitCmd(h.t, h.h, h.author, "commit", "-q", "-m", message)
+	gitCmd(h.t, h.h, h.author, "push", "-q", "origin", "main")
+}
+
+// targetLog returns the target branch's log as the remote sees it.
+func (h *harness) targetLog(args ...string) string {
+	h.t.Helper()
+	return gitCmd(h.t, h.h, h.bare, append([]string{"log"}, args...)...)
 }
 
 // dbStore adapts the store to the orchestrator's narrower interface.
@@ -301,28 +394,11 @@ func TestReadyToReviewing(t *testing.T) {
 	}
 }
 
-// runWithAgentWork starts the orchestrator and writes a file into the worktree as soon as it
-// appears, standing in for the agent's edits.
+// runWithAgentWork runs the ticket with the fake agent producing the given file.
 func runWithAgentWork(t *testing.T, h *harness, name, body string) (agentrun.Result, error) {
 	t.Helper()
-	worktree := filepath.Join(h.home, "projects", "proj", "worktrees", "gravy-GR-100-do-the-thing")
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(worktree); err == nil {
-				writeFile(t, worktree, name, body)
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
-
-	res, err := h.orch.Run(context.Background(), h.assignment())
-	<-done
-	return res, err
+	h.work.set(map[string]string{name: body})
+	return h.orch.Run(context.Background(), h.assignment())
 }
 
 // TestWorktreeIsCutFromFreshlyFetchedTarget is AC2.
@@ -335,10 +411,10 @@ func TestWorktreeIsCutFromFreshlyFetchedTarget(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	h.seed(nil)
 
-	// A previous ticket merges upstream after ours was created.
-	writeFile(t, h.upstream, "landed-earlier.txt", "merged before our ticket started\n")
-	gitCmd(t, h.h, h.upstream, "add", "-A")
-	gitCmd(t, h.h, h.upstream, "commit", "-q", "-m", "earlier ticket merged")
+	// A previous ticket merges to the target after ours was created.
+	h.landOnTarget(func(dir string) {
+		writeFile(t, dir, "landed-earlier.txt", "merged before our ticket started\n")
+	}, "earlier ticket merged")
 
 	res, err := h.orch.Run(context.Background(), h.assignment())
 	if err != nil {
@@ -767,6 +843,97 @@ func TestValidationLogsAreScopedToTheirRun(t *testing.T) {
 			if _, err := os.Stat(v.LogPath); err != nil {
 				t.Errorf("validation log %q was not written: %v", v.LogPath, err)
 			}
+		}
+	}
+}
+
+// TestGreenWorkIsNotRetriedOverADeniedProbe guards against paying twice for a finished job.
+//
+// Observed against the real CLI: an agent was denied one exploratory `find | grep` while
+// orienting itself, worked around it, wrote correct code, and validation passed — and the run
+// was still classified a failure, so it retried and cost double for nothing.
+//
+// A denial matters when the work did not happen. Here the diff and the passing tests are
+// evidence that it did, and evidence outranks the provider's report about itself.
+func TestGreenWorkIsNotRetriedOverADeniedProbe(t *testing.T) {
+	denied := provider.Outcome{
+		Class: provider.TaskFailure,
+		Note:  `task_failure (rule "permission denied" matched: Bash: find . -name "*.go")`,
+		Denials: []provider.PermissionDenial{
+			{Tool: "Bash", Input: map[string]any{"command": `find . -name "*.go"`}},
+		},
+	}
+	h := newHarness(t, []fake.Script{{Outcome: denied}}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "feature.txt", "the work happened\n")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if res.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1: green validation plus a commit is evidence the work "+
+			"happened, whatever the provider reported about itself", res.Attempts)
+	}
+	if res.FinalState != core.StateReviewing {
+		t.Errorf("final state = %s, want reviewing", res.FinalState)
+	}
+	if res.Commit == "" {
+		t.Error("no commit recorded")
+	}
+}
+
+// TestDeniedWithNoWorkStillFails: the guard must not swallow the case it was built for.
+func TestDeniedWithNoWorkStillFails(t *testing.T) {
+	denied := provider.Outcome{
+		Class:   provider.TaskFailure,
+		Note:    "permission denied",
+		Denials: []provider.PermissionDenial{{Tool: "Write", Input: map[string]any{"file_path": "/x"}}},
+	}
+	h := newHarness(t, []fake.Script{{Outcome: denied}}, agentrun.Config{
+		SelfCorrectionBudget: 1, RunTimeout: time.Minute,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	// No work is produced: the agent was blocked and changed nothing.
+	res, err := h.orch.Run(context.Background(), h.assignment())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Commit != "" {
+		t.Fatal("the fixture produced a commit; the test would prove nothing")
+	}
+	if res.Attempts != 2 {
+		t.Errorf("attempts = %d, want the retry budget to be used when nothing was produced", res.Attempts)
+	}
+	if res.FinalState != core.StateNeedsYou {
+		t.Errorf("final state = %s, want needs_you", res.FinalState)
+	}
+}
+
+// TestReadOnlyShellIsAllowlisted covers PRODUCT.md §12's default allowlist.
+func TestReadOnlyShellIsAllowlisted(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed(nil)
+
+	if _, err := h.orch.Run(context.Background(), h.assignment()); err != nil {
+		t.Fatal(err)
+	}
+	granted := map[string]bool{}
+	for _, p := range h.provider.Runs()[0].Allowlist.Commands {
+		granted[p.Match] = true
+	}
+	for _, want := range []string{"ls", "cat", "grep", "find", "git status", "git diff", "git log"} {
+		if !granted[want] {
+			t.Errorf("%q is not in the default allowlist; an agent is denied while merely looking around", want)
+		}
+	}
+	// Nothing that writes or reaches the network may be granted by default.
+	for _, forbidden := range []string{"rm", "curl", "wget", "git push", "git commit"} {
+		if granted[forbidden] {
+			t.Errorf("%q was granted by default; the read-only set must only read", forbidden)
 		}
 	}
 }

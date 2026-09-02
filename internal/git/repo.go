@@ -377,3 +377,98 @@ func atoiOrZero(s string) int {
 	}
 	return n
 }
+
+// LandResult reports what landing did.
+type LandResult struct {
+	// MergeCommit is the squash commit created on the target branch.
+	MergeCommit string
+	// Pushed reports whether the target was pushed to the remote.
+	Pushed bool
+}
+
+// SquashMerge squashes a worktree's branch into the target branch and pushes.
+//
+// The merge happens in the main working copy rather than the worktree, because a worktree has
+// the ticket's own branch checked out and git refuses to check out a branch that is already
+// checked out elsewhere.
+func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message string) (LandResult, error) {
+	var out LandResult
+
+	// The main copy must be on the target branch to merge into it. Its state is left as found:
+	// Gravy never leaves a user's checkout somewhere they did not put it.
+	original, err := r.currentBranch(ctx)
+	if err != nil {
+		return out, err
+	}
+	if original != target {
+		if _, err := r.runner.mustRun(ctx, r.repoPath, "checkout", target); err != nil {
+			return out, fmt.Errorf("land: check out %s: %w", target, err)
+		}
+		defer func() {
+			// Best effort: a failure to restore is not worth losing a successful merge over,
+			// but it must not be silent either.
+			_, _ = r.runner.run(ctx, r.repoPath, "checkout", original)
+		}()
+	}
+
+	// Fast-forward the target to the freshly-fetched remote state first, so the squash lands
+	// on top of whatever else merged while this ticket was in review.
+	if remote, err := r.TargetRef(ctx, target); err == nil && remote != target {
+		if _, err := r.runner.mustRun(ctx, r.repoPath, "merge", "--ff-only", remote); err != nil {
+			return out, fmt.Errorf("land: fast-forward %s to %s: %w", target, remote, err)
+		}
+	}
+
+	if _, err := r.runner.mustRun(ctx, r.repoPath, "merge", "--squash", w.Branch); err != nil {
+		return out, fmt.Errorf("land: squash %s into %s: %w", w.Branch, target, err)
+	}
+	if _, err := r.runner.mustRun(ctx, r.repoPath, "commit", "-m", message); err != nil {
+		return out, fmt.Errorf("land: commit squash of %s: %w", w.Branch, err)
+	}
+
+	hash, err := r.runner.mustRun(ctx, r.repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return out, err
+	}
+	out.MergeCommit = strings.TrimSpace(hash)
+
+	// Push only when there is a remote to push to. A local-only project is legitimate.
+	hasRemote, err := r.hasRemote(ctx)
+	if err != nil {
+		return out, err
+	}
+	if !hasRemote {
+		return out, nil
+	}
+	if _, err := r.runner.mustRun(ctx, r.repoPath, "push", "origin", target); err != nil {
+		return out, fmt.Errorf("land: push %s: %w", target, err)
+	}
+	out.Pushed = true
+	return out, nil
+}
+
+// DeleteBranch removes a branch from the repository.
+func (r *LocalRepo) DeleteBranch(ctx context.Context, branch string) error {
+	if _, err := r.runner.mustRun(ctx, r.repoPath, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("delete branch %q: %w", branch, err)
+	}
+	return nil
+}
+
+// currentBranch returns the branch checked out in the main working copy.
+func (r *LocalRepo) currentBranch(ctx context.Context) (string, error) {
+	out, err := r.runner.mustRun(ctx, r.repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("read current branch: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// hasRemote reports whether an origin remote is configured.
+func (r *LocalRepo) hasRemote(ctx context.Context) (bool, error) {
+	res, err := r.runner.run(ctx, r.repoPath, "remote", "get-url", "origin")
+	if err != nil {
+		return false, err
+	}
+	return res.code == 0, nil
+}
