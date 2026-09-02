@@ -296,7 +296,15 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, aerr
 	}
 
-	state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventValidationPassed)
+	if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventValidationPassed); err != nil {
+		return res, fmt.Errorf("agentrun: %w", err)
+	}
+
+	// Automated review (GR-020) runs here, between Reviewing and Review. It is advisory: it
+	// annotates the diff for the human and never decides the ticket's fate, so until it exists
+	// the state simply passes through. Leaving the ticket stuck in Reviewing instead would
+	// strand it — no human action can move it, and its project stays held forever.
+	state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventReviewed)
 	if err != nil {
 		return res, fmt.Errorf("agentrun: %w", err)
 	}

@@ -21,12 +21,8 @@ func landReady(t *testing.T, h *harness, file, body string) agentrun.Result {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if res.FinalState != core.StateReviewing {
-		t.Fatalf("ticket is %s, want reviewing", res.FinalState)
-	}
-	// Automated review (GR-020) is not built; move to Review as it will.
-	if _, err := h.db.SetTicketState(context.Background(), "GR-100", core.EventReviewed); err != nil {
-		t.Fatal(err)
+	if res.FinalState != core.StateReview {
+		t.Fatalf("ticket is %s, want review", res.FinalState)
 	}
 	return res
 }

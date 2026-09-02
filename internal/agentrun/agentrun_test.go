@@ -323,8 +323,8 @@ func successScript() fake.Script {
 
 // ---- tests ---------------------------------------------------------------
 
-// TestReadyToReviewing is AC1.
-func TestReadyToReviewing(t *testing.T) {
+// TestReadyToReview is AC1.
+func TestReadyToReview(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
 		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
 	})
@@ -337,8 +337,8 @@ func TestReadyToReviewing(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if res.FinalState != core.StateReviewing {
-		t.Errorf("final state = %q, want reviewing", res.FinalState)
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review", res.FinalState)
 	}
 	if res.Commit == "" {
 		t.Error("no commit recorded for work the agent produced")
@@ -355,8 +355,8 @@ func TestReadyToReviewing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tk.State != core.StateReviewing {
-		t.Errorf("persisted state = %q, want reviewing", tk.State)
+	if tk.State != core.StateReview {
+		t.Errorf("persisted state = %q, want review", tk.State)
 	}
 	if tk.WorktreePath == "" || tk.Branch == "" {
 		t.Errorf("worktree not recorded on the ticket: %+v", tk)
@@ -717,8 +717,8 @@ func TestOptionalValidationFailureStillReachesReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.FinalState != core.StateReviewing {
-		t.Errorf("final state = %q, want reviewing despite a failed optional step", res.FinalState)
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review despite a failed optional step", res.FinalState)
 	}
 	if res.Attempts != 1 {
 		t.Errorf("attempts = %d; an optional failure must not trigger a retry", res.Attempts)
@@ -737,8 +737,8 @@ func TestNoValidationConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.FinalState != core.StateReviewing {
-		t.Errorf("final state = %q, want reviewing", res.FinalState)
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review", res.FinalState)
 	}
 }
 
@@ -877,8 +877,8 @@ func TestGreenWorkIsNotRetriedOverADeniedProbe(t *testing.T) {
 		t.Errorf("attempts = %d, want 1: green validation plus a commit is evidence the work "+
 			"happened, whatever the provider reported about itself", res.Attempts)
 	}
-	if res.FinalState != core.StateReviewing {
-		t.Errorf("final state = %s, want reviewing", res.FinalState)
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %s, want review", res.FinalState)
 	}
 	if res.Commit == "" {
 		t.Error("no commit recorded")
