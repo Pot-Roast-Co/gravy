@@ -160,7 +160,9 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 		dbStore{db},
 		agentrun.LocalRepos{Host: h, Home: home},
 		slots,
-		validate.NewRunner(filepath.Join(home, "validation")),
+		func(runID string) validate.Runner {
+			return validate.NewRunner(filepath.Join(home, "runs", runID, "validation"))
+		},
 		agentrun.SimplePrompt{},
 		cfg,
 		ids.next,
@@ -687,3 +689,84 @@ func TestGravyWritesNothingIntoTheRepository(t *testing.T) {
 }
 
 var _ = git.Worktree{}
+
+// TestValidationCommandsAreAllowlisted guards the fix for an agent that could not run the
+// commands its own work is judged by.
+func TestValidationCommandsAreAllowlisted(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{
+		{Name: "test", Cmd: "go test ./...", Required: true},
+		{Name: "build", Cmd: "go build ./...", Required: true},
+	})
+
+	if _, err := h.orch.Run(context.Background(), h.assignment()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	runs := h.provider.Runs()
+	if len(runs) == 0 {
+		t.Fatal("the provider was never run")
+	}
+	var granted []string
+	for _, p := range runs[0].Allowlist.Commands {
+		granted = append(granted, p.Match)
+	}
+	for _, want := range []string{"go test ./...", "go build ./..."} {
+		found := false
+		for _, g := range granted {
+			if g == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the agent was not permitted to run %q, the command its work is judged by; granted: %v",
+				want, granted)
+		}
+	}
+}
+
+// TestValidationLogsAreScopedToTheirRun guards against every run overwriting one shared log.
+func TestValidationLogsAreScopedToTheirRun(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 1, RunTimeout: time.Minute,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "echo attempt-output; exit 1", Required: true}})
+
+	res, err := h.orch.Run(context.Background(), h.assignment())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", res.Attempts)
+	}
+
+	runs, err := h.db.ListRunsForTicket(context.Background(), "GR-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want 2", len(runs))
+	}
+
+	// Each attempt's evidence must survive the next one. Sharing a log directory would leave
+	// only the final attempt, which is precisely the one a human least needs to see.
+	seen := map[string]bool{}
+	for _, r := range runs {
+		vals, err := h.db.ListValidations(context.Background(), r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(vals) == 0 {
+			t.Fatalf("run %s recorded no validations", r.ID)
+		}
+		for _, v := range vals {
+			if seen[v.LogPath] {
+				t.Errorf("two runs share the validation log %q; the earlier attempt's evidence is gone", v.LogPath)
+			}
+			seen[v.LogPath] = true
+			if _, err := os.Stat(v.LogPath); err != nil {
+				t.Errorf("validation log %q was not written: %v", v.LogPath, err)
+			}
+		}
+	}
+}

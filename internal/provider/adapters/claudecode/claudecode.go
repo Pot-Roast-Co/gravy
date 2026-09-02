@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bobbybrady/gravy/internal/core"
 	"github.com/bobbybrady/gravy/internal/host"
 	"github.com/bobbybrady/gravy/internal/provider"
 )
@@ -202,6 +203,29 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRe
 	return p.launch(ctx, h, provider.AgentTask{}, args, s.ID, nil)
 }
 
+// allowedTools renders an allowlist as --allowedTools patterns.
+//
+// Without this an agent cannot run the very commands its work is judged by: acceptEdits permits
+// file edits but gates shell, so `go test ./...` is denied, the agent reports that it needs
+// approval, and the run is classified a task failure despite the code being correct. It then
+// burns a self-correction retry doing the same thing again at twice the cost.
+//
+// Each command is granted twice: exactly as written, and with a trailing wildcard so the agent
+// may append flags (`go test ./... -run TestThing`). That is deliberately narrow — a pattern
+// like `go *` would permit `go run` on anything. GR-035 replaces this with real per-project
+// matching and an escalation path.
+func allowedTools(a core.Allowlist) []string {
+	var out []string
+	for _, pattern := range a.Commands {
+		cmd := strings.TrimSpace(pattern.Match)
+		if cmd == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("Bash(%s)", cmd), fmt.Sprintf("Bash(%s *)", cmd))
+	}
+	return out
+}
+
 // runArgs builds the CLI invocation for a task, plus a cleanup for any temporary files.
 func (p *Provider) runArgs(t provider.AgentTask, sessionID string) ([]string, func(), error) {
 	args := []string{
@@ -215,6 +239,10 @@ func (p *Provider) runArgs(t provider.AgentTask, sessionID string) ([]string, fu
 	}
 	if p.permissionMode != "" {
 		args = append(args, "--permission-mode", p.permissionMode)
+	}
+	if allowed := allowedTools(t.Allowlist); len(allowed) > 0 {
+		args = append(args, "--allowedTools")
+		args = append(args, allowed...)
 	}
 	if t.Model != "" {
 		args = append(args, "--model", t.Model)

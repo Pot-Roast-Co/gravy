@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bobbybrady/gravy/internal/core"
 	"github.com/bobbybrady/gravy/internal/provider"
 )
 
@@ -168,6 +169,53 @@ func TestPermissionDenialSummary(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.denial.Summary(); got != tt.want {
 			t.Errorf("Summary() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+// TestAllowedToolsFromAllowlist guards the fix for an agent that could not run the commands its
+// own work is judged by.
+//
+// Observed against the real CLI: acceptEdits permits file edits but gates shell, so `go test`
+// was denied. The agent wrote correct code, reported that it needed approval, and the run was
+// classified a task failure — which then burned a self-correction retry doing the same thing at
+// twice the cost.
+func TestAllowedToolsFromAllowlist(t *testing.T) {
+	got := allowedTools(core.Allowlist{Commands: []core.Pattern{
+		{Match: "go test ./...", Note: "validation"},
+		{Match: "go build ./...", Note: "validation"},
+		{Match: "   ", Note: "blank is skipped"},
+	}})
+
+	want := []string{
+		"Bash(go test ./...)", "Bash(go test ./... *)",
+		"Bash(go build ./...)", "Bash(go build ./... *)",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	if len(allowedTools(core.Allowlist{})) != 0 {
+		t.Error("an empty allowlist produced patterns")
+	}
+}
+
+// TestAllowedToolsStaysNarrow: the wildcard permits appended flags, never a different command.
+//
+// A pattern like "go *" would let the agent run `go run` on anything, which is a different
+// permission entirely from "run the project's test suite".
+func TestAllowedToolsStaysNarrow(t *testing.T) {
+	for _, p := range allowedTools(core.Allowlist{Commands: []core.Pattern{{Match: "go test ./..."}}}) {
+		if p == "Bash(go *)" || p == "Bash(*)" {
+			t.Errorf("allowlist widened to %q, which permits unrelated commands", p)
+		}
+		if !strings.HasPrefix(p, "Bash(go test ./...") {
+			t.Errorf("pattern %q does not start with the declared command", p)
 		}
 	}
 }

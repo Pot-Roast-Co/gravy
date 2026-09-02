@@ -92,15 +92,15 @@ type Config struct {
 
 // Orchestrator executes one ticket from Ready to Reviewing.
 type Orchestrator struct {
-	store     Store
-	repos     Repos
-	hosts     map[string]host.Host
-	providers map[string]provider.Provider
-	slots     Slots
-	validator validate.Runner
-	prompts   PromptBuilder
-	cfg       Config
-	newID     IDGen
+	store        Store
+	repos        Repos
+	hosts        map[string]host.Host
+	providers    map[string]provider.Provider
+	slots        Slots
+	newValidator func(runID string) validate.Runner
+	prompts      PromptBuilder
+	cfg          Config
+	newID        IDGen
 
 	mu   sync.Mutex
 	live map[string]*liveRun
@@ -113,21 +113,21 @@ type liveRun struct {
 }
 
 // New returns an orchestrator.
-func New(s Store, repos Repos, slots Slots, v validate.Runner, p PromptBuilder, cfg Config, newID IDGen) *Orchestrator {
+func New(s Store, repos Repos, slots Slots, newValidator func(runID string) validate.Runner, p PromptBuilder, cfg Config, newID IDGen) *Orchestrator {
 	if cfg.MaxRouteAttempts < 1 {
 		cfg.MaxRouteAttempts = 3
 	}
 	return &Orchestrator{
-		store:     s,
-		repos:     repos,
-		hosts:     map[string]host.Host{},
-		providers: map[string]provider.Provider{},
-		slots:     slots,
-		validator: v,
-		prompts:   p,
-		cfg:       cfg,
-		newID:     newID,
-		live:      map[string]*liveRun{},
+		store:        s,
+		repos:        repos,
+		hosts:        map[string]host.Host{},
+		providers:    map[string]provider.Provider{},
+		slots:        slots,
+		newValidator: newValidator,
+		prompts:      p,
+		cfg:          cfg,
+		newID:        newID,
+		live:         map[string]*liveRun{},
 	}
 }
 
@@ -403,7 +403,7 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 		MaxTurns:     o.cfg.MaxTurns,
 		LogPath:      filepath.Join(runDir, "agent.log"),
 		AskPath:      filepath.Join(runDir, "ask.json"),
-		Allowlist:    project.Allowlist,
+		Allowlist:    effectiveAllowlist(project),
 	})
 	if err != nil {
 		return runID, provider.Outcome{}, fmt.Errorf("agentrun: start agent: %w", err)
@@ -445,7 +445,9 @@ func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, project c
 	if len(project.Validation) == 0 {
 		return nil, nil
 	}
-	results, err := o.validator.Run(ctx, h, wt.Path, project.Validation)
+	// A fresh runner per run, so each run's logs land under runs/<run-id>/validation rather
+	// than every run overwriting one shared file and destroying the evidence for the last.
+	results, err := o.newValidator(runID).Run(ctx, h, wt.Path, project.Validation)
 	if err != nil {
 		return results, fmt.Errorf("agentrun: validation: %w", err)
 	}
@@ -587,6 +589,24 @@ func (o *Orchestrator) untrackLive(ticketID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	delete(o.live, ticketID)
+}
+
+// effectiveAllowlist is the project's allowlist plus its own validation commands.
+//
+// An agent must be able to run the commands its work is judged by. Without them it writes
+// correct code, cannot verify it, reports that it needs approval, and the run is classified a
+// failure — which then burns a self-correction retry repeating the same thing. The product's
+// default allowlist has always included the project's declared validation commands; this is
+// where that becomes true in practice.
+func effectiveAllowlist(p core.Project) core.Allowlist {
+	a := p.Allowlist
+	for _, step := range p.Validation {
+		a.Commands = append(a.Commands, core.Pattern{
+			Match: step.Cmd,
+			Note:  "declared validation step " + step.Name,
+		})
+	}
+	return a
 }
 
 // failureContext renders what went wrong for the next attempt's prompt.
