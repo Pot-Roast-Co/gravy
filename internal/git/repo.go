@@ -48,6 +48,40 @@ func NewLocalRepo(h host.Host, repoPath, worktreeRoot string, opts ...Option) *L
 	return r
 }
 
+// DefaultIdentity is the author Gravy commits as when the machine has none configured.
+//
+// Gravy's own commits are the agent's work-in-progress, squashed away on landing, so the
+// identity is bookkeeping rather than authorship. It matters only that committing works.
+const (
+	DefaultAuthorName  = "Gravy"
+	DefaultAuthorEmail = "gravy@localhost"
+)
+
+// identityArgs returns the -c flags needed for git to accept a commit.
+//
+// Git refuses to commit with "Author identity unknown" when neither user.email nor user.name is
+// configured, which is the normal state of a fresh CI runner, container, or newly provisioned
+// machine — exactly where an unattended agent runs. The user's own identity is used whenever it
+// is configured; the fallback exists so that a missing global git config cannot turn every run
+// into a failure the human has to diagnose.
+func (r *LocalRepo) identityArgs(ctx context.Context) []string {
+	if r.hasIdentity(ctx) {
+		return nil
+	}
+	return []string{
+		"-c", "user.name=" + DefaultAuthorName,
+		"-c", "user.email=" + DefaultAuthorEmail,
+	}
+}
+
+func (r *LocalRepo) hasIdentity(ctx context.Context) bool {
+	res, err := r.runner.run(ctx, r.repoPath, "config", "--get", "user.email")
+	if err != nil {
+		return false
+	}
+	return res.code == 0 && strings.TrimSpace(res.stdout) != ""
+}
+
 // Fetch updates remote-tracking refs.
 //
 // This runs per ticket at claim time, never as a batch: a queued ticket must start from whatever
@@ -239,7 +273,8 @@ func (r *LocalRepo) CommitAll(ctx context.Context, w Worktree, msg string) (stri
 		return "", nil
 	}
 
-	if _, err := r.runner.mustRun(ctx, w.Path, "commit", "-m", msg); err != nil {
+	commit := append(r.identityArgs(ctx), "commit", "-m", msg)
+	if _, err := r.runner.mustRun(ctx, w.Path, commit...); err != nil {
 		return "", fmt.Errorf("commit in %q: %w", w.Path, err)
 	}
 	hash, err := r.runner.mustRun(ctx, w.Path, "rev-parse", "HEAD")
@@ -260,7 +295,8 @@ func (r *LocalRepo) Rebase(ctx context.Context, w Worktree, onto string) (Rebase
 		return RebaseResult{}, err
 	}
 
-	res, err := r.runner.run(ctx, w.Path, "rebase", onto)
+	rebaseArgs := append(r.identityArgs(ctx), "rebase", onto)
+	res, err := r.runner.run(ctx, w.Path, rebaseArgs...)
 	if err != nil {
 		return RebaseResult{}, err
 	}
@@ -422,7 +458,8 @@ func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message
 	if _, err := r.runner.mustRun(ctx, r.repoPath, "merge", "--squash", w.Branch); err != nil {
 		return out, fmt.Errorf("land: squash %s into %s: %w", w.Branch, target, err)
 	}
-	if _, err := r.runner.mustRun(ctx, r.repoPath, "commit", "-m", message); err != nil {
+	squash := append(r.identityArgs(ctx), "commit", "-m", message)
+	if _, err := r.runner.mustRun(ctx, r.repoPath, squash...); err != nil {
 		return out, fmt.Errorf("land: commit squash of %s: %w", w.Branch, err)
 	}
 

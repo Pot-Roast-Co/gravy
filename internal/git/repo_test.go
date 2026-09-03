@@ -644,3 +644,76 @@ func TestWorktreesLiveOutsideTheRepository(t *testing.T) {
 		t.Errorf("creating a worktree dirtied the repository:\n%s", after)
 	}
 }
+
+// TestCommitWorksWithoutAConfiguredIdentity reproduces a fresh machine.
+//
+// Git refuses to commit with "Author identity unknown" when neither user.email nor user.name is
+// set. That is the normal state of a CI runner, a container, or a newly provisioned box —
+// exactly where an unattended agent runs. Before this was handled, every run on such a machine
+// failed at the commit step with an error the human had to decode themselves.
+func TestCommitWorksWithoutAConfiguredIdentity(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A repository with NO user.name or user.email, and none inheritable from a global
+	// config: HOME is redirected so the test cannot accidentally pick up the developer's.
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(root, "nonexistent-gitconfig"))
+	t.Setenv("GIT_CONFIG_SYSTEM", filepath.Join(root, "nonexistent-gitconfig"))
+
+	git(t, repoPath, "init", "-q", "-b", "main")
+	writeFile(t, repoPath, "README.md", "# test\n")
+	git(t, repoPath, "add", "-A")
+	// The initial commit needs an identity too; supply one explicitly, as a human would.
+	git(t, repoPath, "-c", "user.name=setup", "-c", "user.email=setup@example.com",
+		"commit", "-q", "-m", "initial")
+
+	repo := NewLocalRepo(host.NewLocal("test", 2), repoPath, filepath.Join(root, "worktrees"))
+	ctx := context.Background()
+
+	w, err := repo.CreateWorktree(ctx, "gravy/gr-001-identity", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, w.Path, "work.txt", "the agent's work\n")
+
+	hash, err := repo.CommitAll(ctx, w, "gravy: work with no configured identity")
+	if err != nil {
+		t.Fatalf("CommitAll on a machine with no git identity: %v", err)
+	}
+	if hash == "" {
+		t.Fatal("nothing was committed")
+	}
+
+	author := strings.TrimSpace(git(t, w.Path, "log", "-1", "--format=%an <%ae>"))
+	want := DefaultAuthorName + " <" + DefaultAuthorEmail + ">"
+	if author != want {
+		t.Errorf("author = %q, want the fallback %q", author, want)
+	}
+}
+
+// TestConfiguredIdentityIsRespected: the fallback must not override a real one.
+func TestConfiguredIdentityIsRespected(t *testing.T) {
+	repo, repoPath := testRepo(t)
+	git(t, repoPath, "config", "user.name", "Real Person")
+	git(t, repoPath, "config", "user.email", "real@example.com")
+
+	ctx := context.Background()
+	w, err := repo.CreateWorktree(ctx, "gravy/gr-001-real", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, w.Path, "work.txt", "work\n")
+	if _, err := repo.CommitAll(ctx, w, "gravy: work"); err != nil {
+		t.Fatal(err)
+	}
+
+	author := strings.TrimSpace(git(t, w.Path, "log", "-1", "--format=%an <%ae>"))
+	if author != "Real Person <real@example.com>" {
+		t.Errorf("author = %q; a configured identity must not be replaced by the fallback", author)
+	}
+}
