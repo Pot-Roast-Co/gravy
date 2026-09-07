@@ -93,12 +93,24 @@ func TestEnumValidity(t *testing.T) {
 			t.Errorf("got %d routes, want 7", len(AllRoutes))
 		}
 		for _, r := range AllRoutes {
-			if !r.Valid() {
-				t.Errorf("%q is not Valid", r)
+			if !r.IsDefault() {
+				t.Errorf("%q is missing from AllRoutes", r)
+			}
+			if !r.Named() {
+				t.Errorf("%q is not a usable bucket name", r)
 			}
 		}
-		if Route("nope").Valid() {
-			t.Error("unknown route reported Valid")
+		// A name Gravy does not ship with is still a usable bucket: routes are named by
+		// whoever is using them, and validity is a question about a configuration.
+		if custom := Route("astra"); custom.IsDefault() {
+			t.Error("a custom bucket name was reported as a default")
+		} else if !custom.Named() {
+			t.Error("a custom bucket name was rejected")
+		}
+		for _, bad := range []Route{"", " ", "two words", "claude/opus", "a,b", "a:b"} {
+			if bad.Named() {
+				t.Errorf("%q was accepted as a bucket name", bad)
+			}
 		}
 	})
 

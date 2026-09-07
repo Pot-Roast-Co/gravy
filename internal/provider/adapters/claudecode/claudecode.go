@@ -105,6 +105,7 @@ func (p *Provider) Models(context.Context) ([]provider.Model, error) {
 		{ID: "haiku", Name: "Claude Haiku"},
 		{ID: "sonnet", Name: "Claude Sonnet"},
 		{ID: "opus", Name: "Claude Opus"},
+		{ID: "fable", Name: "Claude Fable"},
 	}, nil
 }
 

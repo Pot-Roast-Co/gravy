@@ -93,8 +93,10 @@ func (l *Local) UpdateTicket(ctx context.Context, t core.Ticket) error {
 	if strings.TrimSpace(t.Title) == "" {
 		return fmt.Errorf("a ticket needs a title")
 	}
-	if t.Route != "" && !t.Route.Valid() {
-		return fmt.Errorf("route %q is not one of %v", t.Route, core.AllRoutes)
+	if t.Route != "" {
+		if err := l.knownRoute(t.Route); err != nil {
+			return err
+		}
 	}
 
 	current.Title = t.Title

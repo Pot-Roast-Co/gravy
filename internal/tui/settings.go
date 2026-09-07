@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -213,68 +214,92 @@ func buildFields(s *settings) []settingField {
 		},
 	})
 
-	// One capacity line per route: these are the buckets.
-	for _, r := range core.AllRoutes {
+	// One pair of lines per bucket, over the buckets this configuration actually defines —
+	// their names are the user's, not a list compiled into Gravy.
+	for _, r := range configuredBuckets(s.cfg) {
 		route := r
-		out = append(out, settingField{
-			Section: "Bucket capacity", Label: string(route),
-			Hint: "how many " + string(route) + " agents may run at once; 0 or blank is uncapped",
-			Get: func(s *settings) string {
-				if n, ok := s.cfg.Concurrency.Routes[route]; ok && n > 0 {
-					return strconv.Itoa(n)
-				}
-				return ""
-			},
-			Set: func(s *settings, v string) error {
-				if s.cfg.Concurrency.Routes == nil {
-					s.cfg.Concurrency.Routes = map[core.Route]int{}
-				}
-				if v == "" || v == "0" {
-					delete(s.cfg.Concurrency.Routes, route)
-					return nil
-				}
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					return fmt.Errorf("a cap must be a whole number, or blank for uncapped")
-				}
-				s.cfg.Concurrency.Routes[route] = n
-				return nil
-			},
-		})
-	}
-
-	// Which agent each bucket runs on.
-	for _, r := range core.AllRoutes {
-		route := r
-		out = append(out, settingField{
-			Section: "Bucket agents", Label: string(route),
-			Hint: "comma-separated provider/model, first usable one wins",
-			Get:  func(s *settings) string { return strings.Join(s.cfg.Routes[route], ", ") },
-			Set: func(s *settings, v string) error {
-				if s.cfg.Routes == nil {
-					s.cfg.Routes = map[core.Route][]string{}
-				}
-				if strings.TrimSpace(v) == "" {
-					s.cfg.Routes[route] = nil
-					return nil
-				}
-				var choices []string
-				for _, part := range strings.Split(v, ",") {
-					part = strings.TrimSpace(part)
-					if part == "" {
-						continue
-					}
-					// Parsed now so a typo is refused here rather than at run time.
-					if _, err := config.ParseChoice(part); err != nil {
+		out = append(out,
+			settingField{
+				Section: "Bucket " + string(route), Label: "agents",
+				Hint: "comma-separated provider/model, first usable one wins",
+				Get:  func(s *settings) string { return strings.Join(s.cfg.Routes[route], ", ") },
+				Set: func(s *settings, v string) error {
+					choices, err := parseChoices(v)
+					if err != nil {
 						return err
 					}
-					choices = append(choices, part)
-				}
-				s.cfg.Routes[route] = choices
-				return nil
+					if s.cfg.Routes == nil {
+						s.cfg.Routes = map[core.Route][]string{}
+					}
+					s.cfg.Routes[route] = choices
+					return nil
+				},
 			},
-		})
+			settingField{
+				Section: "Bucket " + string(route), Label: "capacity",
+				Hint: "how many may run at once; blank is uncapped",
+				Get: func(s *settings) string {
+					if n, ok := s.cfg.Concurrency.Routes[route]; ok && n > 0 {
+						return strconv.Itoa(n)
+					}
+					return ""
+				},
+				Set: func(s *settings, v string) error {
+					if s.cfg.Concurrency.Routes == nil {
+						s.cfg.Concurrency.Routes = map[core.Route]int{}
+					}
+					if v == "" || v == "0" {
+						delete(s.cfg.Concurrency.Routes, route)
+						return nil
+					}
+					n, err := strconv.Atoi(v)
+					if err != nil || n < 0 {
+						return fmt.Errorf("a cap must be a whole number, or blank for uncapped")
+					}
+					s.cfg.Concurrency.Routes[route] = n
+					return nil
+				},
+			},
+			settingField{
+				Section: "Bucket " + string(route), Label: "delete",
+				Hint: "type the bucket's name to remove it",
+				Get:  func(s *settings) string { return "" },
+				Set: func(s *settings, v string) error {
+					if v != string(route) {
+						return fmt.Errorf("type %q exactly to remove this bucket", route)
+					}
+					delete(s.cfg.Routes, route)
+					delete(s.cfg.Concurrency.Routes, route)
+					return nil
+				},
+			},
+		)
 	}
+
+	out = append(out, settingField{
+		Section: "Buckets", Label: "new bucket",
+		Hint: "a name of your own — planning, astra, whatever you call it",
+		Get:  func(s *settings) string { return "" },
+		Set: func(s *settings, v string) error {
+			name := core.Route(strings.TrimSpace(v))
+			if v == "" {
+				return nil
+			}
+			if !name.Named() {
+				return fmt.Errorf("use a word without spaces, slashes, commas or colons")
+			}
+			if _, exists := s.cfg.Routes[name]; exists {
+				return fmt.Errorf("there is already a bucket called %q", name)
+			}
+			if s.cfg.Routes == nil {
+				s.cfg.Routes = map[core.Route][]string{}
+			}
+			// Created empty: an agent list invented on the user's behalf would be a guess
+			// about which model they meant.
+			s.cfg.Routes[name] = nil
+			return nil
+		},
+	})
 
 	for _, id := range sortedProviderIDs(s.cfg) {
 		providerID := id
@@ -559,4 +584,45 @@ func (s *settings) footer(th Theme) string {
 		hint = "  ·  " + s.fields[s.cursor].Hint
 	}
 	return state + th.Muted.Render("  ·  enter edit · s save · r reload"+trunc(hint, 60))
+}
+
+// configuredBuckets lists the buckets a configuration defines, in a stable order.
+//
+// It unions the two places a bucket can appear, so one that has a capacity but no agents yet is
+// still visible and editable rather than invisible until it is complete.
+func configuredBuckets(c config.Config) []core.Route {
+	seen := map[core.Route]bool{}
+	var out []core.Route
+	for r := range c.Routes {
+		if !seen[r] {
+			seen[r], out = true, append(out, r)
+		}
+	}
+	for r := range c.Concurrency.Routes {
+		if !seen[r] {
+			seen[r], out = true, append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// parseChoices reads "provider/model, provider/model" and refuses a typo here rather than at run
+// time with a ticket already waiting on it.
+func parseChoices(v string) ([]string, error) {
+	if strings.TrimSpace(v) == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, err := config.ParseChoice(part); err != nil {
+			return nil, err
+		}
+		out = append(out, part)
+	}
+	return out, nil
 }

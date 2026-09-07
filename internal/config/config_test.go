@@ -168,9 +168,14 @@ func TestParseErrors(t *testing.T) {
 			wantSubstrings: []string{"concurrenc"},
 		},
 		{
-			name:           "unknown route names the key and line",
-			yaml:           "routes:\n  implementaton:\n    - claude-code/sonnet\n",
-			wantSubstrings: []string{"routes.implementaton", "unknown route", "bad.yaml:2"},
+			// Bucket names are the user's to choose, so a name Gravy does not ship with is
+			// accepted — only one that would be ambiguous in a config file or on a command
+			// line is refused. A typo in a bucket NAME is therefore indistinguishable from a
+			// new bucket; what catches it is a ticket asking for a bucket that is not
+			// configured, which api.knownRoute refuses.
+			name:           "unusable bucket name",
+			yaml:           "routes:\n  two words:\n    - claude-code/sonnet\n",
+			wantSubstrings: []string{"routes.two words", "usable bucket name", "bad.yaml:2"},
 		},
 		{
 			name:           "route entry that is not provider/model",

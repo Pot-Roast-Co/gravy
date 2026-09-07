@@ -110,6 +110,9 @@ type SystemStatus struct {
 	Running []RunningTicket
 	// Ready is the queue across every project, in the order the scheduler would take it.
 	Ready []QueuedTicket
+	// Buckets are the configured route names, so a client can offer them rather than guess at
+	// a list compiled into Gravy.
+	Buckets []core.Route
 }
 
 // AttentionItem is one Needs You row, resolved against the ticket and project it concerns so a

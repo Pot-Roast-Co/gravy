@@ -1,5 +1,7 @@
 package core
 
+import "strings"
+
 // AttentionReason is why an item sits in the Needs You queue (PRODUCT.md §8).
 //
 // Needs You is the primary queue and, in practice, the product: a single typed list of
@@ -47,11 +49,15 @@ const (
 // Valid reports whether m is a known land mode.
 func (m LandMode) Valid() bool { return m == LandMerge || m == LandPR }
 
-// Route is a semantic intent — what kind of work this is — rather than a model.
+// Route is a bucket of agent capacity that a ticket asks for by name.
 //
 // Tickets request a route; configuration maps each route to an ordered list of provider/model
-// choices. That indirection is what lets quota failures fall through to the next choice without
-// a ticket ever naming a model.
+// choices, and to a concurrency cap. That indirection is what lets quota failures fall through to
+// the next choice without a ticket ever naming a model.
+//
+// Route names are NOT a closed set. AllRoutes below is the set Gravy ships with, used to seed a
+// new config and nothing else — a route is valid if the configuration defines it, so you can call
+// your buckets whatever you actually call them.
 type Route string
 
 // The routes.
@@ -65,20 +71,34 @@ const (
 	RouteReview         Route = "review"
 )
 
-// AllRoutes lists every route.
+// AllRoutes lists the routes a fresh configuration starts with. It is a default, not a
+// constraint: see Route.
 var AllRoutes = []Route{
 	RouteLocal, RouteCheap, RouteStandard, RouteStrong, RoutePlanning,
 	RouteImplementation, RouteReview,
 }
 
-// Valid reports whether r is a known route.
-func (r Route) Valid() bool {
+// IsDefault reports whether r is one of the routes Gravy ships with.
+//
+// It is deliberately not called Valid: validity is a question about a configuration, not about
+// this list, and answering it here is what stopped anyone naming their own buckets.
+func (r Route) IsDefault() bool {
 	for _, k := range AllRoutes {
 		if k == r {
 			return true
 		}
 	}
 	return false
+}
+
+// Named reports whether r is a usable route name: non-empty, and free of the characters that
+// would make it ambiguous in a config file or on a command line.
+func (r Route) Named() bool {
+	s := strings.TrimSpace(string(r))
+	if s == "" || s != string(r) {
+		return false
+	}
+	return !strings.ContainsAny(s, "/,: \t\n")
 }
 
 // FailureClass is how a finished run is judged (ARCHITECTURE.md §4.3).

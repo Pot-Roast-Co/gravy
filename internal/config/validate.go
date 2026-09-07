@@ -153,8 +153,10 @@ func (c Config) validate(loc *locator) error {
 	// Routes: the key must be a known route, and every choice must name a configured provider.
 	// An unknown route is a typo that would otherwise fail silently at scheduling time.
 	for _, r := range sortedRoutes(c.Routes) {
-		if !r.Valid() {
-			add("routes."+string(r), "unknown route (valid routes: %s)", joinRoutes(core.AllRoutes))
+		// A route is whatever you name it; only names that would be ambiguous are refused.
+		if !r.Named() {
+			add("routes."+string(r), "not a usable bucket name: use a word without spaces, "+
+				"slashes, commas or colons")
 			continue
 		}
 		for i, entry := range c.Routes[r] {
@@ -233,14 +235,6 @@ func sortedRoutes[V any](m map[core.Route]V) []core.Route {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
-}
-
-func joinRoutes(rs []core.Route) string {
-	parts := make([]string, len(rs))
-	for i, r := range rs {
-		parts[i] = string(r)
-	}
-	return strings.Join(parts, ", ")
 }
 
 func joinModes() string {

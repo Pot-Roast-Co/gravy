@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pot-roast-co/gravy/internal/config"
@@ -108,4 +109,40 @@ func (l *Local) UpdateProject(ctx context.Context, p core.Project) error {
 	}
 	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: current.ID})
 	return nil
+}
+
+// knownRoute reports whether a ticket may ask for a route.
+//
+// A route is valid because the configuration defines it, not because it appears in a list
+// compiled into Gravy — buckets are named by whoever is using them. A service with no
+// configuration attached accepts any usable name, since it has nothing to check against and
+// refusing would be worse than accepting.
+func (l *Local) knownRoute(r core.Route) error {
+	if !r.Named() {
+		return fmt.Errorf("route %q is not a usable bucket name", r)
+	}
+	if l.home == "" || len(l.cfg.Routes) == 0 {
+		return nil
+	}
+	if _, ok := l.cfg.Routes[r]; ok {
+		return nil
+	}
+
+	names := make([]string, 0, len(l.cfg.Routes))
+	for name := range l.cfg.Routes {
+		names = append(names, string(name))
+	}
+	sort.Strings(names)
+	return fmt.Errorf("there is no bucket called %q — configured buckets: %s",
+		r, strings.Join(names, ", "))
+}
+
+// Routes lists the configured bucket names, so a client can offer them rather than guess.
+func (l *Local) Routes() []core.Route {
+	out := make([]core.Route, 0, len(l.cfg.Routes))
+	for name := range l.cfg.Routes {
+		out = append(out, name)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }

@@ -341,8 +341,8 @@ func (q *queue) submitForm(ctx ViewContext) tea.Cmd {
 	}
 	body := q.fields[1].Value
 	route := core.Route(strings.TrimSpace(q.fields[2].Value))
-	if !route.Valid() {
-		q.notice = fmt.Sprintf("route %q is not one of %v", route, core.AllRoutes)
+	if err := knownBucket(ctx, route); err != nil {
+		q.notice = err.Error()
 		return nil
 	}
 
@@ -503,4 +503,23 @@ func (q *queue) footer(ctx ViewContext) string {
 	return th.Muted.Render(strings.Join([]string{
 		"n new", "e edit", move, "x select", "J/K reorder", "+/- priority", "D delete",
 	}, " · "))
+}
+
+// knownBucket checks a route against the configured buckets rather than a list compiled into
+// Gravy, so a name the user invented is accepted and a typo is still caught.
+func knownBucket(ctx ViewContext, r core.Route) error {
+	if strings.TrimSpace(string(r)) == "" {
+		return fmt.Errorf("a ticket needs a bucket")
+	}
+	if len(ctx.Status.Buckets) == 0 {
+		return nil // nothing to check against yet
+	}
+	names := make([]string, 0, len(ctx.Status.Buckets))
+	for _, b := range ctx.Status.Buckets {
+		if b == r {
+			return nil
+		}
+		names = append(names, string(b))
+	}
+	return fmt.Errorf("no bucket called %q — try: %s", r, strings.Join(names, ", "))
 }

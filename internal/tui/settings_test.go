@@ -34,15 +34,21 @@ func openSettings(t *testing.T, f *fakeService) Model {
 	return m
 }
 
-// focus moves the cursor onto the field with the given label.
+// focus moves the cursor onto the first field with the given label.
 func focus(t *testing.T, m Model, label string) Model {
+	t.Helper()
+	return focusIn(t, m, "", label)
+}
+
+// focusIn moves the cursor onto a field, disambiguating by section when labels repeat.
+func focusIn(t *testing.T, m Model, section, label string) Model {
 	t.Helper()
 	scr, ok := m.screens[SectionSettings].(*settings)
 	if !ok {
 		t.Fatal("settings screen is not registered")
 	}
 	for i, f := range scr.fields {
-		if f.Label == label {
+		if f.Label == label && (section == "" || f.Section == section) {
 			for scr.cursor < i {
 				m = send(t, m, key("j"))
 			}
@@ -52,7 +58,7 @@ func focus(t *testing.T, m Model, label string) Model {
 			return m
 		}
 	}
-	t.Fatalf("no field labelled %q", label)
+	t.Fatalf("no field labelled %q in section %q", label, section)
 	return m
 }
 
@@ -80,7 +86,7 @@ func TestEveryConfigSectionIsEditable(t *testing.T) {
 		sections[f.Section] = true
 	}
 	for _, want := range []string{
-		"Concurrency", "Bucket capacity", "Bucket agents", "Agents",
+		"Concurrency", "Buckets", "Bucket planning", "Bucket implementation", "Agents",
 		"Timeouts", "Retry", "Retention", "Project gravy",
 	} {
 		if !sections[want] {
@@ -100,8 +106,7 @@ func TestEditingABucketCapSavesIt(t *testing.T) {
 	f := settingsFixture()
 	m := openSettings(t, f)
 
-	// The capacity fields and the agent fields share route names, so target the first.
-	m = focus(t, m, "implementation")
+	m = focusIn(t, m, "Bucket implementation", "capacity")
 	m = typeInto(t, m, "4")
 
 	m, cmd := sendCmd(t, m, key("s"))
@@ -131,7 +136,7 @@ func TestEditingABucketCapSavesIt(t *testing.T) {
 func TestBlankCapMeansUncapped(t *testing.T) {
 	f := settingsFixture()
 	m := openSettings(t, f)
-	m = focus(t, m, "planning")
+	m = focusIn(t, m, "Bucket planning", "capacity")
 	m = typeInto(t, m, "")
 
 	m, cmd := sendCmd(t, m, key("s"))
@@ -171,20 +176,10 @@ func TestBadInputIsRefusedWithAReason(t *testing.T) {
 func TestRouteChoicesAreValidatedOnEntry(t *testing.T) {
 	f := settingsFixture()
 	m := openSettings(t, f)
-
-	// The second field with this label is the agent list.
-	scr := m.screens[SectionSettings].(*settings)
-	seen := 0
-	for i, fl := range scr.fields {
-		if fl.Label == "review" {
-			seen++
-			if seen == 2 {
-				scr.cursor = i
-				break
-			}
-		}
-	}
+	m = focusIn(t, m, "Bucket review", "agents")
 	m = typeInto(t, m, "not-a-choice")
+
+	scr := m.screens[SectionSettings].(*settings)
 	if !scr.editing {
 		t.Error("a malformed provider/model was accepted")
 	}
@@ -299,5 +294,95 @@ func TestSaveFailureIsReported(t *testing.T) {
 
 	if !strings.Contains(m.View(), "save failed") || !strings.Contains(m.View(), "disk is full") {
 		t.Errorf("a failed save is not reported:\n%s", m.View())
+	}
+}
+
+// TestCreateYourOwnBucket is the point of user-defined names: buckets are what you call them,
+// not a list compiled into Gravy.
+func TestCreateYourOwnBucket(t *testing.T) {
+	f := settingsFixture()
+	m := openSettings(t, f)
+
+	m = focus(t, m, "new bucket")
+	m = typeInto(t, m, "astra")
+
+	scr := m.screens[SectionSettings].(*settings)
+	if _, ok := scr.cfg.Routes[core.Route("astra")]; !ok {
+		t.Fatalf("astra was not created: %v", scr.cfg.Routes)
+	}
+	// It gains its own editable fields immediately, without a save or a reload.
+	var sections int
+	for _, fl := range scr.fields {
+		if fl.Section == "Bucket astra" {
+			sections++
+		}
+	}
+	if sections != 3 {
+		t.Errorf("astra has %d fields, want agents, capacity and delete", sections)
+	}
+
+	// And it can be given an agent and a cap like any other.
+	m = focusIn(t, m, "Bucket astra", "agents")
+	m = typeInto(t, m, "claude-code/fable, claude-code/opus")
+	m = focusIn(t, m, "Bucket astra", "capacity")
+	m = typeInto(t, m, "1")
+
+	m, cmd := sendCmd(t, m, key("s"))
+	m = send(t, m, cmd())
+
+	saved := f.saved[0]
+	if got := saved.Routes[core.Route("astra")]; len(got) != 2 || got[0] != "claude-code/fable" {
+		t.Errorf("astra's agents = %v", got)
+	}
+	if got := saved.Concurrency.Routes[core.Route("astra")]; got != 1 {
+		t.Errorf("astra's capacity = %d, want 1", got)
+	}
+}
+
+// TestBucketNamesAreChecked keeps a name that would be ambiguous out of the config.
+func TestBucketNamesAreChecked(t *testing.T) {
+	m := openSettings(t, settingsFixture())
+	m = focus(t, m, "new bucket")
+
+	for _, bad := range []string{"two words", "claude/opus", "a,b"} {
+		m = typeInto(t, m, bad)
+		scr := m.screens[SectionSettings].(*settings)
+		if !scr.editing {
+			t.Errorf("%q was accepted as a bucket name", bad)
+		}
+		m = send(t, m, key("esc"))
+		m = focus(t, m, "new bucket")
+	}
+
+	// And a duplicate is refused rather than silently replacing what is there.
+	m = typeInto(t, m, "planning")
+	if !strings.Contains(m.View(), "already a bucket") {
+		t.Errorf("a duplicate name was not refused:\n%s", m.View())
+	}
+}
+
+// TestDeletingABucketNeedsItsName: removing a bucket orphans any ticket asking for it, so it is
+// not a single keystroke.
+func TestDeletingABucketNeedsItsName(t *testing.T) {
+	f := settingsFixture()
+	m := openSettings(t, f)
+
+	m = focusIn(t, m, "Bucket planning", "delete")
+	m = typeInto(t, m, "plannin")
+	scr := m.screens[SectionSettings].(*settings)
+	if _, gone := scr.cfg.Routes[core.RoutePlanning]; !gone {
+		t.Error("a near-miss deleted the bucket")
+	}
+
+	m = send(t, m, key("esc"))
+	m = focusIn(t, m, "Bucket planning", "delete")
+	m = typeInto(t, m, "planning")
+
+	scr = m.screens[SectionSettings].(*settings)
+	if _, still := scr.cfg.Routes[core.RoutePlanning]; still {
+		t.Error("typing the name exactly did not remove the bucket")
+	}
+	if _, still := scr.cfg.Concurrency.Routes[core.RoutePlanning]; still {
+		t.Error("the bucket's capacity outlived the bucket")
 	}
 }

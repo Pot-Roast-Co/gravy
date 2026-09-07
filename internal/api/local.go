@@ -222,8 +222,8 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 	if route == "" {
 		route = core.RouteImplementation
 	}
-	if !route.Valid() {
-		return core.Ticket{}, fmt.Errorf("route %q is not one of %v", route, core.AllRoutes)
+	if err := l.knownRoute(route); err != nil {
+		return core.Ticket{}, err
 	}
 
 	now := l.now()
@@ -435,6 +435,7 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 		st.Attention = append(st.Attention, item)
 	}
 	SortAttention(st.Attention)
+	st.Buckets = l.Routes()
 	return st, nil
 }
 
