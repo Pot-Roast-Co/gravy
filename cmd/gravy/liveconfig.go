@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -32,10 +31,23 @@ func (l *liveConfig) set(c config.Config) {
 	l.cfg = c
 }
 
-// Resolve makes liveConfig the router, so a route table edited in the TUI takes effect on the
-// next tick rather than on the next restart.
-func (l *liveConfig) Resolve(ctx context.Context, route core.Route, hostID string) (core.Choice, error) {
-	return configRouter{cfg: l.get()}.Resolve(ctx, route, hostID)
+// choices returns a bucket's ordered preferences, read live so a route table edited in the TUI
+// takes effect on the next tick rather than on the next restart.
+func (l *liveConfig) choices(route core.Route) []core.Choice {
+	cfg := l.get()
+	parsed, err := cfg.RouteChoices(route)
+	if err != nil {
+		return nil
+	}
+	return parsed
+}
+
+// usable reports whether this build can run a provider and the configuration has not disabled it.
+func (l *liveConfig) usable(providerID string) bool {
+	if _, built := registeredProviders[providerID]; !built {
+		return false
+	}
+	return enabled(l.get(), providerID)
 }
 
 // applyConfig installs what can be changed while running, and names what cannot.

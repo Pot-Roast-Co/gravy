@@ -18,6 +18,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/host"
 	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
 	"github.com/pot-roast-co/gravy/internal/provider/adapters/codex"
+	"github.com/pot-roast-co/gravy/internal/router"
 	"github.com/pot-roast-co/gravy/internal/runlog"
 	"github.com/pot-roast-co/gravy/internal/scheduler"
 	"github.com/pot-roast-co/gravy/internal/store"
@@ -72,11 +73,14 @@ func newApp(ctx context.Context) (*app, error) {
 	// agent from one asking for "cheap" — and two agents can be working at the same time.
 	// This is not GR-016: there is no fallback and no cooldown, so a quota failure parks the
 	// ticket rather than moving to the next choice.
-	// The router reads from liveConfig, so a route table edited in the TUI takes effect on the
-	// next tick rather than the next restart.
+	// The router reads from liveConfig, so a bucket edited in the TUI takes effect on the next
+	// tick rather than the next restart. It walks each bucket's choices in order and skips any
+	// model that is cooling down after a quota or rate-limit failure, which is what lets a
+	// bucket keep working on its second choice instead of stopping.
 	live := newLiveConfig(cfg)
+	rtr := router.New(db, live.choices, live.usable)
 	// Route caps are the buckets: how many agents of each kind may run at once, fleet-wide.
-	sched := scheduler.New(db, pool, live).WithRouteCaps(cfg.Concurrency.Routes)
+	sched := scheduler.New(db, pool, rtr).WithRouteCaps(cfg.Concurrency.Routes)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
@@ -201,7 +205,10 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// reviewChoice resolves the review route for the advisory review pass.
+// reviewChoice resolves the review bucket for the advisory review pass.
+//
+// It resolves once at startup rather than per run: the review model is baked into the
+// orchestrator, and changing it is one of the settings that reports as needing a restart.
 func reviewChoice(cfg config.Config) core.Choice {
 	c, _ := configRouter{cfg: cfg}.Resolve(context.Background(), core.RouteReview, "")
 	return c
