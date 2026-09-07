@@ -98,6 +98,11 @@ func newApp(ctx context.Context) (*app, error) {
 	orch.RegisterHost(h)
 	orch.RegisterProvider(claudecode.New(claudecode.WithCommand(providerCommand(cfg))))
 
+	// The advisory review pass. It runs on the review route, which is deliberately a cheaper
+	// model than the implementation route: its job is triage a human can skim, not a second
+	// opinion worth paying for twice.
+	orch = orch.WithReview(claudecode.ID, routeModel(cfg, core.RouteReview), cfg.Context.TokenBudget*4)
+
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
 		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}).WithLogs(logs).WithKiller(orch),
@@ -124,6 +129,20 @@ func (l lander) Continue(ctx context.Context, ticketID string) error {
 
 // loop builds the scheduler loop.
 func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log) }
+
+// routeModel returns the model a route resolves to for the claude-code provider.
+func routeModel(cfg config.Config, route core.Route) string {
+	choices, err := cfg.RouteChoices(route)
+	if err != nil || len(choices) == 0 {
+		return "sonnet"
+	}
+	for _, c := range choices {
+		if c.ProviderID == claudecode.ID {
+			return c.Model
+		}
+	}
+	return choices[0].Model
+}
 
 // firstModel returns the model the implementation route resolves to.
 func firstModel(cfg config.Config) string {

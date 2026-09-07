@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/bobbybrady/gravy/internal/core"
 	"github.com/bobbybrady/gravy/internal/git"
+	"github.com/bobbybrady/gravy/internal/review"
 	"github.com/bobbybrady/gravy/internal/store"
 )
 
@@ -23,9 +25,10 @@ type ReviewBundle struct {
 	Validations []store.Validation
 	Diff        git.Diff
 	Summary     core.Summary
-	// Verdict is the automated review's advisory note, empty until GR-020 lands. It annotates
-	// the diff for the human and never decides the ticket's fate.
-	Verdict string
+	// Verdict is the automated reviewer's advisory opinion. It annotates the diff for the
+	// human and never decides the ticket's fate; nothing in this package reads it to make a
+	// decision, and nothing should.
+	Verdict review.Verdict
 }
 
 // Lander lands approved work.
@@ -62,6 +65,13 @@ func (l *Local) GetReview(ctx context.Context, ticketID string) (ReviewBundle, e
 		rb.Run = runs[0]
 		if rb.Validations, err = l.db.ListValidations(ctx, rb.Run.ID); err != nil {
 			return rb, err
+		}
+		// A verdict that cannot be read is reported as unavailable rather than as a pass:
+		// looking like a clean review is the one way an advisory tool does real harm.
+		if raw := strings.TrimSpace(rb.Run.Verdict); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &rb.Verdict); err != nil {
+				rb.Verdict = review.Verdict{Unavailable: "the stored verdict could not be read"}
+			}
 		}
 	}
 

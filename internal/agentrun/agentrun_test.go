@@ -2,6 +2,7 @@ package agentrun_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/bobbybrady/gravy/internal/host"
 	"github.com/bobbybrady/gravy/internal/provider"
 	"github.com/bobbybrady/gravy/internal/provider/fake"
+	"github.com/bobbybrady/gravy/internal/review"
 	"github.com/bobbybrady/gravy/internal/store"
 	"github.com/bobbybrady/gravy/internal/validate"
 )
@@ -975,5 +977,118 @@ func TestReviewEntersNeedsYouQueue(t *testing.T) {
 	// The row must carry enough to triage from the queue without opening the ticket.
 	if open[0].Payload["commit"] == nil {
 		t.Error("attention payload names no commit to review")
+	}
+}
+
+// failingReviewModel always answers "fail", which is the answer that would do damage if the
+// advisory verdict were ever load-bearing.
+type failingReviewModel struct{ calls int }
+
+func (m *failingReviewModel) Complete(context.Context, string) (string, error) {
+	m.calls++
+	return `{"overall":"fail","summary":"this change is wrong",
+	         "findings":[{"severity":"high","file":"hello.txt","line":1,"rationale":"no"}]}`, nil
+}
+
+// brokenReviewModel never answers.
+type brokenReviewModel struct{}
+
+func (brokenReviewModel) Complete(context.Context, string) (string, error) {
+	return "", fmt.Errorf("the reviewer is down")
+}
+
+// TestVerdictNeverChangesTicketState is GR-020's AC4, and the invariant the whole design rests
+// on. A reviewer that can fail a ticket is a gate, and a gate that a model controls is not a
+// gate the human owns.
+func TestVerdictNeverChangesTicketState(t *testing.T) {
+	model := &failingReviewModel{}
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.orch.WithReviewer(review.New(model, 0))
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if model.calls != 1 {
+		t.Errorf("the reviewer ran %d times, want once", model.calls)
+	}
+	// A "fail" verdict changes nothing: the work still reaches a human.
+	if res.FinalState != core.StateReview {
+		t.Fatalf("final state = %q, want review despite a failing verdict", res.FinalState)
+	}
+
+	ctx := context.Background()
+	tk, err := h.db.GetTicket(ctx, "GR-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.State != core.StateReview {
+		t.Errorf("persisted state = %q, want review", tk.State)
+	}
+
+	// It is recorded, so the human can read it.
+	runs, err := h.db.ListRunsForTicket(ctx, "GR-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) == 0 || runs[0].Verdict == "" {
+		t.Fatalf("no verdict recorded on the run: %+v", runs)
+	}
+	var got review.Verdict
+	if err := json.Unmarshal([]byte(runs[0].Verdict), &got); err != nil {
+		t.Fatalf("stored verdict is not readable: %v", err)
+	}
+	if got.Overall != review.Fail || len(got.Findings) != 1 {
+		t.Errorf("stored verdict = %+v", got)
+	}
+}
+
+// TestAFailedReviewDoesNotBlockReachingReview is AC3 at the orchestrator level: a review that
+// cannot run must never stop work reaching a human.
+func TestAFailedReviewDoesNotBlockReachingReview(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.orch.WithReviewer(review.New(brokenReviewModel{}, 0))
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review despite the reviewer failing", res.FinalState)
+	}
+
+	runs, _ := h.db.ListRunsForTicket(context.Background(), "GR-100")
+	var got review.Verdict
+	if len(runs) > 0 && runs[0].Verdict != "" {
+		_ = json.Unmarshal([]byte(runs[0].Verdict), &got)
+	}
+	if got.Available() {
+		t.Errorf("a failed review produced a usable verdict: %+v", got)
+	}
+	if got.Unavailable == "" {
+		t.Error("the failed review did not record why there is no verdict")
+	}
+}
+
+// TestNoReviewerIsFine keeps the pass optional.
+func TestNoReviewerIsFine(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review with no reviewer configured", res.FinalState)
 	}
 }

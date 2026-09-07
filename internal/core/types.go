@@ -125,6 +125,10 @@ type Run struct {
 
 	StartedAt time.Time
 	EndedAt   *time.Time
+
+	// Verdict is the automated reviewer's advisory opinion as JSON, empty when none was
+	// produced. It annotates the diff for a human and never decides anything.
+	Verdict string
 }
 
 // Summary is the durable account of what a run changed.

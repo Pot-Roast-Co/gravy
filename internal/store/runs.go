@@ -11,15 +11,15 @@ import (
 
 const runColumns = `id, ticket_id, host_id, provider_id, model, session_ref, state,
 	failure_class, failure_note, pid, turns, tokens_in, tokens_out, cost_usd,
-	started_at, ended_at`
+	verdict, started_at, ended_at`
 
 // CreateRun records the start of a run.
 func (d *DB) CreateRun(ctx context.Context, r core.Run) error {
 	_, err := d.exec(ctx, `INSERT INTO runs (`+runColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.TicketID, r.HostID, r.ProviderID, r.Model, nullString(r.SessionRef),
 		string(r.State), r.FailureClass.String(), nullString(r.FailureNote), r.PID,
-		r.Turns, r.TokensIn, r.TokensOut, r.CostUSD,
+		r.Turns, r.TokensIn, r.TokensOut, r.CostUSD, r.Verdict,
 		unixOrZero(r.StartedAt), endedAt(r))
 	if err != nil {
 		return fmt.Errorf("create run %q: %w", r.ID, err)
@@ -48,11 +48,11 @@ func (d *DB) GetRun(ctx context.Context, id string) (core.Run, error) {
 func (d *DB) UpdateRun(ctx context.Context, r core.Run) error {
 	res, err := d.exec(ctx, `UPDATE runs SET
 		session_ref=?, state=?, failure_class=?, failure_note=?, pid=?, turns=?,
-		tokens_in=?, tokens_out=?, cost_usd=?, ended_at=?
+		tokens_in=?, tokens_out=?, cost_usd=?, verdict=?, ended_at=?
 		WHERE id=?`,
 		nullString(r.SessionRef), string(r.State), r.FailureClass.String(),
 		nullString(r.FailureNote), r.PID, r.Turns, r.TokensIn, r.TokensOut, r.CostUSD,
-		endedAt(r), r.ID)
+		r.Verdict, endedAt(r), r.ID)
 	if err != nil {
 		return fmt.Errorf("update run %q: %w", r.ID, err)
 	}
@@ -107,7 +107,7 @@ func scanRun(s scanner) (core.Run, error) {
 	)
 	if err := s.Scan(&r.ID, &r.TicketID, &r.HostID, &r.ProviderID, &r.Model, &sessionRef,
 		&state, &failureClass, &failureNote, &pid, &turns, &tokensIn, &tokensOut, &cost,
-		&startedAt, &endedAt); err != nil {
+		&r.Verdict, &startedAt, &endedAt); err != nil {
 		return core.Run{}, err
 	}
 	r.State = core.State(state)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/bobbybrady/gravy/internal/api"
 	"github.com/bobbybrady/gravy/internal/core"
+	rev "github.com/bobbybrady/gravy/internal/review"
 )
 
 // reviewMode is what the keyboard is currently doing.
@@ -302,12 +303,7 @@ func (r *review) View(ctx ViewContext) string {
 		lines = append(lines, th.Muted.Render(fmt.Sprintf("  validation %-10s ", v.Step))+style.Render(status))
 	}
 
-	// Advisory only. It never decides the ticket's fate.
-	if b.Verdict != "" {
-		lines = append(lines, th.Muted.Render("  automated review  ")+th.Text.Render(b.Verdict))
-	} else {
-		lines = append(lines, th.Muted.Render("  automated review  not yet available (GR-020)"))
-	}
+	lines = append(lines, r.verdictLines(b, th, ctx.Width)...)
 
 	if n := strings.TrimSpace(b.Summary.Narrative); n != "" {
 		lines = append(lines, "", th.Text.Render("  "+firstLine(n)))
@@ -461,4 +457,54 @@ func sweepOrder(ctx ViewContext) []string {
 		rest = append(rest, item.Attention.TicketID)
 	}
 	return append(held, rest...)
+}
+
+// verdictLines renders the advisory verdict.
+//
+// It is labelled advisory on screen as well as in the prompt. A verdict that renders like a
+// gate gets treated like one, and this never decides anything.
+func (r *review) verdictLines(b api.ReviewBundle, th Theme, width int) []string {
+	v := b.Verdict
+
+	if !v.Available() {
+		reason := v.Unavailable
+		if reason == "" {
+			reason = "no automated review ran"
+		}
+		return []string{th.Muted.Render("  automated review  " + reason)}
+	}
+
+	style := th.Success
+	switch v.Overall {
+	case rev.Concerns:
+		style = th.Warning
+	case rev.Fail:
+		style = th.Danger
+	}
+
+	out := []string{
+		th.Muted.Render("  automated review  ") + style.Render(string(v.Overall)) +
+			th.Muted.Render("  (advisory)"),
+	}
+	if s := strings.TrimSpace(v.Summary); s != "" {
+		out = append(out, th.Text.Render("  "+trunc(firstLine(s), max(0, width-2))))
+	}
+	for _, f := range v.Findings {
+		fstyle := th.Muted
+		switch f.Severity {
+		case rev.High:
+			fstyle = th.Danger
+		case rev.Medium:
+			fstyle = th.Warning
+		}
+		where := f.File
+		if f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.File, f.Line)
+		}
+		if where == "" {
+			where = "(no location)"
+		}
+		out = append(out, fstyle.Render("  · "+trunc(where+" — "+f.Rationale, max(0, width-4))))
+	}
+	return out
 }

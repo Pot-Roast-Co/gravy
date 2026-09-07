@@ -13,6 +13,7 @@ import (
 	"github.com/bobbybrady/gravy/internal/git"
 	"github.com/bobbybrady/gravy/internal/host"
 	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/bobbybrady/gravy/internal/review"
 	"github.com/bobbybrady/gravy/internal/runlog"
 	"github.com/bobbybrady/gravy/internal/validate"
 )
@@ -23,6 +24,7 @@ type Store interface {
 	UpdateTicket(ctx context.Context, t core.Ticket) error
 	SetTicketState(ctx context.Context, id string, ev core.Event) (core.State, error)
 	GetProject(ctx context.Context, id string) (core.Project, error)
+	GetRun(ctx context.Context, id string) (core.Run, error)
 	CreateRun(ctx context.Context, r core.Run) error
 	UpdateRun(ctx context.Context, r core.Run) error
 	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
@@ -107,6 +109,8 @@ type Orchestrator struct {
 	log          *slog.Logger
 	// logs records each run's output. Nil is legitimate: a run without a log is still a run.
 	logs *runlog.Store
+	// reviewer produces the advisory verdict. Nil disables the pass entirely.
+	reviewer *review.Reviewer
 
 	mu   sync.Mutex
 	live map[string]*liveRun
@@ -304,10 +308,12 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, fmt.Errorf("agentrun: %w", err)
 	}
 
-	// Automated review (GR-020) runs here, between Reviewing and Review. It is advisory: it
-	// annotates the diff for the human and never decides the ticket's fate, so until it exists
-	// the state simply passes through. Leaving the ticket stuck in Reviewing instead would
-	// strand it — no human action can move it, and its project stays held forever.
+	// The advisory review runs here, between Reviewing and Review. Nothing below reads its
+	// verdict: it annotates the diff for a human and never decides the ticket's fate. Leaving
+	// the ticket in Reviewing would strand it — no human action moves it, and its project
+	// stays held forever — so the transition happens whatever the reviewer said, or did not.
+	o.runReview(ctx, ticket, project, repo, wt, loop)
+
 	state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventReviewed)
 	if err != nil {
 		return res, fmt.Errorf("agentrun: %w", err)
