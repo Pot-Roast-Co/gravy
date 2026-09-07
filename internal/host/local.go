@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -383,4 +384,51 @@ func envSlice(env map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// StartDetached launches a process that outlives this one.
+//
+// Nothing is piped: the child gets the log file for stdout and stderr and /dev/null for stdin, so
+// its writes cannot block on a reader that has gone away — a daemon started by a TUI must not die
+// when that TUI exits. setProcessGroup puts it in its own group for the same reason, so a signal
+// sent to the starter's group does not reach it.
+func (h *LocalHost) StartDetached(spec ExecSpec, logPath string) (int, error) {
+	if spec.Cmd == "" {
+		return 0, errors.New("start: no command given")
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return 0, fmt.Errorf("start %s: log directory: %w", spec.Cmd, err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return 0, fmt.Errorf("start %s: open %s: %w", spec.Cmd, logPath, err)
+	}
+	defer logFile.Close()
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+	if err != nil {
+		return 0, fmt.Errorf("start %s: %w", spec.Cmd, err)
+	}
+	defer devNull.Close()
+
+	cmd := exec.Command(spec.Cmd, spec.Args...) //nolint:gosec // running configured commands is this package's purpose
+	cmd.Dir = spec.Dir
+	if len(spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), envSlice(spec.Env)...)
+	}
+	cmd.Stdin = devNull
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	setNewSession(cmd)
+
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("start %s: %w", spec.Cmd, err)
+	}
+	// Release rather than Wait: the caller is not this process's parent in any meaningful
+	// sense, and waiting would defeat the point. The child is reparented to init on exit.
+	pid := cmd.Process.Pid
+	if err := cmd.Process.Release(); err != nil {
+		return pid, fmt.Errorf("start %s: release: %w", spec.Cmd, err)
+	}
+	return pid, nil
 }

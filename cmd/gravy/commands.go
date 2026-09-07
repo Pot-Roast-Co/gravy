@@ -13,6 +13,7 @@ import (
 	"github.com/bobbybrady/gravy/internal/agentrun"
 	"github.com/bobbybrady/gravy/internal/api"
 	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/bobbybrady/gravy/internal/daemon"
 	"github.com/bobbybrady/gravy/internal/scheduler"
 )
 
@@ -343,6 +344,13 @@ func runQueue(ctx context.Context, args []string) error {
 		return err
 	}
 	defer a.Close()
+
+	// Two schedulers over one database would both claim the same ready ticket and start two
+	// agents in one worktree. The daemon owns the queue whenever it is running.
+	if pid := daemon.Running(a.home); pid != 0 {
+		return fmt.Errorf("the gravy daemon is already working the queue (pid %d) — "+
+			"watch it with `gravy`, or stop it first", pid)
+	}
 
 	loop := a.loop()
 	loop.Interval = *interval

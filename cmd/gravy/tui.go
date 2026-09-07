@@ -28,7 +28,15 @@ func runTUI(ctx context.Context) error {
 	}
 	defer a.Close()
 
-	p := tea.NewProgram(tui.New(a.svc), tea.WithAltScreen(), tea.WithContext(ctx))
+	// The TUI is a client of the daemon, not a second writer to the database. Starting one if
+	// none is running is what makes `gravy` a single command rather than two terminals.
+	c, err := connect(ctx, a.home, a.host, true)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	p := tea.NewProgram(tui.New(c), tea.WithAltScreen(), tea.WithContext(ctx))
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}

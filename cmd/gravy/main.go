@@ -59,7 +59,7 @@ func run(args []string) error {
 	case "":
 		return runTUI(ctx)
 	case "serve":
-		return fmt.Errorf("not implemented yet: the daemon is GR-007. use `gravy run` to work the queue in the foreground")
+		return runServe(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q — run `gravy help`", cmd)
 	}
@@ -85,6 +85,11 @@ Nothing merges without "gravy approve". No flag changes that.
 
 Run gravy with no arguments for the dashboard.
 
-Not built yet: the daemon (work stops when you close the terminal), and every
-screen behind the frame. See docs/MILESTONES.md.`)
+  gravy serve                  run the daemon in the foreground
+
+The daemon owns the queue. Running gravy starts one if none is running, and it
+outlives the terminal that started it.
+
+Not built yet: the Backlog, Ready, Running and Needs You screens.
+See docs/MILESTONES.md.`)
 }

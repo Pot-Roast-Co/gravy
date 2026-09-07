@@ -48,3 +48,35 @@ func signalNumber(err *exec.ExitError) int {
 	}
 	return int(syscall.SIGKILL)
 }
+
+// Alive reports whether a process is still running.
+//
+// Signal 0 performs the permission and existence checks without delivering anything, which is
+// the portable way to ask. EPERM counts as alive: the process exists, it simply is not ours.
+func Alive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// Reap kills a process group left behind by a daemon that did not shut down cleanly.
+//
+// It is deliberately the group, not the process: an agent CLI spawns compilers and test runners,
+// and reaping only the parent leaves those writing into a worktree the next run will reuse.
+func Reap(pid int) error { return killGroup(pid) }
+
+// setNewSession detaches a process from the caller's session and controlling terminal.
+//
+// Setpgid alone is not enough for something meant to outlive its starter: a new process group in
+// the same session keeps the terminal, and when that terminal goes away the kernel delivers
+// SIGHUP to the session's groups. A daemon started from a TUI would then die the moment the TUI
+// exited, which is the exact failure GR-007 exists to prevent. Setsid implies a new process group
+// as well, so it replaces setProcessGroup rather than joining it.
+func setNewSession(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+}

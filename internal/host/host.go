@@ -19,6 +19,10 @@ type Host interface {
 	ID() string
 	Capabilities(ctx context.Context) (core.Caps, error)
 	Exec(ctx context.Context, spec ExecSpec) (Process, error)
+	// StartDetached launches a process that outlives the caller, appending its output to
+	// logPath, and returns its pid. It exists so a client can bring up a daemon without
+	// importing os/exec, which ARCHITECTURE.md 1.1 permits only here.
+	StartDetached(spec ExecSpec, logPath string) (int, error)
 	FS() FS
 	Slots() (used, total int)
 }
