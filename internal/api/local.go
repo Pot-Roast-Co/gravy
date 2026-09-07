@@ -12,6 +12,7 @@ import (
 
 	"github.com/bobbybrady/gravy/internal/core"
 	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/bobbybrady/gravy/internal/runlog"
 	"github.com/bobbybrady/gravy/internal/scheduler"
 	"github.com/bobbybrady/gravy/internal/store"
 )
@@ -30,6 +31,8 @@ type Local struct {
 	events *broker
 	// lander is nil on a client that may not merge, which is why Approve checks it.
 	lander Lander
+	// logs is nil when this service cannot read run output.
+	logs *runlog.Store
 }
 
 // WithLander gives the service the merge gate. A service without one can read and queue work

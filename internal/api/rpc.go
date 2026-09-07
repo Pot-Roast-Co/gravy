@@ -108,13 +108,19 @@ const (
 	mStatus           = "Status"
 	mExplainTicket    = "ExplainTicket"
 	mEvents           = "Events"
+	mStreamLogs       = "StreamLogs"
 	// nEvent is the notification the server pushes on the Events stream.
 	nEvent = "event"
+	// nLogLine is the notification pushed on the StreamLogs stream.
+	nLogLine = "logline"
 )
 
 // Parameter envelopes. Each method has one so the wire format is self-describing: a params
 // object names its fields, where a positional array would silently accept the wrong order.
 type (
+	runIDParams struct {
+		RunID string `json:"run_id"`
+	}
 	idParams struct {
 		ID string `json:"id"`
 	}

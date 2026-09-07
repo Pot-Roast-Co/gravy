@@ -83,4 +83,10 @@ notifications:
   # Coalesce a burst of attention items into one alert, so a wave of finishing runs does not
   # produce a wave of pings.
   rate_limit_window: 30s
+
+retention:
+  # How long a finished run's agent output and event stream are kept on disk.
+  # Summaries are not covered by this: they live in the database and are what a dependent
+  # ticket reads as fact, so they outlive the logs they were derived from. 0 keeps forever.
+  run_logs: 336h
 `

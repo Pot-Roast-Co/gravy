@@ -13,6 +13,7 @@ import (
 	"github.com/bobbybrady/gravy/internal/git"
 	"github.com/bobbybrady/gravy/internal/host"
 	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/bobbybrady/gravy/internal/runlog"
 	"github.com/bobbybrady/gravy/internal/validate"
 )
 
@@ -104,6 +105,8 @@ type Orchestrator struct {
 	cfg          Config
 	newID        IDGen
 	log          *slog.Logger
+	// logs records each run's output. Nil is legitimate: a run without a log is still a run.
+	logs *runlog.Store
 
 	mu   sync.Mutex
 	live map[string]*liveRun
@@ -481,14 +484,36 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	o.trackLive(ticket.ID, &liveRun{cancel: cancel, handle: handle})
 	defer o.untrackLive(ticket.ID)
 
-	// Events must be drained or the provider stalls once its buffer fills. GR-011 will
-	// persist these; for now they are consumed so the run proceeds.
+	// Events must be drained or the provider stalls once its buffer fills, so this goroutine
+	// exists whether or not anything is recording them.
+	var logw *runlog.Writer
+	if o.logs != nil {
+		if logw, err = o.logs.Open(runID); err != nil {
+			// Losing the log is not worth losing the run over.
+			logw = nil
+		}
+	}
+	drained := make(chan struct{})
 	go func() {
-		for range handle.Events() {
+		defer close(drained)
+		for ev := range handle.Events() {
+			if logw != nil {
+				_ = logw.WriteEvent(ev)
+			}
 		}
 	}()
 
 	outcome, waitErr := handle.Wait()
+
+	// Wait returning means the run is over, so the event channel is closing. The timeout is
+	// for the provider that does not honour that: a stuck drain must not wedge the worker.
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+	}
+	if logw != nil {
+		_ = logw.Close()
+	}
 	ended := time.Now()
 
 	run.State = core.StateValidating
@@ -631,6 +656,12 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 		return state, fmt.Errorf("agentrun: open attention: %w", err)
 	}
 	return state, nil
+}
+
+// WithLogs records run output through the given store.
+func (o *Orchestrator) WithLogs(s *runlog.Store) *Orchestrator {
+	o.logs = s
+	return o
 }
 
 // Kill terminates a ticket's live run and everything it spawned.

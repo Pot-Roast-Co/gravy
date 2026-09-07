@@ -21,6 +21,17 @@ type Config struct {
 	Retry         Retry                   `yaml:"retry"`
 	Context       Context                 `yaml:"context"`
 	Notifications Notifications           `yaml:"notifications"`
+	Retention     Retention               `yaml:"retention"`
+}
+
+// Retention controls how long artefacts are kept on disk.
+type Retention struct {
+	// RunLogs is how long a finished run's agent output and event stream are kept.
+	//
+	// Summaries are deliberately not covered by this: they live in the database and are what a
+	// dependent ticket reads as fact, so they must outlive the logs they were derived from.
+	// Zero keeps logs forever.
+	RunLogs Duration `yaml:"run_logs"`
 }
 
 // Concurrency controls how many runs may execute at once.
@@ -142,6 +153,7 @@ func Default() Config {
 		},
 		Context:       Context{TokenBudget: 60000},
 		Notifications: Notifications{Mode: NotifyBellAndOS, RateLimitWindow: Duration(30 * time.Second)},
+		Retention:     Retention{RunLogs: Duration(14 * 24 * time.Hour)},
 	}
 }
 

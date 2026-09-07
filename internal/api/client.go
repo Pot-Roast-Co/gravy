@@ -246,3 +246,71 @@ var (
 	_ Service = (*Local)(nil)
 	_ Service = (*Client)(nil)
 )
+
+// StreamLogs follows a run's output over its own connection, for the same reason Events does:
+// a stream that writes for as long as it lives would otherwise need framing and a write lock to
+// share a socket with request replies.
+func (c *Client) StreamLogs(ctx context.Context, runID string) (<-chan LogLine, func(), error) {
+	conn, err := net.Dial("unix", c.path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stream logs: %w", err)
+	}
+
+	id := int64(1)
+	params, err := marshalParams(runIDParams{RunID: runID})
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	req := rpcRequest{JSONRPC: rpcVersion, ID: &id, Method: mStreamLogs, Params: params}
+	b, _ := json.Marshal(req)
+	if _, err := conn.Write(append(b, '\n')); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("stream logs: %w", err)
+	}
+
+	dec := json.NewDecoder(bufio.NewReaderSize(conn, 64*1024))
+	var ack rpcResponse
+	if err := dec.Decode(&ack); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("stream logs: %w", err)
+	}
+	if ack.Error != nil {
+		conn.Close()
+		return nil, nil, ack.Error.toError()
+	}
+
+	out := make(chan LogLine, 64)
+	var once sync.Once
+	stop := func() { once.Do(func() { conn.Close() }) }
+
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	go func() {
+		defer close(out)
+		defer stop()
+		for {
+			var note rpcResponse
+			if err := dec.Decode(&note); err != nil {
+				return
+			}
+			if note.Method != nLogLine {
+				continue
+			}
+			var line LogLine
+			if err := json.Unmarshal(note.Params, &line); err != nil {
+				continue
+			}
+			select {
+			case out <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out, stop, nil
+}

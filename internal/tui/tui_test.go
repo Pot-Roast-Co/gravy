@@ -94,6 +94,12 @@ func (f *fakeService) RequestChanges(_ context.Context, id, feedback string) err
 	return nil
 }
 
+func (f *fakeService) StreamLogs(ctx context.Context, runID string) (<-chan api.LogLine, func(), error) {
+	ch := make(chan api.LogLine)
+	close(ch)
+	return ch, func() {}, nil
+}
+
 func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) { return nil, nil }
 func (f *fakeService) AddProject(context.Context, api.AddProjectReq) (core.Project, error) {
 	return core.Project{}, nil

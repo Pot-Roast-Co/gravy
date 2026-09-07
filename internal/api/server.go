@@ -177,9 +177,19 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		// The event stream takes the connection over for its lifetime.
+		// A stream takes the connection over for its lifetime.
 		if req.Method == mEvents {
 			s.streamEvents(ctx, w, req.ID)
+			return
+		}
+		if req.Method == mStreamLogs {
+			var p runIDParams
+			if err := unmarshalParams(req.Params, &p); err != nil {
+				_ = writeResponse(w, &rpcResponse{JSONRPC: rpcVersion, ID: req.ID,
+					Error: &rpcError{Code: codeInvalidParams, Message: err.Error()}})
+				return
+			}
+			s.streamLogs(ctx, w, req.ID, p.RunID)
 			return
 		}
 
@@ -342,5 +352,41 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 
 	default:
 		return nil, fmt.Errorf("unknown method %q", method)
+	}
+}
+
+// streamLogs writes a run's output until it ends or the client goes away.
+func (s *Server) streamLogs(ctx context.Context, w *bufio.Writer, id *int64, runID string) {
+	ch, stop, err := s.svc.StreamLogs(ctx, runID)
+	if err != nil {
+		_ = writeResponse(w, &rpcResponse{JSONRPC: rpcVersion, ID: id, Error: toRPCError(err)})
+		return
+	}
+	defer stop()
+
+	if err := writeResponse(w, &rpcResponse{JSONRPC: rpcVersion, ID: id,
+		Result: json.RawMessage(`{"subscribed":true}`)}); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-ch:
+			if !ok {
+				// The run finished. Closing the connection is how the client learns that.
+				return
+			}
+			params, err := json.Marshal(line)
+			if err != nil {
+				continue
+			}
+			if err := writeResponse(w, &rpcResponse{
+				JSONRPC: rpcVersion, Method: nLogLine, Params: params,
+			}); err != nil {
+				return
+			}
+		}
 	}
 }

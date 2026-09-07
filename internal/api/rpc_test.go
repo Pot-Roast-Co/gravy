@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/bobbybrady/gravy/internal/runlog"
 	"github.com/bobbybrady/gravy/internal/store"
 )
 
@@ -24,11 +25,15 @@ func served(t *testing.T) (*Client, *Local, string) {
 	// A short path: unix sockets are limited to ~104 bytes, and t.TempDir() under a long
 	// TMPDIR is enough to exceed it.
 	dir, err := os.MkdirTemp("", "gv")
+	_ = err
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	path := filepath.Join(dir, SocketName)
+
+	logs := runlog.New(filepath.Join(dir, "runs"))
+	local = local.WithLogs(logs)
 
 	srv := NewServer(local, path, nil)
 	if err := srv.Listen(); err != nil {
@@ -180,6 +185,70 @@ func TestRoundTripEveryMethod(t *testing.T) {
 			t.Error("explain with no scheduler succeeded")
 		}
 	})
+}
+
+// TestStreamLogsCrossesTheWire is what makes a run watchable from another process: the point of
+// GR-011 is not the files, it is that a client with no access to them can follow a live run.
+func TestStreamLogsCrossesTheWire(t *testing.T) {
+	c, local, _ := served(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w, err := local.logs.Open("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteAgent("before the reader arrived"); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, stop, err := c.StreamLogs(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	defer stop()
+
+	// History first.
+	select {
+	case line := <-ch:
+		if line.Text != "before the reader arrived" || line.Stream != runlog.StreamAgent {
+			t.Errorf("first line = %+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no history arrived over the wire")
+	}
+
+	// Then live output.
+	if err := w.WriteAgent("while it is running"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case line := <-ch:
+		if line.Text != "while it is running" {
+			t.Errorf("live line = %+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a line written after subscribing never arrived")
+	}
+
+	// Ending the run closes the stream, which is how a client learns the run is over.
+	w.Close()
+	select {
+	case _, ok := <-ch:
+		if ok {
+			// A trailing buffered line is fine; the close must still follow.
+			select {
+			case _, ok2 := <-ch:
+				if ok2 {
+					t.Error("the stream kept delivering after the run ended")
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("the stream never closed after the run ended")
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("the stream never closed after the run ended")
+	}
 }
 
 // TestErrorsPreserveTypeAndMessage is AC3. A "not found" that arrives as an untyped string turns

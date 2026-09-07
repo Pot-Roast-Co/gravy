@@ -25,6 +25,19 @@ func runServe(ctx context.Context, args []string) error {
 	defer a.Close()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Retention runs on the way up rather than on a timer: a daemon that is never restarted is
+	// one whose disk was never a problem.
+	if keep := a.cfg.Retention.RunLogs.D(); keep > 0 {
+		n, err := a.logs.Prune(time.Now().Add(-keep), nil)
+		switch {
+		case err != nil:
+			log.Warn("could not prune old run logs", "error", err)
+		case n > 0:
+			log.Info("pruned old run logs", "count", n, "older_than", keep)
+		}
+	}
+
 	d := daemon.New(a.home, a.svc, a.loop(), a.db, newID, log)
 	return d.Run(ctx)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/bobbybrady/gravy/internal/daemon"
 	"github.com/bobbybrady/gravy/internal/host"
 	"github.com/bobbybrady/gravy/internal/provider/adapters/claudecode"
+	"github.com/bobbybrady/gravy/internal/runlog"
 	"github.com/bobbybrady/gravy/internal/scheduler"
 	"github.com/bobbybrady/gravy/internal/store"
 	"github.com/bobbybrady/gravy/internal/validate"
@@ -35,6 +36,7 @@ type app struct {
 	svc   *api.Local
 	sched *scheduler.Scheduler
 	orch  *agentrun.Orchestrator
+	logs  *runlog.Store
 	log   *slog.Logger
 }
 
@@ -91,12 +93,15 @@ func newApp(ctx context.Context) (*app, error) {
 		},
 		newID,
 	)
+	logs := runlog.New(filepath.Join(home, "runs"))
+	orch = orch.WithLogs(logs)
 	orch.RegisterHost(h)
 	orch.RegisterProvider(claudecode.New(claudecode.WithCommand(providerCommand(cfg))))
 
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
-		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}),
+		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}).WithLogs(logs),
+		logs:  logs,
 		sched: sched, orch: orch, log: log,
 	}, nil
 }
