@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +26,7 @@ func newPlaceholders() map[Section]Screen {
 		SectionRunning:   "GR-027",
 		SectionReview:    "GR-028",
 		SectionNeedsYou:  "GR-029",
-		SectionSettings:  "GR-037",
+		SectionSettings:  "",
 	}
 	screens := make(map[Section]Screen, len(AllSections))
 	for _, s := range AllSections {
@@ -49,10 +48,18 @@ func (p placeholder) View(ctx ViewContext) string {
 	if ctx.Height <= 0 || ctx.Width <= 0 {
 		return ""
 	}
+	note := "not built yet"
+	if p.ticket != "" {
+		note += " — " + p.ticket
+	} else {
+		// Settings has no ticket: it is named in ARCHITECTURE.md 9 but is not in M0's scope,
+		// and claiming a ticket number it does not have would be a lie in the UI.
+		note += " — not scheduled; configure with ~/.gravy/config.yaml and `gravy project add`"
+	}
 	lines := []string{
 		ctx.Theme.Header.Render(p.section.Title()),
 		"",
-		ctx.Theme.Muted.Render(fmt.Sprintf("not built yet — %s", p.ticket)),
+		ctx.Theme.Muted.Render(note),
 	}
 	if len(lines) > ctx.Height {
 		lines = lines[:ctx.Height]
