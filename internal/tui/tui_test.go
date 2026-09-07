@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
 )
 
@@ -39,6 +40,9 @@ type fakeService struct {
 	resolved  []string
 
 	// queue is what ListQueue returns; the rest record what the queue screen asked for.
+	settings  api.Settings
+	saved     []config.Config
+	projects  []core.Project
 	queue     []api.TicketDetail
 	created   []api.CreateTicketReq
 	updated   []core.Ticket
@@ -156,6 +160,30 @@ func (f *fakeService) MoveTicket(_ context.Context, id string, ev core.Event) (c
 	}
 	f.moved = append(f.moved, [2]string{id, string(ev)})
 	return core.StateReady, nil
+}
+
+func (f *fakeService) GetSettings(context.Context) (api.Settings, error) {
+	if f.actionErr != nil {
+		return api.Settings{}, f.actionErr
+	}
+	return f.settings, nil
+}
+
+func (f *fakeService) UpdateSettings(_ context.Context, c config.Config) (api.Settings, error) {
+	if f.actionErr != nil {
+		return api.Settings{}, f.actionErr
+	}
+	f.saved = append(f.saved, c)
+	f.settings.Config = c
+	return f.settings, nil
+}
+
+func (f *fakeService) UpdateProject(_ context.Context, p core.Project) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.projects = append(f.projects, p)
+	return nil
 }
 
 func (f *fakeService) ListQueue(context.Context, api.TicketFilter) ([]api.TicketDetail, error) {

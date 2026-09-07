@@ -133,3 +133,16 @@ func clamp(v, lo, hi int) int {
 	}
 	return v
 }
+
+// pinFooter scrolls lines to fit, keeping footer on the bottom line.
+//
+// A footer inside the scrolling region is a footer you never see once the content is longer than
+// the terminal — which is exactly when its hints, its validation messages and its unsaved-changes
+// warning matter most.
+func pinFooter(lines []string, selected, height int, th Theme, footer string) string {
+	if height <= 1 {
+		return window(lines, selected, height, th)
+	}
+	body := window(lines, selected, height-2, th)
+	return strings.Join([]string{body, "", footer}, "\n")
+}

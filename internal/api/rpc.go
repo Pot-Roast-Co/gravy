@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/store"
 )
@@ -116,6 +117,9 @@ const (
 	mUpdateTicket     = "UpdateTicket"
 	mReorderTicket    = "ReorderTicket"
 	mDeleteTicket     = "DeleteTicket"
+	mUpdateProject    = "UpdateProject"
+	mGetSettings      = "GetSettings"
+	mUpdateSettings   = "UpdateSettings"
 	// nEvent is the notification the server pushes on the Events stream.
 	nEvent = "event"
 	// nLogLine is the notification pushed on the StreamLogs stream.
@@ -155,6 +159,12 @@ type (
 	}
 	addProjectParams struct {
 		Req AddProjectReq `json:"req"`
+	}
+	updateProjectParams struct {
+		Project core.Project `json:"project"`
+	}
+	settingsParams struct {
+		Config config.Config `json:"config"`
 	}
 	createTicketParams struct {
 		Req CreateTicketReq `json:"req"`

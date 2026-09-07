@@ -335,8 +335,7 @@ func (r *review) View(ctx ViewContext) string {
 		lines = append(lines, th.Muted.Render("  no changes on this branch"))
 	}
 
-	lines = append(lines, "", r.footer(th))
-	return window(lines, -1, ctx.Height, th)
+	return pinFooter(lines, -1, ctx.Height, th, r.footer(th))
 }
 
 // footer says what the keys do, and doubles as the prompt in the modes that take input.

@@ -72,9 +72,11 @@ func newApp(ctx context.Context) (*app, error) {
 	// agent from one asking for "cheap" — and two agents can be working at the same time.
 	// This is not GR-016: there is no fallback and no cooldown, so a quota failure parks the
 	// ticket rather than moving to the next choice.
-	route := configRouter{cfg: cfg}
+	// The router reads from liveConfig, so a route table edited in the TUI takes effect on the
+	// next tick rather than the next restart.
+	live := newLiveConfig(cfg)
 	// Route caps are the buckets: how many agents of each kind may run at once, fleet-wide.
-	sched := scheduler.New(db, pool, route).WithRouteCaps(cfg.Concurrency.Routes)
+	sched := scheduler.New(db, pool, live).WithRouteCaps(cfg.Concurrency.Routes)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
@@ -111,7 +113,9 @@ func newApp(ctx context.Context) (*app, error) {
 
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
-		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}).WithLogs(logs).WithKiller(orch),
+		svc: api.NewLocal(db, sched, []host.Host{h}, newID).
+			WithLander(lander{orch}).WithLogs(logs).WithKiller(orch).
+			WithSettings(home, cfg, applyConfig(live, sched, cfg)),
 		logs:  logs,
 		sched: sched, orch: orch, log: log,
 	}, nil

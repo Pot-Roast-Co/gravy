@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/host"
 	"github.com/pot-roast-co/gravy/internal/runlog"
@@ -35,6 +36,12 @@ type Local struct {
 	logs *runlog.Store
 	// killer is nil on a client that may not stop work.
 	killer Killer
+
+	// Configuration, empty on a client that cannot be configured.
+	home           string
+	cfg            config.Config
+	applyCfg       ApplyFunc
+	pendingRestart []string
 }
 
 // Killer stops a running agent and everything it spawned.

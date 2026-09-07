@@ -1,0 +1,111 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/pot-roast-co/gravy/internal/config"
+	"github.com/pot-roast-co/gravy/internal/core"
+)
+
+// Settings is the editable configuration, with what changing it actually costs.
+type Settings struct {
+	Config config.Config
+	// Path is where the file lives, so the screen can say what it is editing.
+	Path string
+	// PendingRestart names settings that have been saved but that the running daemon is not
+	// using yet. Some values are baked into the object graph at startup — the size of the
+	// worker pool, which agent CLIs are registered — and pretending otherwise would leave a
+	// user believing a change took effect when it did not.
+	PendingRestart []string
+}
+
+// ApplyFunc applies a saved config to the running daemon and reports which settings could not
+// be applied live and therefore need a restart.
+type ApplyFunc func(config.Config) []string
+
+// WithSettings lets the service read and write configuration.
+//
+// apply is what makes a change take effect without a restart; it returns the settings it could
+// not apply. A service without this can still run the queue, it simply cannot be configured
+// through the API.
+func (l *Local) WithSettings(home string, loaded config.Config, apply ApplyFunc) *Local {
+	l.home = home
+	l.cfg = loaded
+	l.applyCfg = apply
+	return l
+}
+
+// GetSettings returns the current configuration.
+func (l *Local) GetSettings(_ context.Context) (Settings, error) {
+	if l.home == "" {
+		return Settings{}, fmt.Errorf("this client cannot read configuration")
+	}
+	return Settings{Config: l.cfg, Path: config.Path(l.home), PendingRestart: l.pendingRestart}, nil
+}
+
+// UpdateSettings validates, saves and applies a configuration.
+//
+// It is written to disk only after it validates, so a rejected edit cannot leave the file in a
+// state the daemon would refuse to start from next time.
+func (l *Local) UpdateSettings(_ context.Context, c config.Config) (Settings, error) {
+	if l.home == "" {
+		return Settings{}, fmt.Errorf("this client cannot change configuration")
+	}
+	if err := c.Validate(); err != nil {
+		return Settings{}, fmt.Errorf("that configuration is not usable: %w", err)
+	}
+	if err := config.Save(l.home, c); err != nil {
+		return Settings{}, err
+	}
+
+	l.cfg = c
+	if l.applyCfg != nil {
+		l.pendingRestart = l.applyCfg(c)
+	}
+	l.events.publish(Event{Kind: EventProjectChanged})
+	return Settings{Config: l.cfg, Path: config.Path(l.home), PendingRestart: l.pendingRestart}, nil
+}
+
+// UpdateProject saves a project's editable fields.
+//
+// RepoPath and Slug are not among them: a project's identity and its checkout are what every
+// worktree, branch and run already recorded points at, so changing either would orphan work
+// rather than edit it. Remove and re-add instead.
+func (l *Local) UpdateProject(ctx context.Context, p core.Project) error {
+	current, err := l.db.GetProject(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(p.TargetBranch) == "" {
+		return fmt.Errorf("a project needs a target branch")
+	}
+	if p.MergeMode != "" && !p.MergeMode.Valid() {
+		return fmt.Errorf("merge mode %q is not merge or pr", p.MergeMode)
+	}
+	if p.ParallelMode && p.MaxConcurrency < 1 {
+		return fmt.Errorf("parallel mode needs a concurrency of at least 1")
+	}
+
+	current.Name = p.Name
+	current.TargetBranch = p.TargetBranch
+	if p.MergeMode != "" {
+		current.MergeMode = p.MergeMode
+	}
+	current.Validation = p.Validation
+	current.ParallelMode = p.ParallelMode
+	current.MaxConcurrency = p.MaxConcurrency
+	if !p.ParallelMode {
+		// Serial mode is one at a time by definition; leaving a stale cap behind would make
+		// the stored project describe a mode it is not in.
+		current.MaxConcurrency = 1
+	}
+
+	if err := l.db.UpdateProject(ctx, current); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: current.ID})
+	return nil
+}

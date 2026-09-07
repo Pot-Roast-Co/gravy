@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
 )
 
@@ -20,6 +21,11 @@ type Service interface {
 	// projects
 	ListProjects(ctx context.Context) ([]core.Project, error)
 	AddProject(ctx context.Context, req AddProjectReq) (core.Project, error)
+	UpdateProject(ctx context.Context, p core.Project) error
+
+	// settings
+	GetSettings(ctx context.Context) (Settings, error)
+	UpdateSettings(ctx context.Context, c config.Config) (Settings, error)
 
 	// tickets
 	ListTickets(ctx context.Context, f TicketFilter) ([]core.Ticket, error)

@@ -39,6 +39,7 @@ func newPlaceholders() map[Section]Screen {
 	screens[SectionNeedsYou] = newNeedsYou()
 	screens[SectionBacklog] = newQueue(core.StateBacklog)
 	screens[SectionReady] = newQueue(core.StateReady)
+	screens[SectionSettings] = newSettings()
 	return screens
 }
 

@@ -274,6 +274,23 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.AddProject(ctx, p.Req)
 
+	case mUpdateProject:
+		var p updateProjectParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.UpdateProject(ctx, p.Project)
+
+	case mGetSettings:
+		return s.svc.GetSettings(ctx)
+
+	case mUpdateSettings:
+		var p settingsParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.UpdateSettings(ctx, p.Config)
+
 	case mListTickets:
 		var p listTicketsParams
 		if err := unmarshalParams(raw, &p); err != nil {

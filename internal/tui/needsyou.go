@@ -383,9 +383,8 @@ func (s *needsYou) View(ctx ViewContext) string {
 	lines = append(lines, "")
 	lines = append(lines, specFor(item.Attention.Reason).Detail(item, ctx)...)
 	lines = append(lines, s.heldQueues(ctx)...)
-	lines = append(lines, "", s.footer(item, th))
 
-	return window(lines, selected, ctx.Height, th)
+	return pinFooter(lines, selected, ctx.Height, th, s.footer(item, th))
 }
 
 // heldQueues names the ticket blocking each serialised project, so an idle queue is never

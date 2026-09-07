@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
 )
 
@@ -113,6 +114,20 @@ func (c *Client) ListProjects(ctx context.Context) ([]core.Project, error) {
 func (c *Client) AddProject(ctx context.Context, req AddProjectReq) (core.Project, error) {
 	var out core.Project
 	return out, c.call(ctx, mAddProject, addProjectParams{Req: req}, &out)
+}
+
+func (c *Client) UpdateProject(ctx context.Context, p core.Project) error {
+	return c.call(ctx, mUpdateProject, updateProjectParams{Project: p}, nil)
+}
+
+func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
+	var out Settings
+	return out, c.call(ctx, mGetSettings, nil, &out)
+}
+
+func (c *Client) UpdateSettings(ctx context.Context, cfg config.Config) (Settings, error) {
+	var out Settings
+	return out, c.call(ctx, mUpdateSettings, settingsParams{Config: cfg}, &out)
 }
 
 func (c *Client) ListTickets(ctx context.Context, f TicketFilter) ([]core.Ticket, error) {

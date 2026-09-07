@@ -452,7 +452,7 @@ func (q *queue) View(ctx ViewContext) string {
 		lines = append(lines, "", th.Muted.Render("  "+trunc(firstLine(body), max(0, ctx.Width-2))))
 	}
 
-	return window(append(lines, "", q.footer(ctx)), selected, ctx.Height, th)
+	return pinFooter(lines, selected, ctx.Height, th, q.footer(ctx))
 }
 
 func (q *queue) formView(ctx ViewContext) string {
