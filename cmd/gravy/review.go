@@ -22,7 +22,8 @@ func runReview(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "\nShows work awaiting your approval. With no id, lists everything pending.")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	ids, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
 
@@ -36,7 +37,7 @@ func runReview(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(ids) == 0 {
 		if len(pending) == 0 {
 			fmt.Println("nothing awaiting review")
 			return nil
@@ -49,7 +50,7 @@ func runReview(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	return showReview(ctx, a, fs.Arg(0), *full)
+	return showReview(ctx, a, ids[0], *full)
 }
 
 func showReview(ctx context.Context, a *app, ticketID string, full bool) error {

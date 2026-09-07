@@ -33,6 +33,28 @@ func runProject(ctx context.Context, args []string) error {
 	}
 }
 
+// parseFlags parses args, accepting flags before or after the positional arguments, and returns
+// the positionals in order.
+//
+// Go's flag package stops at the first non-flag argument, so `gravy project add <path> -validate
+// test:...` silently drops the flag and then fails on an argument count it never explains. That
+// is the order people type, and a registration that quietly loses its validation steps is worse
+// than one that is fussy about ordering, so accept both.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+}
+
 // stepList collects repeatable --validate flags.
 type stepList []core.Step
 
@@ -67,10 +89,11 @@ func projectAdd(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "usage: gravy project add [flags] <path>")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	paths, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(paths) != 1 {
 		fs.Usage()
 		return fmt.Errorf("expected exactly one repository path")
 	}
@@ -82,7 +105,7 @@ func projectAdd(ctx context.Context, args []string) error {
 	defer a.Close()
 
 	p, err := a.svc.AddProject(ctx, api.AddProjectReq{
-		Path: fs.Arg(0), Name: *name, TargetBranch: *target,
+		Path: paths[0], Name: *name, TargetBranch: *target,
 		MergeMode: core.LandMode(*mergeMode), Validation: steps,
 		ParallelMode: *parallel, MaxConcurrency: *maxConc,
 	})
@@ -177,10 +200,11 @@ func ticketAdd(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "usage: gravy ticket add [flags] \"<title>\"")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	words, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
-	title := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	title := strings.TrimSpace(strings.Join(words, " "))
 	if title == "" {
 		fs.Usage()
 		return fmt.Errorf("a ticket needs a title")
