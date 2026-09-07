@@ -93,7 +93,7 @@ func TestParseFlagsReportsUnknownFlags(t *testing.T) {
 	fs.SetOutput(discard{})
 	fs.String("name", "", "")
 
-	if _, err := parseFlags(fs, []string{"/repo", "-nmae", "typo"}); err == nil {
+	if _, err := parseFlags(fs, []string{"/repo", "-bogus", "typo"}); err == nil {
 		t.Error("parseFlags accepted an unknown flag")
 	}
 }

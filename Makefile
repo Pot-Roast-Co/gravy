@@ -10,7 +10,12 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 LDFLAGS     := -ldflags "-X main.version=$(VERSION)"
 GO          ?= go
 
-.PHONY: all build run test test-race vet fmt fmt-check lint lint-layers check clean tidy
+# PREFIX is where `make install` puts the binary. It defaults to ~/.local/bin rather than
+# GOBIN because a mise- or asdf-managed GOBIN lives inside the toolchain's own directory, so
+# an installed gravy silently disappears the next time Go is upgraded.
+PREFIX      ?= $(HOME)/.local/bin
+
+.PHONY: all build install run test test-race vet fmt fmt-check lint lint-layers check clean tidy
 
 all: build
 
@@ -19,6 +24,13 @@ build:
 	@mkdir -p $(DIST)
 	$(GO) build $(LDFLAGS) -o $(DIST)/$(BINARY) $(CMD)
 	@echo "built $(DIST)/$(BINARY) ($(VERSION))"
+
+## install: build and put gravy on PATH (override with PREFIX=/somewhere/bin)
+install: build
+	@mkdir -p $(PREFIX)
+	@install -m 0755 $(DIST)/$(BINARY) $(PREFIX)/$(BINARY)
+	@echo "installed $(PREFIX)/$(BINARY) ($(VERSION))"
+	@command -v $(BINARY) >/dev/null 2>&1 || echo "warning: $(PREFIX) is not on your PATH"
 
 ## run: build and run the TUI
 run:

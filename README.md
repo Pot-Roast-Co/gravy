@@ -67,7 +67,17 @@ go install github.com/bobbybrady/gravy/cmd/gravy@latest
 gravy            # first run walks you through setup
 ```
 
-Requires Go 1.23+, `git`, and at least one coding agent CLI (`claude` or `codex`).
+Or from a clone, which stamps the version and avoids `GOBIN`:
+
+```sh
+make install                    # -> ~/.local/bin/gravy
+make install PREFIX=/usr/local/bin
+```
+
+`make install` is worth preferring if you manage Go with mise or asdf: their `GOBIN` lives
+inside the toolchain directory, so a `go install`ed binary disappears on the next Go upgrade.
+
+Requires Go 1.24+, `git`, and at least one coding agent CLI (`claude` or `codex`).
 
 ## Usage
 
