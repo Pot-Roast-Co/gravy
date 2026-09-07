@@ -344,3 +344,33 @@ func TestDependentBecomesEligibleOnlyAfterDone(t *testing.T) {
 }
 
 var _ = filepath.Join
+
+// TestApproveClearsTheQueue is the other half of TestReviewEntersNeedsYouQueue.
+//
+// A row that outlives the judgement it asked for turns Needs You into a list of work already
+// done, which is the same loss of trust as omitting work that is waiting.
+func TestApproveClearsTheQueue(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+	landReady(t, h, "feature.txt", "the work\n")
+
+	ctx := context.Background()
+	open, err := h.db.ListOpenAttention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 || open[0].Reason != core.ReasonReviewPending {
+		t.Fatalf("before approval the queue = %+v, want one review_pending", open)
+	}
+
+	if _, err := h.orch.Land().Approve(ctx, "GR-100"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	if open, err = h.db.ListOpenAttention(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 0 {
+		t.Errorf("queue still holds %+v after the ticket was approved and landed", open)
+	}
+}

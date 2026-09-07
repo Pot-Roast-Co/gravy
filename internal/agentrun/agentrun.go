@@ -26,6 +26,7 @@ type Store interface {
 	UpdateRun(ctx context.Context, r core.Run) error
 	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
 	OpenAttention(ctx context.Context, a core.Attention) error
+	ResolveAttentionForTicket(ctx context.Context, ticketID string) (int, error)
 	SetProviderUnavailable(ctx context.Context, a core.ProviderAvailability) error
 }
 
@@ -308,6 +309,26 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("agentrun: %w", err)
 	}
+
+	// A ticket in Review is waiting on a human, so it belongs in the Needs You queue. Review is
+	// the most common reason Gravy needs you, and omitting it makes "if it is not there, Gravy
+	// does not need you" false in the ordinary case rather than an edge one.
+	if err := o.store.OpenAttention(ctx, core.Attention{
+		ID:        o.newID(),
+		ProjectID: ticket.ProjectID,
+		TicketID:  ticket.ID,
+		RunID:     loop.runID,
+		Reason:    core.ReasonReviewPending,
+		Payload: map[string]any{
+			"commit":   loop.commit,
+			"attempts": loop.attempts,
+			"summary":  loop.validation.Summary(),
+		},
+		CreatedAt: time.Now(),
+	}); err != nil {
+		return res, fmt.Errorf("agentrun: open review attention: %w", err)
+	}
+
 	res.FinalState = state
 	return res, nil
 }

@@ -68,6 +68,13 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 		return res, fmt.Errorf("land: %w", err)
 	}
 
+	// The human has just given the judgement the queue was waiting for. Any row still open for
+	// this ticket — review_pending, or the merge_conflict that Continue came back from — is
+	// answered by that approval; a fresh one is opened if landing parks the ticket again.
+	if _, err := o.store.ResolveAttentionForTicket(ctx, ticketID); err != nil {
+		return res, fmt.Errorf("land: %w", err)
+	}
+
 	repo, err := o.repos.For(project)
 	if err != nil {
 		return res, fmt.Errorf("land: %w", err)

@@ -937,3 +937,43 @@ func TestReadOnlyShellIsAllowlisted(t *testing.T) {
 		}
 	}
 }
+
+// TestReviewEntersNeedsYouQueue is the invariant that Needs You is complete.
+//
+// The loop stops at Review and waits for a human, which makes review the most common reason
+// Gravy needs you. A ticket that reaches Review without a queue entry is invisible: `gravy
+// status` reports "nothing — Gravy does not need you" while work sits waiting indefinitely,
+// which is precisely the failure the queue exists to prevent (PRODUCT.md §8).
+func TestReviewEntersNeedsYouQueue(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.FinalState != core.StateReview {
+		t.Fatalf("final state = %q, want review", res.FinalState)
+	}
+
+	ctx := context.Background()
+	open, err := h.db.ListOpenAttention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("got %d attention items, want 1: a ticket in review must be in Needs You", len(open))
+	}
+	if open[0].Reason != core.ReasonReviewPending {
+		t.Errorf("reason = %q, want review_pending", open[0].Reason)
+	}
+	if open[0].TicketID != "GR-100" {
+		t.Errorf("attention item is not linked to the ticket: %+v", open[0])
+	}
+	// The row must carry enough to triage from the queue without opening the ticket.
+	if open[0].Payload["commit"] == nil {
+		t.Error("attention payload names no commit to review")
+	}
+}

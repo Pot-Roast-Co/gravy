@@ -40,6 +40,26 @@ func (d *DB) ResolveAttention(ctx context.Context, id string) error {
 	return requireOneRow(res, "attention", id)
 }
 
+// ResolveAttentionForTicket marks every open entry for a ticket handled and reports how many it
+// closed.
+//
+// An attention row means "this ticket needs a human". Once the ticket leaves the state that
+// raised one — approved, rejected, sent back for another attempt — the row is stale, and a queue
+// that lists work nobody needs to act on fails the same way as one that omits work that is
+// waiting: it stops being trustworthy, so it stops being read (PRODUCT.md §8).
+func (d *DB) ResolveAttentionForTicket(ctx context.Context, ticketID string) (int, error) {
+	res, err := d.exec(ctx,
+		`UPDATE attention SET resolved = 1 WHERE resolved = 0 AND ticket_id = ?`, ticketID)
+	if err != nil {
+		return 0, fmt.Errorf("resolve attention for ticket %q: %w", ticketID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("resolve attention for ticket %q: %w", ticketID, err)
+	}
+	return int(n), nil
+}
+
 // ListOpenAttention returns the unresolved Needs You queue, oldest first, which is the order
 // the human works through it.
 func (d *DB) ListOpenAttention(ctx context.Context) ([]core.Attention, error) {

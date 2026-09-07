@@ -206,7 +206,18 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 
 // MoveTicket applies an event through the state machine.
 func (l *Local) MoveTicket(ctx context.Context, id string, ev core.Event) (core.State, error) {
-	return l.db.SetTicketState(ctx, id, ev)
+	state, err := l.db.SetTicketState(ctx, id, ev)
+	if err != nil {
+		return state, err
+	}
+	// An abandoned ticket is nobody's outstanding judgement call, so it must not keep sitting in
+	// Needs You.
+	if ev == core.EventReject {
+		if _, err := l.db.ResolveAttentionForTicket(ctx, id); err != nil {
+			return state, err
+		}
+	}
+	return state, nil
 }
 
 // ListRuns returns a ticket's runs, newest first.

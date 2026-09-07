@@ -869,3 +869,53 @@ func TestValidationsRoundTrip(t *testing.T) {
 		t.Errorf("validations = %+v", got)
 	}
 }
+
+// TestResolveAttentionForTicket covers the queue telling the truth after a ticket moves on.
+//
+// A stale row is as corrosive as a missing one: either way the queue stops matching reality, and
+// a queue that does not match reality stops being read.
+func TestResolveAttentionForTicket(t *testing.T) {
+	db := openTest(t)
+	ctx := context.Background()
+
+	if err := db.CreateProject(ctx, testProject("p1", "gravy")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if err := db.CreateTicket(ctx, testTicket(id, "p1", core.StateReview)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := []core.Attention{
+		{ID: "a1", ProjectID: "p1", TicketID: "t1", Reason: core.ReasonReviewPending},
+		{ID: "a2", ProjectID: "p1", TicketID: "t1", Reason: core.ReasonMergeConflict},
+		{ID: "a3", ProjectID: "p1", TicketID: "t2", Reason: core.ReasonReviewPending},
+	}
+	for _, a := range items {
+		if err := db.OpenAttention(ctx, a); err != nil {
+			t.Fatalf("OpenAttention %s: %v", a.ID, err)
+		}
+	}
+
+	n, err := db.ResolveAttentionForTicket(ctx, "t1")
+	if err != nil {
+		t.Fatalf("ResolveAttentionForTicket: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("resolved %d rows, want 2", n)
+	}
+
+	open, err := db.ListOpenAttention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 || open[0].ID != "a3" {
+		t.Fatalf("open queue = %+v, want only a3: another ticket's rows were resolved", open)
+	}
+
+	// Resolving again is a no-op rather than an error, so a retried transition cannot fail on
+	// work it already did.
+	if n, err = db.ResolveAttentionForTicket(ctx, "t1"); err != nil || n != 0 {
+		t.Errorf("second resolve = (%d, %v), want (0, nil)", n, err)
+	}
+}
