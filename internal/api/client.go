@@ -130,6 +130,23 @@ func (c *Client) MoveTicket(ctx context.Context, id string, ev core.Event) (core
 	return out, c.call(ctx, mMoveTicket, moveTicketParams{ID: id, Event: string(ev)}, &out)
 }
 
+func (c *Client) ListQueue(ctx context.Context, f TicketFilter) ([]TicketDetail, error) {
+	var out []TicketDetail
+	return out, c.call(ctx, mListQueue, listTicketsParams{Filter: f}, &out)
+}
+
+func (c *Client) UpdateTicket(ctx context.Context, t core.Ticket) error {
+	return c.call(ctx, mUpdateTicket, updateTicketParams{Ticket: t}, nil)
+}
+
+func (c *Client) ReorderTicket(ctx context.Context, id, before, after string) error {
+	return c.call(ctx, mReorderTicket, reorderParams{ID: id, Before: before, After: after}, nil)
+}
+
+func (c *Client) DeleteTicket(ctx context.Context, id string) error {
+	return c.call(ctx, mDeleteTicket, idParams{ID: id}, nil)
+}
+
 func (c *Client) ListRuns(ctx context.Context, ticketID string) ([]core.Run, error) {
 	var out []core.Run
 	return out, c.call(ctx, mListRuns, ticketIDParams{TicketID: ticketID}, &out)

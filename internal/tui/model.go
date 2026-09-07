@@ -44,6 +44,10 @@ type (
 	// enteredMsg tells a screen it has just become active, and which row it should open. It is
 	// how a screen knows to load: no message reaches a screen that is not being shown.
 	enteredMsg struct{ focus string }
+
+	// refreshedMsg tells the active screen the fleet snapshot moved, so a screen holding data
+	// of its own can re-read it. Screens that render straight from Status ignore it.
+	refreshedMsg struct{}
 )
 
 func entered(focus string) tea.Cmd {
@@ -159,7 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = msg.status
 		m.conn, m.connErr = connReady, nil
-		return m, nil
+		screen, cmd := m.screens[m.active].Update(refreshedMsg{}, m.viewContext())
+		m.screens[m.active] = screen
+		return m, cmd
 
 	case eventMsg:
 		// Every kind means "re-read what you render", so one path serves all of them.

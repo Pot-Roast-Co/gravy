@@ -25,6 +25,11 @@ type Service interface {
 	ListTickets(ctx context.Context, f TicketFilter) ([]core.Ticket, error)
 	CreateTicket(ctx context.Context, req CreateTicketReq) (core.Ticket, error)
 	MoveTicket(ctx context.Context, id string, ev core.Event) (core.State, error)
+	// ListQueue is ListTickets with dependencies resolved, for the screens that order work.
+	ListQueue(ctx context.Context, f TicketFilter) ([]TicketDetail, error)
+	UpdateTicket(ctx context.Context, t core.Ticket) error
+	ReorderTicket(ctx context.Context, id, before, after string) error
+	DeleteTicket(ctx context.Context, id string) error
 
 	// runs
 	ListRuns(ctx context.Context, ticketID string) ([]core.Run, error)

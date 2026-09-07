@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bobbybrady/gravy/internal/core"
 	"github.com/bobbybrady/gravy/internal/store"
 )
 
@@ -111,6 +112,10 @@ const (
 	mStreamLogs       = "StreamLogs"
 	mKillRun          = "KillRun"
 	mContinue         = "Continue"
+	mListQueue        = "ListQueue"
+	mUpdateTicket     = "UpdateTicket"
+	mReorderTicket    = "ReorderTicket"
+	mDeleteTicket     = "DeleteTicket"
 	// nEvent is the notification the server pushes on the Events stream.
 	nEvent = "event"
 	// nLogLine is the notification pushed on the StreamLogs stream.
@@ -139,6 +144,14 @@ type (
 	}
 	listTicketsParams struct {
 		Filter TicketFilter `json:"filter"`
+	}
+	updateTicketParams struct {
+		Ticket core.Ticket `json:"ticket"`
+	}
+	reorderParams struct {
+		ID     string `json:"id"`
+		Before string `json:"before"`
+		After  string `json:"after"`
 	}
 	addProjectParams struct {
 		Req AddProjectReq `json:"req"`

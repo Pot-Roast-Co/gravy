@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/bobbybrady/gravy/internal/core"
 )
 
 // placeholder stands in for a section whose screen is a later ticket.
@@ -36,6 +38,8 @@ func newPlaceholders() map[Section]Screen {
 	screens[SectionReview] = newReview()
 	screens[SectionRunning] = newRunning()
 	screens[SectionNeedsYou] = newNeedsYou()
+	screens[SectionBacklog] = newQueue(core.StateBacklog)
+	screens[SectionReady] = newQueue(core.StateReady)
 	return screens
 }
 

@@ -302,6 +302,34 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.KillRun(ctx, p.RunID)
 
+	case mListQueue:
+		var p listTicketsParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ListQueue(ctx, p.Filter)
+
+	case mUpdateTicket:
+		var p updateTicketParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.UpdateTicket(ctx, p.Ticket)
+
+	case mReorderTicket:
+		var p reorderParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.ReorderTicket(ctx, p.ID, p.Before, p.After)
+
+	case mDeleteTicket:
+		var p idParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.DeleteTicket(ctx, p.ID)
+
 	case mListRuns:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

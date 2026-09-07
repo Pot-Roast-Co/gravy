@@ -257,6 +257,19 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 
 // MoveTicket applies an event through the state machine.
 func (l *Local) MoveTicket(ctx context.Context, id string, ev core.Event) (core.State, error) {
+	// A ticket queued behind unlanded work would sit in Ready looking eligible while the
+	// scheduler silently passed over it. Refusing here, with the reason, is the difference
+	// between "not yet" and "why is nothing happening".
+	if ev == core.EventMarkReady {
+		deps, derr := l.dependencies(ctx, id)
+		if derr != nil {
+			return "", derr
+		}
+		if blocked := blockedBy(deps); blocked != "" {
+			return "", fmt.Errorf("cannot mark %s ready: %s", id, blocked)
+		}
+	}
+
 	state, err := l.db.SetTicketState(ctx, id, ev)
 	if err != nil {
 		return state, err

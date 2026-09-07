@@ -37,6 +37,15 @@ type fakeService struct {
 	killed    []string
 	continued []string
 	resolved  []string
+
+	// queue is what ListQueue returns; the rest record what the queue screen asked for.
+	queue     []api.TicketDetail
+	created   []api.CreateTicketReq
+	updated   []core.Ticket
+	deleted   []string
+	reordered [][3]string
+	moved     [][2]string
+	moveErr   error
 	runs      []core.Run
 	explain   api.Explanation
 }
@@ -134,11 +143,47 @@ func (f *fakeService) AddProject(context.Context, api.AddProjectReq) (core.Proje
 func (f *fakeService) ListTickets(context.Context, api.TicketFilter) ([]core.Ticket, error) {
 	return nil, nil
 }
-func (f *fakeService) CreateTicket(context.Context, api.CreateTicketReq) (core.Ticket, error) {
-	return core.Ticket{}, nil
+func (f *fakeService) CreateTicket(_ context.Context, req api.CreateTicketReq) (core.Ticket, error) {
+	if f.actionErr != nil {
+		return core.Ticket{}, f.actionErr
+	}
+	f.created = append(f.created, req)
+	return core.Ticket{ID: "new-1", Title: req.Title, State: core.StateBacklog}, nil
 }
-func (f *fakeService) MoveTicket(context.Context, string, core.Event) (core.State, error) {
-	return "", nil
+func (f *fakeService) MoveTicket(_ context.Context, id string, ev core.Event) (core.State, error) {
+	if f.moveErr != nil {
+		return "", f.moveErr
+	}
+	f.moved = append(f.moved, [2]string{id, string(ev)})
+	return core.StateReady, nil
+}
+
+func (f *fakeService) ListQueue(context.Context, api.TicketFilter) ([]api.TicketDetail, error) {
+	return f.queue, nil
+}
+
+func (f *fakeService) UpdateTicket(_ context.Context, t core.Ticket) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.updated = append(f.updated, t)
+	return nil
+}
+
+func (f *fakeService) ReorderTicket(_ context.Context, id, before, after string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.reordered = append(f.reordered, [3]string{id, before, after})
+	return nil
+}
+
+func (f *fakeService) DeleteTicket(_ context.Context, id string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.deleted = append(f.deleted, id)
+	return nil
 }
 func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error)    { return nil, nil }
 func (f *fakeService) ListAttention(context.Context) ([]core.Attention, error) { return nil, nil }
@@ -199,6 +244,12 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
 	}
 	panic("unhandled key " + s)
 }
