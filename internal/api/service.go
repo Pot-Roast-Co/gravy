@@ -37,6 +37,8 @@ type Service interface {
 	GetReview(ctx context.Context, ticketID string) (ReviewBundle, error)
 	Approve(ctx context.Context, ticketID string) error
 	RequestChanges(ctx context.Context, ticketID, feedback string) error
+	// Continue retries a landing after a human resolved a conflict in the preserved worktree.
+	Continue(ctx context.Context, ticketID string) error
 	Reject(ctx context.Context, ticketID string) error
 
 	// attention

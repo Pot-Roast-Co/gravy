@@ -196,8 +196,9 @@ func (m Model) viewContext() ViewContext {
 		height = 0
 	}
 	return ViewContext{
-		Svc:   m.svc,
-		Width: m.width, Height: height,
+		Svc:     m.svc,
+		Project: m.projectName(),
+		Width:   m.width, Height: height,
 		Theme: m.theme, Status: m.status, Filter: m.filter,
 	}
 }

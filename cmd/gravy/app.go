@@ -117,6 +117,11 @@ func (l lander) Approve(ctx context.Context, ticketID string) error {
 	return err
 }
 
+func (l lander) Continue(ctx context.Context, ticketID string) error {
+	_, err := l.orch.Land().Continue(ctx, ticketID)
+	return err
+}
+
 // loop builds the scheduler loop.
 func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log) }
 

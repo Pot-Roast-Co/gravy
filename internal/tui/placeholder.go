@@ -35,6 +35,7 @@ func newPlaceholders() map[Section]Screen {
 	screens[SectionDashboard] = dashboard{}
 	screens[SectionReview] = newReview()
 	screens[SectionRunning] = newRunning()
+	screens[SectionNeedsYou] = newNeedsYou()
 	return screens
 }
 

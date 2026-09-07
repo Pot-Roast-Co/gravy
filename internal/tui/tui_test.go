@@ -33,10 +33,12 @@ type fakeService struct {
 	changes   map[string]string
 
 	// logs feeds StreamLogs; killed records what the detail screen asked to stop.
-	logs    chan api.LogLine
-	killed  []string
-	runs    []core.Run
-	explain api.Explanation
+	logs      chan api.LogLine
+	killed    []string
+	continued []string
+	resolved  []string
+	runs      []core.Run
+	explain   api.Explanation
 }
 
 func newFake() *fakeService {
@@ -109,6 +111,14 @@ func (f *fakeService) StreamLogs(ctx context.Context, runID string) (<-chan api.
 	return ch, func() {}, nil
 }
 
+func (f *fakeService) Continue(_ context.Context, ticketID string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.continued = append(f.continued, ticketID)
+	return nil
+}
+
 func (f *fakeService) KillRun(_ context.Context, runID string) error {
 	if f.actionErr != nil {
 		return f.actionErr
@@ -132,7 +142,13 @@ func (f *fakeService) MoveTicket(context.Context, string, core.Event) (core.Stat
 }
 func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error)    { return nil, nil }
 func (f *fakeService) ListAttention(context.Context) ([]core.Attention, error) { return nil, nil }
-func (f *fakeService) ResolveAttention(context.Context, string) error          { return nil }
+func (f *fakeService) ResolveAttention(_ context.Context, id string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.resolved = append(f.resolved, id)
+	return nil
+}
 func (f *fakeService) ExplainTicket(context.Context, string) (api.Explanation, error) {
 	return f.explain, nil
 }

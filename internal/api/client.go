@@ -153,6 +153,10 @@ func (c *Client) RequestChanges(ctx context.Context, ticketID, feedback string) 
 		requestChangesParams{TicketID: ticketID, Feedback: feedback}, nil)
 }
 
+func (c *Client) Continue(ctx context.Context, ticketID string) error {
+	return c.call(ctx, mContinue, ticketIDParams{TicketID: ticketID}, nil)
+}
+
 func (c *Client) Reject(ctx context.Context, ticketID string) error {
 	return c.call(ctx, mReject, ticketIDParams{TicketID: ticketID}, nil)
 }

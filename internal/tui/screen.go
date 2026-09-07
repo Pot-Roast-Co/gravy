@@ -73,6 +73,8 @@ type ViewContext struct {
 	Filter string
 	// Focus is the row id a screen was asked to select when navigated to, empty otherwise.
 	Focus string
+	// Project is the name of the project the frame is filtered to, empty for all of them.
+	Project string
 }
 
 // Screen is one section's content.

@@ -330,6 +330,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.RequestChanges(ctx, p.TicketID, p.Feedback)
 
+	case mContinue:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.Continue(ctx, p.TicketID)
+
 	case mReject:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

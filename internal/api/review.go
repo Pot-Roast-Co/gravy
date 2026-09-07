@@ -34,6 +34,10 @@ type ReviewBundle struct {
 // client can exist without one — a read-only status client has no business being able to merge.
 type Lander interface {
 	Approve(ctx context.Context, ticketID string) error
+	// Continue retries a landing after a human has resolved a conflict in the preserved
+	// worktree. It goes back through the gate, because the resolution changed the code that
+	// was approved.
+	Continue(ctx context.Context, ticketID string) error
 }
 
 // GetReview assembles the evidence for one ticket awaiting judgement.
@@ -105,6 +109,10 @@ func (l *Local) Approve(ctx context.Context, ticketID string) error {
 //
 // The worktree is deliberately preserved: the agent picks up where it left off, and the note is
 // the entire value of the retry.
+//
+// It serves both places a human sends work back from. Out of Review that is request_changes; out
+// of Needs You — a parked run, a failed validation — it is requeue. The distinction is the state
+// machine's, not the caller's: from the human's side both are "try again, and here is why".
 func (l *Local) RequestChanges(ctx context.Context, ticketID, feedback string) error {
 	if strings.TrimSpace(feedback) == "" {
 		return fmt.Errorf("request changes: say what needs to change")
@@ -117,13 +125,31 @@ func (l *Local) RequestChanges(ctx context.Context, ticketID, feedback string) e
 	if err := l.db.UpdateTicket(ctx, t); err != nil {
 		return err
 	}
-	if _, err := l.db.SetTicketState(ctx, ticketID, core.EventRequestChanges); err != nil {
+
+	ev := core.EventRequestChanges
+	if t.State == core.StateNeedsYou {
+		ev = core.EventRequeue
+	}
+	if _, err := l.db.SetTicketState(ctx, ticketID, ev); err != nil {
 		return err
 	}
 	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
 		return err
 	}
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID, State: core.StateReady})
+	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
+	return nil
+}
+
+// Continue retries a landing after a human has resolved a conflict.
+func (l *Local) Continue(ctx context.Context, ticketID string) error {
+	if l.lander == nil {
+		return fmt.Errorf("this client cannot land work")
+	}
+	if err := l.lander.Continue(ctx, ticketID); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
 	return nil
 }
