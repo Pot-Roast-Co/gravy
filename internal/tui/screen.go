@@ -1,0 +1,82 @@
+package tui
+
+import (
+	"strconv"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/bobbybrady/gravy/internal/api"
+)
+
+// Section is one destination in the frame, reachable by its number key.
+//
+// M0 ships seven, which is why the global keymap is 1-7. Done and history (GR-030) is M1 and
+// deliberately absent rather than present and empty.
+type Section int
+
+// The sections, in the order they appear in the header and on the number keys.
+const (
+	SectionDashboard Section = iota
+	SectionBacklog
+	SectionReady
+	SectionRunning
+	SectionReview
+	SectionNeedsYou
+	SectionSettings
+)
+
+// AllSections lists every section in header order.
+var AllSections = []Section{
+	SectionDashboard, SectionBacklog, SectionReady, SectionRunning,
+	SectionReview, SectionNeedsYou, SectionSettings,
+}
+
+// Title is the section's name in the header and help.
+func (s Section) Title() string {
+	switch s {
+	case SectionDashboard:
+		return "Dashboard"
+	case SectionBacklog:
+		return "Backlog"
+	case SectionReady:
+		return "Ready"
+	case SectionRunning:
+		return "Running"
+	case SectionReview:
+		return "Review"
+	case SectionNeedsYou:
+		return "Needs You"
+	case SectionSettings:
+		return "Settings"
+	default:
+		return "?"
+	}
+}
+
+// Key is the number key that jumps to the section.
+func (s Section) Key() string { return strconv.Itoa(int(s) + 1) }
+
+// ViewContext is everything a screen needs to draw itself.
+//
+// The frame fetches; screens render. A screen that wants data not in here is asking for an
+// api.Service method, not for permission to open the store.
+type ViewContext struct {
+	// Width and Height are the space the screen owns, excluding the header and status bar.
+	Width, Height int
+	Theme         Theme
+	// Status is the most recent system snapshot, refreshed on push.
+	Status api.SystemStatus
+	// Filter is the active `/` filter, empty when none.
+	Filter string
+}
+
+// Screen is one section's content.
+//
+// The frame owns layout, global keys, fetching and the event subscription. A screen handles only
+// the keys the frame did not claim, and renders into the space it is given.
+type Screen interface {
+	// Update handles a message the frame did not consume.
+	Update(msg tea.Msg) (Screen, tea.Cmd)
+	// View renders the screen's body. It must fit within ctx.Width and ctx.Height.
+	View(ctx ViewContext) string
+}

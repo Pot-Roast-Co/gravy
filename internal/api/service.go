@@ -36,6 +36,9 @@ type Service interface {
 	// system
 	Status(ctx context.Context) (SystemStatus, error)
 	ExplainTicket(ctx context.Context, ticketID string) (Explanation, error)
+	// Events is the server-push stream. Clients render from it rather than polling; the
+	// returned stop function ends the subscription, and the channel closes when ctx does.
+	Events(ctx context.Context) (<-chan Event, func(), error)
 }
 
 // AddProjectReq registers a repository.

@@ -5,7 +5,8 @@ package map, interfaces, data model, and the algorithms that must be determinist
 explainable. `PRODUCT.md` says what Gravy does and why; this says how it is built.
 
 Implementation language is **Go** — portable single binary, excellent subprocess and concurrency
-handling, mature TUI ecosystem (Bubble Tea, Lip Gloss, Bubbles). Minimum Go 1.23.
+handling, mature TUI ecosystem (Bubble Tea, Lip Gloss, Bubbles). Minimum Go 1.24 — Bubble Tea
+v1.3 requires it, so adopting the TUI raised the floor from 1.23.
 
 ---
 

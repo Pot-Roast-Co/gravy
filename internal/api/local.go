@@ -22,16 +22,17 @@ import (
 // the CLI in-process uses it directly. Both go through the same interface, so a behaviour that
 // works in one works in the other by construction.
 type Local struct {
-	db    *store.DB
-	hosts []host.Host
-	sched *scheduler.Scheduler
-	newID func() string
-	now   func() time.Time
+	db     *store.DB
+	hosts  []host.Host
+	sched  *scheduler.Scheduler
+	newID  func() string
+	now    func() time.Time
+	events *broker
 }
 
 // NewLocal returns a Service backed by the store.
 func NewLocal(db *store.DB, sched *scheduler.Scheduler, hosts []host.Host, newID func() string) *Local {
-	return &Local{db: db, hosts: hosts, sched: sched, newID: newID, now: time.Now}
+	return &Local{db: db, hosts: hosts, sched: sched, newID: newID, now: time.Now, events: newBroker()}
 }
 
 // ListProjects returns every registered project.
@@ -113,6 +114,7 @@ func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project
 	if err := l.db.CreateProject(ctx, p); err != nil {
 		return core.Project{}, err
 	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: p.ID})
 	return p, nil
 }
 
@@ -201,6 +203,7 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 		}
 		t.State = state
 	}
+	l.events.publish(Event{Kind: EventTicketChanged, ProjectID: t.ProjectID, TicketID: t.ID, State: t.State})
 	return t, nil
 }
 
@@ -216,7 +219,9 @@ func (l *Local) MoveTicket(ctx context.Context, id string, ev core.Event) (core.
 		if _, err := l.db.ResolveAttentionForTicket(ctx, id); err != nil {
 			return state, err
 		}
+		l.events.publish(Event{Kind: EventAttentionChanged, TicketID: id})
 	}
+	l.events.publish(Event{Kind: EventTicketChanged, TicketID: id, State: state})
 	return state, nil
 }
 
@@ -232,8 +237,22 @@ func (l *Local) ListAttention(ctx context.Context) ([]core.Attention, error) {
 
 // ResolveAttention marks an attention item handled.
 func (l *Local) ResolveAttention(ctx context.Context, id string) error {
-	return l.db.ResolveAttention(ctx, id)
+	if err := l.db.ResolveAttention(ctx, id); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventAttentionChanged})
+	return nil
 }
+
+// Events subscribes to the push stream.
+func (l *Local) Events(ctx context.Context) (<-chan Event, func(), error) {
+	ch, stop := l.events.subscribe(ctx)
+	return ch, stop, nil
+}
+
+// Publish emits an event from outside the service, which is how the daemon reports run progress
+// it makes directly against the store rather than through Service calls.
+func (l *Local) Publish(e Event) { l.events.publish(e) }
 
 // ExplainTicket answers why a ticket is or is not running.
 func (l *Local) ExplainTicket(ctx context.Context, ticketID string) (Explanation, error) {

@@ -57,10 +57,7 @@ func run(args []string) error {
 		usage()
 		return nil
 	case "":
-		// The TUI (GR-024) is the eventual default. Until it exists, say what does work
-		// rather than failing with nothing to go on.
-		usage()
-		return nil
+		return runTUI(ctx)
 	case "serve":
 		return fmt.Errorf("not implemented yet: the daemon is GR-007. use `gravy run` to work the queue in the foreground")
 	default:
@@ -86,6 +83,8 @@ func usage() {
 
 Nothing merges without "gravy approve". No flag changes that.
 
-Not built yet: the daemon (work stops when you close the terminal) and the TUI.
-See docs/MILESTONES.md.`)
+Run gravy with no arguments for the dashboard.
+
+Not built yet: the daemon (work stops when you close the terminal), and every
+screen behind the frame. See docs/MILESTONES.md.`)
 }
