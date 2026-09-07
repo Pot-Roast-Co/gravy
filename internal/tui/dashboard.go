@@ -48,6 +48,10 @@ func (d dashboard) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			r := rows[d.cursor]
 			return d, Goto(r.dest, r.id)
 		}
+	case "S":
+		// Review latency gates throughput under the serial default, so clearing the queue
+		// fast is the highest-leverage thing this screen can offer.
+		return d, Sweep(sweepOrder(ctx))
 	}
 	return d, nil
 }

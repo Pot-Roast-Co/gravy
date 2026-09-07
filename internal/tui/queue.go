@@ -55,6 +55,10 @@ func newQueue(state core.State) *queue {
 	return &queue{state: state, selected: map[string]bool{}}
 }
 
+// CapturesKeys is true while the form or a confirmation is open — a ticket title is exactly the
+// sort of text that contains a "q".
+func (q *queue) CapturesKeys() bool { return q.mode != queueBrowsing }
+
 type (
 	queueLoadedMsg struct {
 		state core.State

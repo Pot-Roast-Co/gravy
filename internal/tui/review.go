@@ -40,9 +40,21 @@ type review struct {
 	feedback string
 	// notice reports the outcome of the last action, or why a key did nothing.
 	notice string
+
+	// sweep is the ordered walk of pending reviews, empty when not sweeping. It is a mode over
+	// this screen rather than a second screen, so approving in a sweep and approving from the
+	// card are the same code path by construction.
+	sweep    []string
+	sweepIdx int
+	// swept counts the tickets actually decided, so the exit line can say what was done.
+	swept int
 }
 
 func newReview() *review { return &review{expanded: map[string]bool{}} }
+
+// CapturesKeys is true while a prompt is open or a sweep is running, both of which bind keys the
+// global keymap also claims.
+func (r *review) CapturesKeys() bool { return r.mode != reviewBrowsing || len(r.sweep) > 0 }
 
 // Messages the screen raises for itself.
 type (
@@ -66,6 +78,14 @@ func loadReview(svc api.Service, ticketID string) tea.Cmd {
 
 func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
+	case sweepMsg:
+		if len(msg.ids) == 0 {
+			r.notice = "nothing to review"
+			return r, nil
+		}
+		r.sweep, r.sweepIdx, r.swept = msg.ids, 0, 0
+		return r, r.openCurrent(ctx)
+
 	case enteredMsg:
 		id := msg.focus
 		if id == "" {
@@ -92,10 +112,14 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			r.notice = fmt.Sprintf("%s failed: %v", msg.verb, msg.err)
 			return r, nil
 		}
-		// The ticket has left the review queue. Clearing it is what makes the sweep in
-		// GR-038 possible: the screen is never showing work that is already decided.
-		r.notice = fmt.Sprintf("%s %s", r.ticketID, msg.verb)
+		// The ticket has left the review queue, so the screen must stop showing work that is
+		// already decided.
+		r.notice = fmt.Sprintf("%s %s", shortID(r.ticketID), msg.verb)
 		r.ticketID, r.loaded = "", false
+		if len(r.sweep) > 0 {
+			r.swept++
+			return r, r.advance(ctx)
+		}
 		return r, nil
 
 	case tea.KeyMsg:
@@ -177,6 +201,19 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		r.mode, r.feedback, r.notice = reviewFeedback, "", ""
 	case "x":
 		r.mode, r.notice = reviewConfirmReject, ""
+	case "s":
+		if len(r.sweep) > 0 {
+			// Skipped, not decided: the ticket is left exactly as it was.
+			return r, r.advance(ctx)
+		}
+	case "q":
+		if len(r.sweep) > 0 {
+			left := len(r.sweep) - r.sweepIdx
+			done := r.swept
+			r.endSweep()
+			r.notice = fmt.Sprintf("sweep exited — %d decided, %d left untouched", done, left)
+			return r, nil
+		}
 	case "e", "d", "!":
 		// Launching an editor, difftool or shell needs an execution seam that does not exist
 		// yet: ARCHITECTURE.md 1.1 permits os/exec only under internal/host, and the TUI
@@ -227,7 +264,13 @@ func (r *review) View(ctx ViewContext) string {
 		return strings.Join(lines, "\n")
 
 	case !r.loaded:
-		return th.Muted.Render("loading " + shortID(r.ticketID) + "…")
+		// The sweep's progress stays on screen while the next card loads, or a sweep looks
+		// like it stopped every time it advances.
+		loading := th.Muted.Render("loading " + shortID(r.ticketID) + "…")
+		if len(r.sweep) > 0 {
+			return strings.Join([]string{loading, "", r.footer(th)}, "\n")
+		}
+		return loading
 	}
 
 	b := r.bundle
@@ -314,8 +357,14 @@ func (r *review) footer(th Theme) string {
 		return th.Danger.Render("reject this ticket and delete its worktree? ") +
 			th.Muted.Render("y / n")
 	}
-	if r.notice != "" {
+	if r.notice != "" && len(r.sweep) == 0 {
 		return th.Warning.Render(r.notice)
+	}
+	if len(r.sweep) > 0 {
+		// The progress indicator is the whole reason a sweep feels different from a list: you
+		// can see the end of it.
+		progress := th.Accent.Render(fmt.Sprintf("sweep %d of %d  ", r.sweepIdx+1, len(r.sweep)))
+		return progress + th.Muted.Render("a approve · r changes · x reject · s skip · q exit")
 	}
 	return th.Muted.Render("a approve · r request changes · x reject · enter expand · j/k move")
 }
@@ -357,4 +406,59 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// ---- sweep ---------------------------------------------------------------
+
+// openCurrent loads the sweep's current ticket.
+func (r *review) openCurrent(ctx ViewContext) tea.Cmd {
+	if r.sweepIdx >= len(r.sweep) {
+		return nil
+	}
+	r.ticketID, r.loaded, r.err, r.cursor = r.sweep[r.sweepIdx], false, nil, 0
+	r.expanded = map[string]bool{}
+	return loadReview(ctx.Svc, r.ticketID)
+}
+
+// advance moves to the next ticket in the sweep, or ends it.
+//
+// Every step is one deliberate decision on one ticket. Nothing here decides more than one, which
+// is why there is no bulk affordance to find.
+func (r *review) advance(ctx ViewContext) tea.Cmd {
+	r.sweepIdx++
+	if r.sweepIdx >= len(r.sweep) {
+		done := r.swept
+		r.endSweep()
+		r.notice = fmt.Sprintf("sweep finished — %d decided", done)
+		return nil
+	}
+	return r.openCurrent(ctx)
+}
+
+func (r *review) endSweep() {
+	r.sweep, r.sweepIdx, r.swept = nil, 0, 0
+}
+
+// sweepOrder is the queue a sweep walks: reviews holding a repository first, so the sweep
+// unblocks queues soonest, then oldest first within each group.
+func sweepOrder(ctx ViewContext) []string {
+	blocking := map[string]bool{}
+	for _, p := range ctx.Status.Projects {
+		if p.Blocked != "" {
+			blocking[p.Project.ID] = true
+		}
+	}
+
+	var held, rest []string
+	for _, item := range ctx.Status.Attention {
+		if item.Attention.Reason != core.ReasonReviewPending {
+			continue
+		}
+		if blocking[item.Attention.ProjectID] || blocking[item.Project.ID] {
+			held = append(held, item.Attention.TicketID)
+			continue
+		}
+		rest = append(rest, item.Attention.TicketID)
+	}
+	return append(held, rest...)
 }

@@ -48,10 +48,19 @@ type (
 	// refreshedMsg tells the active screen the fleet snapshot moved, so a screen holding data
 	// of its own can re-read it. Screens that render straight from Status ignore it.
 	refreshedMsg struct{}
+
+	// sweepMsg starts a review sweep. It is raised by whichever screen the human pressed S on
+	// and handled by the Review screen, which owns the card the sweep renders.
+	sweepMsg struct{ ids []string }
 )
 
 func entered(focus string) tea.Cmd {
 	return func() tea.Msg { return enteredMsg{focus: focus} }
+}
+
+// Sweep returns a command that starts a review sweep over the given tickets.
+func Sweep(ids []string) tea.Cmd {
+	return func() tea.Msg { return sweepMsg{ids: ids} }
 }
 
 // Goto returns a command asking the frame to switch section.
@@ -180,6 +189,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case sweepMsg:
+		m.active, m.showHelp = SectionReview, false
+		screen, cmd := m.screens[SectionReview].Update(msg, m.viewContext())
+		m.screens[SectionReview] = screen
+		return m, cmd
+
 	case gotoMsg:
 		m.active, m.showHelp = msg.section, false
 		m.focus = msg.focus
@@ -211,6 +226,24 @@ func (m Model) viewContext() ViewContext {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// ctrl+c always quits, whatever has the keyboard: there is always one key that gets you
+	// out of a wedged screen.
+	if key == "ctrl+c" {
+		m.quitting = true
+		if m.stopEvents != nil {
+			m.stopEvents()
+		}
+		return m, tea.Quit
+	}
+
+	// A screen with a prompt or a mode of its own gets the keyboard before the global keymap,
+	// so typing a "q" does not quit the program.
+	if !m.showHelp && capturing(m.screens[m.active]) {
+		screen, cmd := m.screens[m.active].Update(msg, m.viewContext())
+		m.screens[m.active] = screen
+		return m, cmd
+	}
 
 	// A filter in progress owns the keyboard, or `q` would quit instead of typing a "q".
 	if m.filtering {

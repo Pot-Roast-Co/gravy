@@ -38,6 +38,9 @@ type needsYou struct {
 
 func newNeedsYou() *needsYou { return &needsYou{} }
 
+// CapturesKeys is true while a prompt or confirmation is open.
+func (s *needsYou) CapturesKeys() bool { return s.mode != nyBrowsing }
+
 type attentionActedMsg struct {
 	verb string
 	err  error
@@ -320,6 +323,8 @@ func (s *needsYou) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 			s.cursor++
 		}
 		return s, nil
+	case "S":
+		return s, Sweep(sweepOrder(ctx))
 	case "home", "g":
 		s.cursor = 0
 		return s, nil

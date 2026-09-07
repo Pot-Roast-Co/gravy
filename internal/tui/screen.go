@@ -77,6 +77,21 @@ type ViewContext struct {
 	Project string
 }
 
+// keyCapturer is a screen that needs the keyboard before the global keymap sees it.
+//
+// A prompt, a form, or a mode with its own exit key. Without this the frame's `q` quits the
+// program while someone is typing a word containing one, and `1`-`7` jump section mid-sentence.
+// ctrl+c is never captured: there is always one key that gets you out.
+type keyCapturer interface {
+	CapturesKeys() bool
+}
+
+// capturing reports whether s wants the keyboard to itself right now.
+func capturing(s Screen) bool {
+	c, ok := s.(keyCapturer)
+	return ok && c.CapturesKeys()
+}
+
 // Screen is one section's content.
 //
 // The frame owns layout, global keys, fetching and the event subscription. A screen handles only

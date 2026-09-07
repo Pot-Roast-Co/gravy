@@ -43,6 +43,9 @@ type running struct {
 
 func newRunning() *running { return &running{follow: true} }
 
+// CapturesKeys is true while the kill confirmation is open.
+func (r *running) CapturesKeys() bool { return r.confirmKill }
+
 type (
 	runDetailMsg struct {
 		runs    []core.Run
