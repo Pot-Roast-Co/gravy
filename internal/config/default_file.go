@@ -18,6 +18,17 @@ concurrency:
   # per repository.
   workers: 4
 
+  # Per-route limits: how many tickets on each route may be in flight at once, across every
+  # project. A route is a bucket of agent capacity — tickets ask for one by name with
+  # "gravy ticket add -route planning" — so this is where "two planning agents and four
+  # implementation agents" is expressed.
+  #
+  # An unlisted route is limited only by the workers setting above. Uncomment to cap one:
+  # routes:
+  #   planning: 1
+  #   implementation: 3
+  #   review: 2
+
 providers:
   # The coding agent CLIs Gravy may drive. Gravy uses the CLIs you have already authenticated —
   # it does not want your credentials and does not store them, so there is no API key here.

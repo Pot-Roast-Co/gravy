@@ -73,7 +73,8 @@ func newApp(ctx context.Context) (*app, error) {
 	// This is not GR-016: there is no fallback and no cooldown, so a quota failure parks the
 	// ticket rather than moving to the next choice.
 	route := configRouter{cfg: cfg}
-	sched := scheduler.New(db, pool, route)
+	// Route caps are the buckets: how many agents of each kind may run at once, fleet-wide.
+	sched := scheduler.New(db, pool, route).WithRouteCaps(cfg.Concurrency.Routes)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 

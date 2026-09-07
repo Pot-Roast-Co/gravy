@@ -104,6 +104,34 @@ func (d *DB) CountActiveTickets(ctx context.Context, projectID string) (int, err
 }
 
 // activeStates returns the states core considers in flight.
+// CountActiveTicketsByRoute returns how many tickets on a route are in flight, across every
+// project.
+//
+// A route is a bucket of agent capacity, so its limit is fleet-wide rather than per repository:
+// the point is to cap how many agents of that kind run at once, wherever the work came from.
+func (d *DB) CountActiveTicketsByRoute(ctx context.Context, route core.Route) (int, error) {
+	states := activeStates()
+	args := make([]any, 0, len(states)+1)
+	args = append(args, string(route))
+	placeholders := ""
+	for i, s := range states {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, string(s))
+	}
+
+	var n int
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tickets WHERE route = ? AND state IN (`+placeholders+`)`, args...,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active tickets on route %q: %w", route, err)
+	}
+	return n, nil
+}
+
 func activeStates() []core.State {
 	var out []core.State
 	for _, s := range core.AllStates {

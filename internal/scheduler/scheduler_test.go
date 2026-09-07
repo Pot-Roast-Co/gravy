@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,16 @@ func (f *fakeStore) CountActiveTickets(_ context.Context, projectID string) (int
 	n := 0
 	for _, t := range f.tickets {
 		if t.ProjectID == projectID && core.IsActive(t.State) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeStore) CountActiveTicketsByRoute(_ context.Context, route core.Route) (int, error) {
+	n := 0
+	for _, t := range f.tickets {
+		if t.Route == route && core.IsActive(t.State) {
 			n++
 		}
 	}
@@ -661,5 +672,112 @@ func TestAssignmentCarriesItsReasoning(t *testing.T) {
 		if !strings.Contains(trace, want) {
 			t.Errorf("trace is missing %q:\n%s", want, trace)
 		}
+	}
+}
+
+// TestRouteCapsBucketAgents covers the bucket model: a route is a pool of agent capacity that
+// tickets ask for by name, and its limit is fleet-wide rather than per repository — what it
+// rations is agents, not repositories.
+func TestRouteCapsBucketAgents(t *testing.T) {
+	st := newStore().
+		addProject(parallelProject("p1", "repo-one", 10)).
+		addProject(parallelProject("p2", "repo-two", 10))
+
+	// Four planning tickets spread over two repositories.
+	for i, project := range []string{"p1", "p1", "p2", "p2"} {
+		tk := ticket(fmt.Sprintf("plan-%d", i), project, core.StateReady, float64(i))
+		tk.Route = core.RoutePlanning
+		st.addTicket(tk)
+	}
+	// And two on another route, which the planning cap must not touch.
+	for i, project := range []string{"p1", "p2"} {
+		tk := ticket(fmt.Sprintf("impl-%d", i), project, core.StateReady, float64(10+i))
+		tk.Route = core.RouteImplementation
+		st.addTicket(tk)
+	}
+
+	s := newScheduler(st, newPool(mac("m1", 10))).
+		WithRouteCaps(map[core.Route]int{core.RoutePlanning: 2})
+
+	got, err := s.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	var planning, other int
+	for _, a := range got {
+		if st.tickets[a.TicketID].Route == core.RoutePlanning {
+			planning++
+			continue
+		}
+		other++
+	}
+
+	if planning != 2 {
+		t.Errorf("assigned %d planning tickets, want the route's cap of 2", planning)
+	}
+	// The cap spans projects: two of the four planning tickets waited even though their
+	// repositories were free.
+	if other != 2 {
+		t.Errorf("assigned %d tickets on uncapped routes, want 2 — a cap on one route must not "+
+			"stall another", other)
+	}
+}
+
+// TestRouteCapCountsWorkAlreadyInFlight is the half a per-tick counter alone would miss.
+func TestRouteCapCountsWorkAlreadyInFlight(t *testing.T) {
+	st := newStore().addProject(parallelProject("p1", "repo", 10))
+
+	running := ticket("already-going", "p1", core.StateRunning, 1)
+	running.Route = core.RoutePlanning
+	st.addTicket(running)
+
+	waiting := ticket("next-up", "p1", core.StateReady, 2)
+	waiting.Route = core.RoutePlanning
+	st.addTicket(waiting)
+
+	s := newScheduler(st, newPool(mac("m1", 10))).
+		WithRouteCaps(map[core.Route]int{core.RoutePlanning: 1})
+
+	got, err := s.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("assigned %v, want nothing: the route's one slot is already occupied", assignedIDs(got))
+	}
+
+	// And the reason is explainable rather than an unexplained idle queue.
+	ex, err := s.Explain(context.Background(), "next-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex.Eligible {
+		t.Error("a ticket blocked by its route cap reports itself eligible")
+	}
+	if !strings.Contains(ex.Reason, "planning") || !strings.Contains(ex.Reason, "limit") {
+		t.Errorf("reason = %q, want it to name the route and its limit", ex.Reason)
+	}
+}
+
+// TestUncappedRoutesAreUnchanged: a cap nobody asked for would silently stall a queue.
+func TestUncappedRoutesAreUnchanged(t *testing.T) {
+	st := newStore().addProject(parallelProject("p1", "repo", 10))
+	for i := 0; i < 3; i++ {
+		tk := ticket(fmt.Sprintf("t%d", i), "p1", core.StateReady, float64(i))
+		tk.Route = core.RouteImplementation
+		st.addTicket(tk)
+	}
+
+	// A cap on a different route entirely.
+	s := newScheduler(st, newPool(mac("m1", 10))).
+		WithRouteCaps(map[core.Route]int{core.RoutePlanning: 1})
+
+	got, err := s.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("assigned %d, want all 3: an uncapped route is limited only by the pool", len(got))
 	}
 }

@@ -48,6 +48,7 @@ type Store interface {
 	GetProject(ctx context.Context, id string) (core.Project, error)
 	ListProjects(ctx context.Context) ([]core.Project, error)
 	CountActiveTickets(ctx context.Context, projectID string) (int, error)
+	CountActiveTicketsByRoute(ctx context.Context, route core.Route) (int, error)
 	ListTickets(ctx context.Context, projectID string) ([]core.Ticket, error)
 	DepsOf(ctx context.Context, ticketID string) ([]string, error)
 }
@@ -94,11 +95,20 @@ type Scheduler struct {
 	store  Store
 	hosts  HostPool
 	router Router
+	// routeCaps limits how many tickets on a route may run at once. Absent means unlimited,
+	// bounded only by the worker pool.
+	routeCaps map[core.Route]int
 }
 
 // New returns a scheduler.
 func New(s Store, h HostPool, r Router) *Scheduler {
 	return &Scheduler{store: s, hosts: h, router: r}
+}
+
+// WithRouteCaps limits per-route concurrency: how many agents of each kind may run at once.
+func (s *Scheduler) WithRouteCaps(caps map[core.Route]int) *Scheduler {
+	s.routeCaps = caps
+	return s
 }
 
 // Tick returns the assignments that should be started now.
@@ -120,10 +130,13 @@ func (s *Scheduler) Tick(ctx context.Context) ([]Assignment, error) {
 	// Projects assigned during this tick, so a serial project cannot be handed two tickets
 	// before either has started.
 	claimed := map[string]int{}
+	// Routes claimed during this tick, so a bucket cannot be handed more work than it has
+	// room for before any of it has started.
+	claimedRoutes := map[core.Route]int{}
 
 	var out []Assignment
 	for _, t := range tickets {
-		decision, err := s.consider(ctx, t, pool, claimed)
+		decision, err := s.consider(ctx, t, pool, claimed, claimedRoutes)
 		if err != nil {
 			return nil, err
 		}
@@ -132,6 +145,7 @@ func (s *Scheduler) Tick(ctx context.Context) ([]Assignment, error) {
 		}
 		out = append(out, *decision.assignment)
 		claimed[t.ProjectID]++
+		claimedRoutes[t.Route]++
 		pool.claim(decision.assignment.HostID)
 	}
 	return out, nil
@@ -159,7 +173,7 @@ func (s *Scheduler) Explain(ctx context.Context, ticketID string) (Explanation, 
 	if err != nil {
 		return Explanation{}, err
 	}
-	decision, err := s.consider(ctx, t, pool, map[string]int{})
+	decision, err := s.consider(ctx, t, pool, map[string]int{}, map[core.Route]int{})
 	if err != nil {
 		return Explanation{}, err
 	}
@@ -204,7 +218,7 @@ type decision struct {
 //
 // Every step appends to why, whether or not it is the step that blocks. A trace that only
 // records the failure cannot answer "why this host and model" for the tickets that did run.
-func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnapshot, claimed map[string]int) (decision, error) {
+func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnapshot, claimed map[string]int, claimedRoutes map[core.Route]int) (decision, error) {
 	var why []string
 	blocked := func(reason string) decision {
 		why = append(why, reason)
@@ -231,6 +245,18 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 
 	// 2. Project availability. This is the heart of the scheduler.
 	reason, available, err := s.projectAvailable(ctx, project, claimed[t.ProjectID])
+	if err != nil {
+		return decision{}, err
+	}
+	if !available {
+		return blocked(reason), nil
+	}
+	why = append(why, reason)
+
+	// 2b. Route capacity. A route is a bucket of agent capacity that tickets ask for by name,
+	//     so its limit is fleet-wide: it caps how many agents of that kind run at once,
+	//     wherever the work came from.
+	reason, available, err = s.routeAvailable(ctx, t.Route, claimedRoutes[t.Route])
 	if err != nil {
 		return decision{}, err
 	}
@@ -416,3 +442,28 @@ func sortTickets(ts []core.Ticket) {
 
 // Trace renders a decision trace for display.
 func Trace(why []string) string { return strings.Join(why, "\n  ") }
+
+// routeAvailable applies the route's concurrency cap.
+//
+// Routes are buckets of agent capacity — a ticket names one, and the cap says how many of that
+// kind may run at once. The limit is fleet-wide rather than per project, because what it is
+// rationing is agents, not repositories.
+//
+// An uncapped route is limited only by the worker pool, which is the previous behaviour and
+// stays the default: a cap nobody asked for would silently stall a queue.
+func (s *Scheduler) routeAvailable(ctx context.Context, route core.Route, claimedThisTick int) (string, bool, error) {
+	cap, capped := s.routeCaps[route]
+	if !capped || cap <= 0 {
+		return fmt.Sprintf("route %q is uncapped", route), true, nil
+	}
+
+	running, err := s.store.CountActiveTicketsByRoute(ctx, route)
+	if err != nil {
+		return "", false, fmt.Errorf("scheduler: route %q: %w", route, err)
+	}
+	inFlight := running + claimedThisTick
+	if inFlight >= cap {
+		return fmt.Sprintf("route %q is at its limit (%d of %d running)", route, inFlight, cap), false, nil
+	}
+	return fmt.Sprintf("route %q has room (%d of %d running)", route, inFlight, cap), true, nil
+}

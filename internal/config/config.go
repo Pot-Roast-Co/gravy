@@ -40,6 +40,14 @@ type Concurrency struct {
 	// number, is what limits any single repository: N projects in serial mode run N agents
 	// concurrently, one per repository.
 	Workers int `yaml:"workers"`
+
+	// Routes caps how many tickets on a given route may be in flight at once, across every
+	// project. A route is a bucket of agent capacity — tickets ask for one by name — so
+	// "two planning agents and four implementation agents" is expressed here rather than by
+	// counting workers and hoping.
+	//
+	// An unlisted route is limited only by Workers.
+	Routes map[core.Route]int `yaml:"routes,omitempty"`
 }
 
 // Provider is a coding agent CLI Gravy may drive.
