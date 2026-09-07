@@ -425,7 +425,8 @@ func runStatus(ctx context.Context, args []string) error {
 		fmt.Println("  nothing — Gravy does not need you")
 	} else {
 		for _, at := range st.Attention {
-			fmt.Printf("  %-16s %s  %s\n", at.Reason, at.TicketID, payloadHint(at))
+			fmt.Printf("  %-16s %s  %s\n",
+				at.Attention.Reason, at.Attention.TicketID, payloadHint(at.Attention))
 		}
 	}
 

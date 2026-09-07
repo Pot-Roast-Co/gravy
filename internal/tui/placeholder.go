@@ -31,10 +31,12 @@ func newPlaceholders() map[Section]Screen {
 	for _, s := range AllSections {
 		screens[s] = placeholder{section: s, ticket: tickets[s]}
 	}
+	// Built screens replace their placeholder here as each ticket lands.
+	screens[SectionDashboard] = dashboard{}
 	return screens
 }
 
-func (p placeholder) Update(tea.Msg) (Screen, tea.Cmd) { return p, nil }
+func (p placeholder) Update(tea.Msg, ViewContext) (Screen, tea.Cmd) { return p, nil }
 
 func (p placeholder) View(ctx ViewContext) string {
 	if ctx.Height <= 0 || ctx.Width <= 0 {

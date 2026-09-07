@@ -279,7 +279,7 @@ func TestPushUpdatesWithoutPolling(t *testing.T) {
 	}
 
 	// The daemon reports a change; the frame re-reads and re-renders.
-	f.status.Attention = []core.Attention{{ID: "a1", Reason: core.ReasonReviewPending}}
+	f.status.Attention = []api.AttentionItem{{Attention: core.Attention{ID: "a1", Reason: core.ReasonReviewPending}}}
 	f.events <- api.Event{Kind: api.EventAttentionChanged}
 
 	m, cmd := sendCmd(t, m, eventMsg{event: api.Event{Kind: api.EventAttentionChanged}})

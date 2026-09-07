@@ -33,7 +33,19 @@ type (
 	statusMsg       struct{ status api.SystemStatus }
 	eventMsg        struct{ event api.Event }
 	eventsClosedMsg struct{}
+
+	// gotoMsg is how a screen navigates: it names a destination and the row that should be
+	// selected there, and the frame does the switching.
+	gotoMsg struct {
+		section Section
+		focus   string
+	}
 )
+
+// Goto returns a command asking the frame to switch section.
+func Goto(s Section, focus string) tea.Cmd {
+	return func() tea.Msg { return gotoMsg{section: s, focus: focus} }
+}
 
 // Model is the frame: header, body, status bar, global keys and the event subscription.
 type Model struct {
@@ -58,6 +70,8 @@ type Model struct {
 	showHelp  bool
 	filtering bool
 	filter    string
+	// focus is the row a screen asked the destination to select when navigating.
+	focus string
 
 	events     <-chan api.Event
 	stopEvents func()
@@ -152,13 +166,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case gotoMsg:
+		m.active, m.showHelp = msg.section, false
+		m.focus = msg.focus
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
 
-	screen, cmd := m.screens[m.active].Update(msg)
+	screen, cmd := m.screens[m.active].Update(msg, m.viewContext())
 	m.screens[m.active] = screen
 	return m, cmd
+}
+
+// viewContext is the snapshot both Update and View see, so a key acts on exactly the data the
+// user is looking at.
+func (m Model) viewContext() ViewContext {
+	height := m.height - 2 // header and status bar
+	if height < 0 {
+		height = 0
+	}
+	return ViewContext{
+		Width: m.width, Height: height,
+		Theme: m.theme, Status: m.status, Filter: m.filter,
+	}
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -212,7 +244,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	screen, cmd := m.screens[m.active].Update(msg)
+	screen, cmd := m.screens[m.active].Update(msg, m.viewContext())
 	m.screens[m.active] = screen
 	return m, cmd
 }
@@ -297,10 +329,10 @@ func (m Model) bodyView(height int) string {
 	case m.conn == connConnecting:
 		body = m.theme.Muted.Render("starting gravy daemon…")
 	default:
-		body = m.screens[m.active].View(ViewContext{
-			Width: m.width, Height: height,
-			Theme: m.theme, Status: m.status, Filter: m.filter,
-		})
+		ctx := m.viewContext()
+		ctx.Height = height
+		ctx.Focus = m.focus
+		body = m.screens[m.active].View(ctx)
 	}
 
 	// Pad to the full body height so the status bar sits on the bottom line rather than

@@ -74,11 +74,52 @@ type TicketFilter struct {
 }
 
 // SystemStatus is the one-screen answer to "what is happening".
+//
+// It spans every project on purpose. Remembering which agent is on which repository is the exact
+// pain Gravy removes, so the snapshot a dashboard renders is fleet-wide by construction rather
+// than by the caller looping over projects and hoping the reads agree.
 type SystemStatus struct {
 	Projects []ProjectStatus
 	Hosts    []HostStatus
 	// Attention is the open Needs You queue, oldest first.
-	Attention []core.Attention
+	Attention []AttentionItem
+	// Running is every in-flight ticket, across every project.
+	Running []RunningTicket
+	// Ready is the queue across every project, in the order the scheduler would take it.
+	Ready []QueuedTicket
+}
+
+// AttentionItem is one Needs You row, resolved against the ticket and project it concerns so a
+// client never has to join them itself.
+type AttentionItem struct {
+	Attention core.Attention
+	Project   core.Project
+	Ticket    core.Ticket
+	// Age is how long it has been waiting. A queue without ages hides the item that has been
+	// ignored for two days behind the one raised a minute ago.
+	Age time.Duration
+}
+
+// RunningTicket is one ticket the fleet is actively working.
+type RunningTicket struct {
+	Ticket  core.Ticket
+	Project core.Project
+	// Run is the current run. It is the zero value in the window between a ticket being
+	// assigned and its run row existing.
+	Run core.Run
+	// Elapsed is how long the run has been going.
+	Elapsed time.Duration
+	// Activity is what it is doing now, phrased for a human rather than as a state name.
+	Activity string
+}
+
+// QueuedTicket is one Ready ticket.
+type QueuedTicket struct {
+	Ticket  core.Ticket
+	Project core.Project
+	// Held explains why a Ready ticket will not start yet — most often its project's serial
+	// cap. Empty means it is simply waiting its turn. An idle queue is always explained.
+	Held string
 }
 
 // ProjectStatus summarises one repository.

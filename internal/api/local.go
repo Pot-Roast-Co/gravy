@@ -277,7 +277,13 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 	if err != nil {
 		return st, err
 	}
+
+	byProject := make(map[string]core.Project, len(projects))
+	byTicket := make(map[string]core.Ticket)
+	now := l.now()
+
 	for _, p := range projects {
+		byProject[p.ID] = p
 		ps := ProjectStatus{Project: p, Counts: map[core.State]int{}}
 
 		tickets, err := l.db.ListTickets(ctx, p.ID)
@@ -285,6 +291,7 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 			return st, err
 		}
 		for i, t := range tickets {
+			byTicket[t.ID] = t
 			ps.Counts[t.State]++
 			if core.IsActive(t.State) && ps.Active == nil {
 				ps.Active = &tickets[i]
@@ -299,8 +306,45 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 			}
 			ps.Blocked = fmt.Sprintf("serialized; %s %s (%s)", ps.Active.ID, verb, ps.Active.State)
 		}
+
+		for _, t := range tickets {
+			switch {
+			case inFlight(t.State):
+				rt := RunningTicket{Ticket: t, Project: p, Activity: activityFor(t.State)}
+				runs, err := l.db.ListRunsForTicket(ctx, t.ID)
+				if err != nil {
+					return st, err
+				}
+				if len(runs) > 0 {
+					rt.Run = runs[0]
+					rt.Elapsed = now.Sub(runs[0].StartedAt)
+					if runs[0].EndedAt != nil {
+						rt.Elapsed = runs[0].EndedAt.Sub(runs[0].StartedAt)
+					}
+				}
+				st.Running = append(st.Running, rt)
+			case t.State == core.StateReady:
+				// Held carries the project's explanation, so a ticket that will not start
+				// says why on its own row rather than being an unexplained absence.
+				st.Ready = append(st.Ready, QueuedTicket{Ticket: t, Project: p, Held: ps.Blocked})
+			}
+		}
+
 		st.Projects = append(st.Projects, ps)
 	}
+
+	// Ready is fleet-wide and must be in the order the scheduler would take it, not grouped by
+	// whichever project was read first.
+	sort.SliceStable(st.Ready, func(i, j int) bool {
+		a, b := st.Ready[i].Ticket, st.Ready[j].Ticket
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
+		}
+		if a.Position != b.Position {
+			return a.Position < b.Position
+		}
+		return a.CreatedAt.Before(b.CreatedAt)
+	})
 
 	for _, h := range l.hosts {
 		used, total := h.Slots()
@@ -311,11 +355,52 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 		st.Hosts = append(st.Hosts, hs)
 	}
 
-	st.Attention, err = l.db.ListOpenAttention(ctx)
+	open, err := l.db.ListOpenAttention(ctx)
 	if err != nil {
 		return st, err
 	}
+	for _, a := range open {
+		item := AttentionItem{Attention: a, Project: byProject[a.ProjectID], Age: now.Sub(a.CreatedAt)}
+		if t, ok := byTicket[a.TicketID]; ok {
+			item.Ticket = t
+		}
+		st.Attention = append(st.Attention, item)
+	}
+	SortAttention(st.Attention)
 	return st, nil
+}
+
+// inFlight reports whether Gravy is actively working a ticket.
+//
+// Review, Blocked and NeedsYou are active states but belong in the Needs You queue rather than
+// in Running: the distinction the dashboard draws is "waiting on the fleet" against "waiting on
+// you", which is not the same line core.IsActive draws.
+func inFlight(s core.State) bool {
+	switch s {
+	case core.StateAssigned, core.StateRunning, core.StateValidating,
+		core.StateReviewing, core.StateLanding:
+		return true
+	default:
+		return false
+	}
+}
+
+// activityFor phrases a state as what the agent is doing, for a row a human scans.
+func activityFor(s core.State) string {
+	switch s {
+	case core.StateAssigned:
+		return "starting"
+	case core.StateRunning:
+		return "implementing"
+	case core.StateValidating:
+		return "validating"
+	case core.StateReviewing:
+		return "reviewing"
+	case core.StateLanding:
+		return "landing"
+	default:
+		return string(s)
+	}
 }
 
 func (l *Local) aHost() host.Host {
@@ -411,8 +496,10 @@ func slugify(s string) string {
 }
 
 // SortAttention orders the queue oldest first, which is the order a human works through it.
-func SortAttention(items []core.Attention) {
-	sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
+func SortAttention(items []AttentionItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Attention.CreatedAt.Before(items[j].Attention.CreatedAt)
+	})
 }
 
 var _ Service = (*Local)(nil)

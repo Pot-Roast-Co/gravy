@@ -68,6 +68,8 @@ type ViewContext struct {
 	Status api.SystemStatus
 	// Filter is the active `/` filter, empty when none.
 	Filter string
+	// Focus is the row id a screen was asked to select when navigated to, empty otherwise.
+	Focus string
 }
 
 // Screen is one section's content.
@@ -75,8 +77,10 @@ type ViewContext struct {
 // The frame owns layout, global keys, fetching and the event subscription. A screen handles only
 // the keys the frame did not claim, and renders into the space it is given.
 type Screen interface {
-	// Update handles a message the frame did not consume.
-	Update(msg tea.Msg) (Screen, tea.Cmd)
+	// Update handles a message the frame did not consume. It receives the same context View
+	// does, because a key press usually acts on the data currently shown — pressing enter on a
+	// row has to know which row that is.
+	Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd)
 	// View renders the screen's body. It must fit within ctx.Width and ctx.Height.
 	View(ctx ViewContext) string
 }
