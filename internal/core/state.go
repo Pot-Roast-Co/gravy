@@ -152,6 +152,11 @@ var transitions = map[State]map[Event]State{
 	StateAssigned: {
 		EventStart: StateRunning,
 		EventKill:  StateBacklog,
+		// A run can fail before the agent ever starts — a worktree that will not open, a
+		// provider that is not registered. Without this edge such a ticket had nowhere to go
+		// and stayed Assigned: holding its project's serial slot, absent from Needs You, and
+		// invisible. An assigned ticket that cannot start needs a human.
+		EventRunFailed: StateNeedsYou,
 	},
 	StateRunning: {
 		EventAgentFinished: StateValidating,

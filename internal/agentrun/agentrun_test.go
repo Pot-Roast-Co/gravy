@@ -1092,3 +1092,87 @@ func TestNoReviewerIsFine(t *testing.T) {
 		t.Errorf("final state = %q, want review with no reviewer configured", res.FinalState)
 	}
 }
+
+// TestRequeuedTicketReusesItsWorktree is the bug a real run found: a ticket sent back for
+// another attempt keeps its worktree and branch, and creating them again fails on the existing
+// branch — which left every requeued ticket permanently unable to run.
+//
+// Preserving the worktree is the entire point of sending work back rather than restarting it,
+// so the second attempt must continue in it.
+func TestRequeuedTicketReusesItsWorktree(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript(), successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 1, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+	ctx := context.Background()
+
+	first, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if first.Worktree.Path == "" {
+		t.Fatal("the first run recorded no worktree")
+	}
+
+	// Send it back, exactly as the Needs You screen's "send back with guidance" does.
+	if _, err := h.db.SetTicketState(ctx, "GR-100", core.EventRequestChanges); err != nil {
+		t.Fatalf("request changes: %v", err)
+	}
+
+	second, err := h.orch.Run(ctx, h.assignment())
+	if err != nil {
+		t.Fatalf("second run failed instead of reusing the worktree: %v", err)
+	}
+	if second.Worktree.Path != first.Worktree.Path {
+		t.Errorf("worktree = %q, want the preserved %q", second.Worktree.Path, first.Worktree.Path)
+	}
+	if second.Worktree.Branch != first.Worktree.Branch {
+		t.Errorf("branch = %q, want the preserved %q", second.Worktree.Branch, first.Worktree.Branch)
+	}
+
+	// And the agent's earlier work is still there for it to build on.
+	if _, err := os.Stat(filepath.Join(second.Worktree.Path, "hello.txt")); err != nil {
+		t.Errorf("the preserved worktree lost the previous attempt's work: %v", err)
+	}
+}
+
+// TestAFailedStartParksTheTicket is the second bug a real run found. A run that fails before the
+// agent starts used to leave the ticket in Assigned: holding its project's serial slot, absent
+// from Needs You, and invisible. The queue exists to prevent exactly that.
+func TestAFailedStartParksTheTicket(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed(nil)
+	ctx := context.Background()
+
+	// An assignment naming a provider that is not registered fails during setup, before any
+	// agent process exists.
+	_, err := h.orch.Run(ctx, agentrun.Assignment{
+		TicketID: "GR-100", HostID: "local", ProviderID: "no-such-provider", Model: "m",
+	})
+	if err == nil {
+		t.Fatal("running with an unregistered provider succeeded")
+	}
+
+	tk, gerr := h.db.GetTicket(ctx, "GR-100")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if !core.NeedsHuman(tk.State) {
+		t.Errorf("state = %q, want the ticket parked for a human rather than stranded", tk.State)
+	}
+
+	open, oerr := h.db.ListOpenAttention(ctx)
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	if len(open) != 1 {
+		t.Fatalf("attention = %+v, want one entry explaining the failed start", open)
+	}
+	if open[0].TicketID != "GR-100" {
+		t.Errorf("attention is not linked to the ticket: %+v", open[0])
+	}
+	// The reason has to carry the cause, or the human is told only that something went wrong.
+	if d, _ := open[0].Payload["detail"].(string); !strings.Contains(d, "no-such-provider") {
+		t.Errorf("payload does not name the cause: %+v", open[0].Payload)
+	}
+}

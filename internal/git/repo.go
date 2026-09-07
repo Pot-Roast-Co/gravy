@@ -509,3 +509,43 @@ func (r *LocalRepo) hasRemote(ctx context.Context) (bool, error) {
 	}
 	return res.code == 0, nil
 }
+
+// OpenWorktree returns the worktree checked out on a branch, if one exists.
+//
+// It exists because a ticket sent back for another attempt keeps its worktree: recreating it
+// would fail on the existing branch, and removing it would throw away the work the reviewer
+// asked to be built on.
+//
+// `git worktree list --porcelain` is the source of truth rather than the recorded path, since
+// the path can be stale — deleted by hand, or left behind by a daemon that was killed.
+func (r *LocalRepo) OpenWorktree(ctx context.Context, branch string) (Worktree, bool, error) {
+	if branch == "" {
+		return Worktree{}, false, fmt.Errorf("open worktree: no branch given")
+	}
+
+	out, err := r.runner.mustRun(ctx, r.repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return Worktree{}, false, fmt.Errorf("open worktree %q: %w", branch, err)
+	}
+
+	want := "refs/heads/" + branch
+	var path string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.TrimSpace(line) == "":
+			path = ""
+		case strings.HasPrefix(line, "branch "):
+			if strings.TrimSpace(strings.TrimPrefix(line, "branch ")) != want || path == "" {
+				continue
+			}
+			// The entry can name a directory that is no longer there.
+			if _, statErr := r.runner.mustRun(ctx, path, "rev-parse", "--is-inside-work-tree"); statErr != nil {
+				return Worktree{}, false, nil
+			}
+			return Worktree{Path: path, Branch: branch}, true, nil
+		}
+	}
+	return Worktree{}, false, nil
+}

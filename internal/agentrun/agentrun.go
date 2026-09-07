@@ -44,6 +44,7 @@ type Repo interface {
 	// TargetRef resolves the target branch to the ref holding freshly-fetched state.
 	TargetRef(ctx context.Context, branch string) (string, error)
 	CreateWorktree(ctx context.Context, branch, base string) (git.Worktree, error)
+	OpenWorktree(ctx context.Context, branch string) (git.Worktree, bool, error)
 	RemoveWorktree(ctx context.Context, w git.Worktree) error
 	CommitAll(ctx context.Context, w git.Worktree, msg string) (string, error)
 	Diff(ctx context.Context, w git.Worktree, base string) (git.Diff, error)
@@ -204,7 +205,41 @@ func (o *Orchestrator) Run(ctx context.Context, a Assignment) (res Result, err e
 	}()
 	defer release()
 
-	return o.run(ctx, a)
+	res, err = o.run(ctx, a)
+	if err != nil {
+		// A run that fails before the agent ever starts — a worktree that will not open, a
+		// fetch that fails, a provider that is not registered — would otherwise leave the
+		// ticket in Assigned: holding its project's serial slot, absent from Needs You, and
+		// invisible. That is the exact outcome the queue exists to prevent, so the failure
+		// is parked here rather than merely logged by the caller.
+		res.FinalState = o.parkFailedStart(ctx, a.TicketID, err)
+	}
+	return res, err
+}
+
+// parkFailedStart moves a ticket that never got going into Needs You, and reports where it
+// ended up. It is best-effort: the caller is already returning an error, and failing to park is
+// not a reason to lose that error.
+func (o *Orchestrator) parkFailedStart(ctx context.Context, ticketID string, cause error) core.State {
+	ticket, gerr := o.store.GetTicket(ctx, ticketID)
+	if gerr != nil {
+		return ""
+	}
+	// Already settled, or already waiting on a human: leave it alone.
+	if !core.IsActive(ticket.State) || core.NeedsHuman(ticket.State) {
+		return ticket.State
+	}
+
+	state, perr := o.park(ctx, ticket, "", core.ReasonHostUnavailable, map[string]any{
+		"reason": "the run could not be started",
+		"detail": cause.Error(),
+	})
+	if perr != nil {
+		o.log.Error("could not park a ticket whose run failed to start",
+			"ticket", ticketID, "error", perr)
+		return ticket.State
+	}
+	return state
 }
 
 func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
@@ -250,9 +285,20 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, fmt.Errorf("agentrun: %w", err)
 	}
 	branch := git.BranchName(ticket.ID, ticket.Title)
-	wt, err := repo.CreateWorktree(ctx, branch, base)
+
+	// A ticket sent back for another attempt already has a worktree, and preserving it is the
+	// entire point of sending work back rather than restarting it. Creating one unconditionally
+	// fails on the existing branch, which left a requeued ticket permanently unable to run.
+	wt, reused, err := repo.OpenWorktree(ctx, branch)
 	if err != nil {
 		return res, fmt.Errorf("agentrun: %w", err)
+	}
+	if !reused {
+		if wt, err = repo.CreateWorktree(ctx, branch, base); err != nil {
+			return res, fmt.Errorf("agentrun: %w", err)
+		}
+	} else {
+		o.log.Info("continuing in the existing worktree", "ticket", ticket.ID, "branch", branch)
 	}
 	res.Worktree = wt
 

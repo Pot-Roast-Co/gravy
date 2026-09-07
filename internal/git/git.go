@@ -57,6 +57,8 @@ func (d Diff) Totals() (additions, deletions int) {
 type Repo interface {
 	Fetch(ctx context.Context) error
 	CreateWorktree(ctx context.Context, branch, base string) (Worktree, error)
+	// OpenWorktree returns an existing worktree for a branch, if there is one.
+	OpenWorktree(ctx context.Context, branch string) (Worktree, bool, error)
 	RemoveWorktree(ctx context.Context, w Worktree) error
 	Rebase(ctx context.Context, w Worktree, onto string) (RebaseResult, error)
 	CommitAll(ctx context.Context, w Worktree, msg string) (string, error)
