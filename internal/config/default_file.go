@@ -30,12 +30,22 @@ providers:
 
 routes:
   # Tickets request a route, never a model. Each route is an ordered list of "provider/model"
-  # choices: when a provider reports a genuine quota, rate-limit or auth failure, Gravy cools
-  # that model down and moves to the next choice. Ordinary coding failures never do this.
+  # choices.
+  #
+  # A route can only name a provider this build has an adapter for — the list above selects
+  # among what is compiled in, it cannot add a new agent. Naming an unknown provider is
+  # ignored rather than silently becoming the default.
+  #
+  # In v0.1 the FIRST usable choice is used for everything and there is no fallback: quota and
+  # rate-limit cooldowns arrive with the router (GR-016). Reorder these to change which agent
+  # runs your work.
   implementation:
     - claude-code/sonnet
-    - codex/gpt-5-codex
     - claude-code/haiku
+  # Codex picks its own model on a ChatGPT-account login and rejects explicit names, so the
+  # "default" here means "do not ask for one". On an API-key login you can name a real model.
+  # Move this above claude-code to run your work through Codex instead.
+  # - codex/default
   review:
     - claude-code/sonnet
   cheap:

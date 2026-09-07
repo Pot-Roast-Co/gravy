@@ -131,7 +131,10 @@ func Default() Config {
 			"codex":       {Enabled: true, Command: "codex"},
 		},
 		Routes: map[core.Route][]string{
-			core.RouteImplementation: {"claude-code/sonnet", "codex/gpt-5-codex", "claude-code/haiku"},
+			// codex is deliberately absent: on a ChatGPT-account login it rejects every
+			// explicit model name, so a route naming one sends work to a guaranteed
+			// failure. The default file documents `codex/default` as the way to enable it.
+			core.RouteImplementation: {"claude-code/sonnet", "claude-code/haiku"},
 			core.RouteReview:         {"claude-code/sonnet"},
 			core.RouteCheap:          {"claude-code/haiku"},
 			core.RouteStandard:       {"claude-code/sonnet"},

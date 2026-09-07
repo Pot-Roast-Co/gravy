@@ -287,7 +287,11 @@ func TestHomeRespectsEnv(t *testing.T) {
 }
 
 func TestRouteChoices(t *testing.T) {
+	// A route written out explicitly rather than whichever one Default() ships: what is being
+	// tested is that parsing preserves order, not what the defaults happen to contain.
 	c := Default()
+	c.Routes[core.RouteImplementation] = []string{"claude-code/sonnet", "codex/default", "claude-code/haiku"}
+
 	got, err := c.RouteChoices(core.RouteImplementation)
 	if err != nil {
 		t.Fatalf("RouteChoices: %v", err)
@@ -299,8 +303,11 @@ func TestRouteChoices(t *testing.T) {
 		t.Errorf("first choice = %+v, want claude-code/sonnet", got[0])
 	}
 	// Ordering is the fallback order and must be preserved exactly.
-	if FormatChoice(got[1]) != "codex/gpt-5-codex" {
+	if FormatChoice(got[1]) != "codex/default" {
 		t.Errorf("second choice = %q", FormatChoice(got[1]))
+	}
+	if FormatChoice(got[2]) != "claude-code/haiku" {
+		t.Errorf("third choice = %q", FormatChoice(got[2]))
 	}
 
 	// An unconfigured route returns nothing rather than erroring: it falls through.

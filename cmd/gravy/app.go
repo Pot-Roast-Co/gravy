@@ -17,6 +17,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/daemon"
 	"github.com/pot-roast-co/gravy/internal/host"
 	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
+	"github.com/pot-roast-co/gravy/internal/provider/adapters/codex"
 	"github.com/pot-roast-co/gravy/internal/runlog"
 	"github.com/pot-roast-co/gravy/internal/scheduler"
 	"github.com/pot-roast-co/gravy/internal/store"
@@ -67,9 +68,11 @@ func newApp(ctx context.Context) (*app, error) {
 		return nil, err
 	}
 
-	// M0 runs a single hardcoded route. GR-016 replaces this with the real router behind the
-	// same interface.
-	route := scheduler.FixedRoute{ProviderID: claudecode.ID, Model: firstModel(cfg)}
+	// Each route resolves independently, so a ticket asking for "strong" can run a different
+	// agent from one asking for "cheap" — and two agents can be working at the same time.
+	// This is not GR-016: there is no fallback and no cooldown, so a quota failure parks the
+	// ticket rather than moving to the next choice.
+	route := configRouter{cfg: cfg}
 	sched := scheduler.New(db, pool, route)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -96,12 +99,14 @@ func newApp(ctx context.Context) (*app, error) {
 	logs := runlog.New(filepath.Join(home, "runs"))
 	orch = orch.WithLogs(logs)
 	orch.RegisterHost(h)
-	orch.RegisterProvider(claudecode.New(claudecode.WithCommand(providerCommand(cfg))))
+	orch.RegisterProvider(claudecode.New(claudecode.WithCommand(providerCommand(cfg, claudecode.ID, claudecode.DefaultCommand))))
+	orch.RegisterProvider(codex.New(codex.WithCommand(providerCommand(cfg, codex.ID, codex.DefaultCommand))))
 
 	// The advisory review pass. It runs on the review route, which is deliberately a cheaper
 	// model than the implementation route: its job is triage a human can skim, not a second
 	// opinion worth paying for twice.
-	orch = orch.WithReview(claudecode.ID, routeModel(cfg, core.RouteReview), cfg.Context.TokenBudget*4)
+	reviewRoute := reviewChoice(cfg)
+	orch = orch.WithReview(reviewRoute.ProviderID, reviewRoute.Model, cfg.Context.TokenBudget*4)
 
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
@@ -130,39 +135,56 @@ func (l lander) Continue(ctx context.Context, ticketID string) error {
 // loop builds the scheduler loop.
 func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log) }
 
-// routeModel returns the model a route resolves to for the claude-code provider.
-func routeModel(cfg config.Config, route core.Route) string {
-	choices, err := cfg.RouteChoices(route)
-	if err != nil || len(choices) == 0 {
-		return "sonnet"
-	}
-	for _, c := range choices {
-		if c.ProviderID == claudecode.ID {
-			return c.Model
+// configRouter resolves each route to its first usable choice from the config.
+//
+// It is the interim router: real fallback, cooldowns and quota handling are GR-016. What it adds
+// over a single hardcoded choice is that routes resolve independently, so different tickets can
+// run different agents — and therefore run different agents concurrently.
+type configRouter struct{ cfg config.Config }
+
+// Resolve picks the first choice for a route whose provider this build can actually run.
+//
+// A route naming a provider with no adapter is skipped rather than becoming the queue's default,
+// because the config file can only select among what is compiled in.
+func (r configRouter) Resolve(_ context.Context, route core.Route, _ string) (core.Choice, error) {
+	choices, err := r.cfg.RouteChoices(route)
+	if err == nil {
+		for _, c := range choices {
+			if _, ok := registeredProviders[c.ProviderID]; ok && enabled(r.cfg, c.ProviderID) {
+				return c, nil
+			}
 		}
 	}
-	return choices[0].Model
-}
 
-// firstModel returns the model the implementation route resolves to.
-func firstModel(cfg config.Config) string {
-	choices, err := cfg.RouteChoices(core.RouteImplementation)
-	if err != nil || len(choices) == 0 {
-		return "sonnet"
-	}
-	for _, c := range choices {
-		if c.ProviderID == claudecode.ID {
-			return c.Model
+	// An empty or unusable route falls back to the implementation route, then to claude-code:
+	// a ticket must still run, and refusing to schedule it would be a worse answer than
+	// running it on the default agent.
+	if route != core.RouteImplementation {
+		if c, ferr := r.Resolve(context.Background(), core.RouteImplementation, ""); ferr == nil {
+			return c, nil
 		}
 	}
-	return choices[0].Model
+	return core.Choice{ProviderID: claudecode.ID, Model: "sonnet"}, nil
 }
 
-func providerCommand(cfg config.Config) string {
-	if p, ok := cfg.Providers[claudecode.ID]; ok && p.Command != "" {
+// registeredProviders is what this build can actually run. Adding an adapter means adding a
+// package and an entry here, and nothing else.
+var registeredProviders = map[string]string{
+	claudecode.ID: claudecode.DefaultCommand,
+	codex.ID:      codex.DefaultCommand,
+}
+
+func enabled(cfg config.Config, providerID string) bool {
+	p, ok := cfg.Providers[providerID]
+	return !ok || p.Enabled
+}
+
+// providerCommand returns the executable configured for a provider, or its default.
+func providerCommand(cfg config.Config, providerID, fallback string) string {
+	if p, ok := cfg.Providers[providerID]; ok && p.Command != "" {
 		return p.Command
 	}
-	return claudecode.DefaultCommand
+	return fallback
 }
 
 // newID returns a short random identifier.
@@ -172,4 +194,10 @@ func newID() string {
 		return fmt.Sprintf("id-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// reviewChoice resolves the review route for the advisory review pass.
+func reviewChoice(cfg config.Config) core.Choice {
+	c, _ := configRouter{cfg: cfg}.Resolve(context.Background(), core.RouteReview, "")
+	return c
 }
