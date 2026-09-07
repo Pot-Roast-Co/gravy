@@ -3,9 +3,9 @@ package agentrun
 import (
 	"path/filepath"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // LocalRepos builds a git repository manager per project, rooted under the Gravy home.

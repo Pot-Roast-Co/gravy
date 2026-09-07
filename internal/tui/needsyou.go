@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // nyMode is what the keyboard is doing on the Needs You screen.

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // JSON-RPC 2.0 over a unix socket, one JSON object per line.

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/review"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/review"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // ReviewBundle is everything the Review screen shows about one ticket, assembled in one read.

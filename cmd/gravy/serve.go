@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/daemon"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/daemon"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // runServe is the daemon: it owns the socket, the scheduler loop and the database.

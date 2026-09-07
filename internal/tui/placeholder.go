@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // placeholder stands in for a section whose screen is a later ticket.

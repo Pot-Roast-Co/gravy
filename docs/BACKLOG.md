@@ -91,7 +91,7 @@ is `docs/SPIKE-claude-code.md`, not an implementation.
 
 **Goal.** A buildable, lintable Go repository with the layering rules enforced mechanically.
 
-**Scope.** `go.mod` (module `github.com/bobbybrady/gravy`, Go 1.23). Directory skeleton per
+**Scope.** `go.mod` (module `github.com/pot-roast-co/gravy`, Go 1.23). Directory skeleton per
 `ARCHITECTURE.md` §2 with a doc.go in each package. `Makefile` with `build`, `test`, `lint`,
 `check`, `run`. `.golangci.yml`. GitHub Actions running `make check` on push and PR. A custom
 lint check (`make lint-layers`, a small Go program in `tools/`) that fails when a package outside

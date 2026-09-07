@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // TicketDetail is a ticket with what the queue screens need to show and order it.

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // Script defines what one run does.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // runningFixture is a ticket on its second attempt, with the first one's failure recorded.

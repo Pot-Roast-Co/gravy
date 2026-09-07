@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // TestParseRealStream runs the parser over a stream captured from the real CLI.

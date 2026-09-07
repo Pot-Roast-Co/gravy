@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/validate"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/validate"
 )
 
 // stubModel answers with whatever it was given, or fails.

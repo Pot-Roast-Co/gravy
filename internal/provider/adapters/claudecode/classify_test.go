@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // fixture reads a captured sample of real CLI output.

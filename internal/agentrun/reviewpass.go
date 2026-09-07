@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/provider"
-	"github.com/bobbybrady/gravy/internal/review"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/review"
 )
 
 // WithReviewer enables the advisory review pass.

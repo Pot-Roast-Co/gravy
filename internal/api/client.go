@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // Client is a Service backed by the daemon's unix socket.

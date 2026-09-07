@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // Step is one validation command. It is core's type, aliased so callers can depend on this

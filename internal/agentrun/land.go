@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/validate"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/validate"
 )
 
 // Lander carries approved work onto the target branch.

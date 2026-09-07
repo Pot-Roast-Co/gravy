@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // TestDefaultFileMatchesDefault is the anti-drift test: the documented file Gravy writes on

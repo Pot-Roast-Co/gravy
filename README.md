@@ -63,7 +63,7 @@ Idle workers automatically claim eligible Ready tickets. You write tickets and a
 ## Install
 
 ```sh
-go install github.com/bobbybrady/gravy/cmd/gravy@latest
+go install github.com/pot-roast-co/gravy/cmd/gravy@latest
 gravy            # first run walks you through setup
 ```
 

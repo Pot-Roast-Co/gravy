@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/agentrun"
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/agentrun"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/git"
 )
 
 // runReview shows what is waiting for judgement.

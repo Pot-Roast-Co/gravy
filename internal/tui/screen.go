@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bobbybrady/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/api"
 )
 
 // Section is one destination in the frame, reachable by its number key.

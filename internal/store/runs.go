@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 const runColumns = `id, ticket_id, host_id, provider_id, model, session_ref, state,

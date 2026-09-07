@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // fakeStore is an in-memory Store. The scheduler only reads, so a map is enough and keeps the

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/runlog"
+	"github.com/pot-roast-co/gravy/internal/runlog"
 )
 
 // LogLine is one line of a run's output.

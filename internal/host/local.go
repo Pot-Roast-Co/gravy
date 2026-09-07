@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // LocalHost runs work as the current user on this machine.

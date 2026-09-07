@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // settings is the per-run settings document passed via --settings.

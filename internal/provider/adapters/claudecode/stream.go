@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // streamEvent is one line of `--output-format stream-json` output.

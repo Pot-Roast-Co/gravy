@@ -3,7 +3,7 @@ package claudecode
 import (
 	"regexp"
 
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // matcher is the classification table for the claude CLI.

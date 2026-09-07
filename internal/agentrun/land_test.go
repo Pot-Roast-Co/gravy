@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/agentrun"
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/provider/fake"
+	"github.com/pot-roast-co/gravy/internal/agentrun"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/provider/fake"
 )
 
 // landReady drives a ticket to Review so landing can be exercised, writing the given file into

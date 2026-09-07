@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // PidFileName is the daemon's pidfile inside the Gravy home directory.

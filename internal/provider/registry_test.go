@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider"
-	"github.com/bobbybrady/gravy/internal/provider/fake"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider/fake"
 )
 
 // TestRegistryRejectsDuplicates is AC1.

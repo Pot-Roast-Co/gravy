@@ -12,7 +12,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // SocketName is the daemon's socket, inside the Gravy home directory.

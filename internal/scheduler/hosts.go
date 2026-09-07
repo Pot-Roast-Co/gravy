@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // hostState is one host's capabilities and load at the moment of a tick.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // Worktree is an isolated working copy for one ticket.

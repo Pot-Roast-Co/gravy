@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 func openTest(t *testing.T) *DB {

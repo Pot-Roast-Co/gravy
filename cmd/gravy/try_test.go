@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 func TestRelativize(t *testing.T) {

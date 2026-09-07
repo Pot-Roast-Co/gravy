@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
-	rev "github.com/bobbybrady/gravy/internal/review"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
+	rev "github.com/pot-roast-co/gravy/internal/review"
 )
 
 // reviewMode is what the keyboard is currently doing.

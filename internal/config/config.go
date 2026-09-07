@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // Config is the global configuration in ~/.gravy/config.yaml.

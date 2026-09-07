@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/bobbybrady/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/api"
 )
 
 // connState is how the frame is currently getting its data.

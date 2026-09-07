@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // EventKind names what changed. Clients re-read what they render rather than reconstructing

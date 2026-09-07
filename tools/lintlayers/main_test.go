@@ -93,7 +93,7 @@ func TestCheck(t *testing.T) {
 			// core depends on nothing, including Gravy's own packages: whatever core imports,
 			// every other package inherits.
 			name:  "core may not import another gravy package",
-			files: map[string]string{"internal/core/state.go": "package p\n\nimport _ \"github.com/bobbybrady/gravy/internal/store\"\n"},
+			files: map[string]string{"internal/core/state.go": "package p\n\nimport _ \"github.com/pot-roast-co/gravy/internal/store\"\n"},
 			want:  1,
 		},
 		{
@@ -145,7 +145,7 @@ func TestIsStdlib(t *testing.T) {
 		{"github.com/charmbracelet/bubbletea", false},
 		{"modernc.org/sqlite", false},
 		{"gopkg.in/yaml.v3", false},
-		{"github.com/bobbybrady/gravy/internal/core", false},
+		{"github.com/pot-roast-co/gravy/internal/core", false},
 	}
 	for _, tt := range tests {
 		if got := isStdlib(tt.path); got != tt.want {

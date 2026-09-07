@@ -10,17 +10,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/agentrun"
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/config"
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/daemon"
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider/adapters/claudecode"
-	"github.com/bobbybrady/gravy/internal/runlog"
-	"github.com/bobbybrady/gravy/internal/scheduler"
-	"github.com/bobbybrady/gravy/internal/store"
-	"github.com/bobbybrady/gravy/internal/validate"
+	"github.com/pot-roast-co/gravy/internal/agentrun"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/config"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/daemon"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
+	"github.com/pot-roast-co/gravy/internal/runlog"
+	"github.com/pot-roast-co/gravy/internal/scheduler"
+	"github.com/pot-roast-co/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/validate"
 )
 
 // app is the wiring every command shares.

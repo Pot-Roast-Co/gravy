@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // ProjectType is a recognised kind of repository.

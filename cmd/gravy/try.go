@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/git"
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider"
-	"github.com/bobbybrady/gravy/internal/provider/adapters/claudecode"
+	"github.com/pot-roast-co/gravy/internal/git"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
 )
 
 // runTry drives one ticket end to end: fetch, worktree, agent, commit, diff.

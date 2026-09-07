@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 	"gopkg.in/yaml.v3"
 )
 

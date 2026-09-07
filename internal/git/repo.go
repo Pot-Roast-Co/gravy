@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // DefaultTimeout bounds any single git invocation. Fetches against a slow remote are the

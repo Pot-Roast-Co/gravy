@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/config"
+	"github.com/pot-roast-co/gravy/internal/config"
 )
 
 // Urgency ranks a notification. It maps onto the platform's own notion of urgency where one

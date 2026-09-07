@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // idleRunner stands in for the scheduler loop: the lifecycle under test is the daemon's, not

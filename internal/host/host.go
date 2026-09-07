@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // Host is a machine Gravy can run work on.

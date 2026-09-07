@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/bobbybrady/gravy/internal/tui"
+	"github.com/pot-roast-co/gravy/internal/tui"
 )
 
 // runTUI is the default command: the frame, against the in-process service.

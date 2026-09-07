@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 func testRunner(t *testing.T) (*StepRunner, host.Host, string) {

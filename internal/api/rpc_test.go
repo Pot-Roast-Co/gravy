@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/runlog"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/runlog"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // served starts a server over a real store and returns a connected client.

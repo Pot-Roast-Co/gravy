@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // Assignment is a decision to run a ticket on a host with a provider and model.

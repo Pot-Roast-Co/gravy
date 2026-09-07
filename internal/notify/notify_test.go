@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/config"
+	"github.com/pot-roast-co/gravy/internal/config"
 )
 
 // fakeRunner records commands instead of executing them.

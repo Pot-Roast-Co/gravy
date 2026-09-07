@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider"
 )
 
 // parseResult builds a result event from a JSON line, as the stream reader would.

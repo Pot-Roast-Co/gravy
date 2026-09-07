@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/api"
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // queueFixture holds one of every reason M0 can raise, plus one this build does not know about.

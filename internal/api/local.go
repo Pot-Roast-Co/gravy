@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/runlog"
-	"github.com/bobbybrady/gravy/internal/scheduler"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/runlog"
+	"github.com/pot-roast-co/gravy/internal/scheduler"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // Local implements Service directly against the store.

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/agentrun"
-	"github.com/bobbybrady/gravy/internal/scheduler"
+	"github.com/pot-roast-co/gravy/internal/agentrun"
+	"github.com/pot-roast-co/gravy/internal/scheduler"
 )
 
 // Loop drives the queue: tick the scheduler, start what it assigns, repeat.

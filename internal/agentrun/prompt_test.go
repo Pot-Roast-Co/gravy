@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bobbybrady/gravy/internal/agentrun"
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/agentrun"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // TestFeedbackReachesTheNextAttempt is the half of "request changes" that matters.

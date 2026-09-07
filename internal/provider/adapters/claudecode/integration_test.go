@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/host"
-	"github.com/bobbybrady/gravy/internal/provider"
-	"github.com/bobbybrady/gravy/internal/provider/adapters/claudecode"
+	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/provider"
+	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
 )
 
 // These tests drive the real claude CLI. They cost tokens and need an authenticated install, so

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // Service is everything a client can ask Gravy to do.

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
-	"github.com/bobbybrady/gravy/internal/store"
+	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/store"
 )
 
 // atReview returns a service holding one ticket awaiting judgement, with an open queue entry.

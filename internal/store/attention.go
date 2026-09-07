@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bobbybrady/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 const attentionColumns = `id, project_id, ticket_id, run_id, reason, payload, resolved, created_at`
