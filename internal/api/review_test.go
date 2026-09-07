@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,7 +44,10 @@ func atReview(t *testing.T) (*Local, *store.DB) {
 		Reason: core.ReasonReviewPending, CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	return NewLocal(db, nil, nil, func() string { return "id" }), db
+	// A counter, not a constant: more than one CreateTicket in a test would otherwise collide
+	// on the primary key and fail for a reason that has nothing to do with the test.
+	var n int
+	return NewLocal(db, nil, nil, func() string { n++; return fmt.Sprintf("id-%d", n) }), db
 }
 
 // TestRequestChangesCarriesTheNoteForward is AC5's real content: a retry with no new information
