@@ -31,6 +31,12 @@ type fakeService struct {
 	approved  []string
 	rejected  []string
 	changes   map[string]string
+
+	// logs feeds StreamLogs; killed records what the detail screen asked to stop.
+	logs    chan api.LogLine
+	killed  []string
+	runs    []core.Run
+	explain api.Explanation
 }
 
 func newFake() *fakeService {
@@ -95,9 +101,20 @@ func (f *fakeService) RequestChanges(_ context.Context, id, feedback string) err
 }
 
 func (f *fakeService) StreamLogs(ctx context.Context, runID string) (<-chan api.LogLine, func(), error) {
+	if f.logs != nil {
+		return f.logs, func() {}, nil
+	}
 	ch := make(chan api.LogLine)
 	close(ch)
 	return ch, func() {}, nil
+}
+
+func (f *fakeService) KillRun(_ context.Context, runID string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.killed = append(f.killed, runID)
+	return nil
 }
 
 func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) { return nil, nil }
@@ -117,7 +134,7 @@ func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error)    {
 func (f *fakeService) ListAttention(context.Context) ([]core.Attention, error) { return nil, nil }
 func (f *fakeService) ResolveAttention(context.Context, string) error          { return nil }
 func (f *fakeService) ExplainTicket(context.Context, string) (api.Explanation, error) {
-	return api.Explanation{}, nil
+	return f.explain, nil
 }
 
 // ---- helpers -------------------------------------------------------------

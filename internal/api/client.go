@@ -135,6 +135,10 @@ func (c *Client) ListRuns(ctx context.Context, ticketID string) ([]core.Run, err
 	return out, c.call(ctx, mListRuns, ticketIDParams{TicketID: ticketID}, &out)
 }
 
+func (c *Client) KillRun(ctx context.Context, runID string) error {
+	return c.call(ctx, mKillRun, runIDParams{RunID: runID}, nil)
+}
+
 func (c *Client) GetReview(ctx context.Context, ticketID string) (ReviewBundle, error) {
 	var out ReviewBundle
 	return out, c.call(ctx, mGetReview, ticketIDParams{TicketID: ticketID}, &out)

@@ -100,7 +100,7 @@ func newApp(ctx context.Context) (*app, error) {
 
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
-		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}).WithLogs(logs),
+		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}).WithLogs(logs).WithKiller(orch),
 		logs:  logs,
 		sched: sched, orch: orch, log: log,
 	}, nil

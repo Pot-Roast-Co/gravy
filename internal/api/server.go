@@ -295,6 +295,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.MoveTicket(ctx, p.ID, core.Event(p.Event))
 
+	case mKillRun:
+		var p runIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.KillRun(ctx, p.RunID)
+
 	case mListRuns:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

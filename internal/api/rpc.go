@@ -109,6 +109,7 @@ const (
 	mExplainTicket    = "ExplainTicket"
 	mEvents           = "Events"
 	mStreamLogs       = "StreamLogs"
+	mKillRun          = "KillRun"
 	// nEvent is the notification the server pushes on the Events stream.
 	nEvent = "event"
 	// nLogLine is the notification pushed on the StreamLogs stream.

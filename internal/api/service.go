@@ -31,6 +31,7 @@ type Service interface {
 	// StreamLogs follows a run's output. Like Events, the stop function ends the
 	// subscription and the channel closes when ctx does.
 	StreamLogs(ctx context.Context, runID string) (<-chan LogLine, func(), error)
+	KillRun(ctx context.Context, runID string) error
 
 	// review
 	GetReview(ctx context.Context, ticketID string) (ReviewBundle, error)

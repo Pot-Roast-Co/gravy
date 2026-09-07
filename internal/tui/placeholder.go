@@ -34,6 +34,7 @@ func newPlaceholders() map[Section]Screen {
 	// Built screens replace their placeholder here as each ticket lands.
 	screens[SectionDashboard] = dashboard{}
 	screens[SectionReview] = newReview()
+	screens[SectionRunning] = newRunning()
 	return screens
 }
 

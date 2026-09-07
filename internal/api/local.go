@@ -33,6 +33,42 @@ type Local struct {
 	lander Lander
 	// logs is nil when this service cannot read run output.
 	logs *runlog.Store
+	// killer is nil on a client that may not stop work.
+	killer Killer
+}
+
+// Killer stops a running agent and everything it spawned.
+//
+// An interface for the same reason as Lander: api says what it needs rather than depending on
+// how running works, and a read-only client has no business being able to kill a run.
+type Killer interface {
+	Kill(ticketID string) error
+}
+
+// WithKiller lets the service stop runs.
+func (l *Local) WithKiller(k Killer) *Local {
+	l.killer = k
+	return l
+}
+
+// KillRun terminates a run's agent and everything it spawned.
+//
+// It takes a run id because that is what the detail screen is looking at, and resolves the
+// ticket itself: the orchestrator tracks live work by ticket, since that is what holds a worker
+// slot.
+func (l *Local) KillRun(ctx context.Context, runID string) error {
+	if l.killer == nil {
+		return fmt.Errorf("this client cannot stop runs")
+	}
+	run, err := l.db.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if err := l.killer.Kill(run.TicketID); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventRunChanged, TicketID: run.TicketID, RunID: runID})
+	return nil
 }
 
 // WithLander gives the service the merge gate. A service without one can read and queue work
