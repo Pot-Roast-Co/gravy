@@ -10,7 +10,8 @@ import (
 )
 
 const ticketColumns = `id, project_id, title, body, state, priority, position, route,
-	requirements, host_override, worktree_path, branch, retry_count, created_at, updated_at`
+	requirements, host_override, worktree_path, branch, retry_count, feedback,
+	created_at, updated_at`
 
 // CreateTicket inserts a ticket. When Position is zero it is placed at the end of its project's
 // queue.
@@ -34,10 +35,11 @@ func (d *DB) CreateTicket(ctx context.Context, t core.Ticket) error {
 	}
 
 	_, err = d.sql.ExecContext(ctx, `INSERT INTO tickets (`+ticketColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.ProjectID, t.Title, t.Body, string(t.State), t.Priority, t.Position,
 		string(t.Route), req, nullString(t.HostOverride), nullString(t.WorktreePath),
-		nullString(t.Branch), t.RetryCount, unixOrZero(t.CreatedAt), unixOrZero(t.UpdatedAt))
+		nullString(t.Branch), t.RetryCount, t.Feedback,
+		unixOrZero(t.CreatedAt), unixOrZero(t.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("create ticket %q: %w", t.ID, err)
 	}
@@ -120,11 +122,12 @@ func (d *DB) UpdateTicket(ctx context.Context, t core.Ticket) error {
 	}
 	res, err := d.exec(ctx, `UPDATE tickets SET
 		title=?, body=?, state=?, priority=?, position=?, route=?, requirements=?,
-		host_override=?, worktree_path=?, branch=?, retry_count=?, updated_at=unixepoch()
+		host_override=?, worktree_path=?, branch=?, retry_count=?, feedback=?,
+		updated_at=unixepoch()
 		WHERE id=?`,
 		t.Title, t.Body, string(t.State), t.Priority, t.Position, string(t.Route), req,
 		nullString(t.HostOverride), nullString(t.WorktreePath), nullString(t.Branch),
-		t.RetryCount, t.ID)
+		t.RetryCount, t.Feedback, t.ID)
 	if err != nil {
 		return fmt.Errorf("update ticket %q: %w", t.ID, err)
 	}
@@ -274,7 +277,7 @@ func scanTicket(s scanner) (core.Ticket, error) {
 		createdAt, updatedAt           int64
 	)
 	if err := s.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Body, &state, &t.Priority, &t.Position,
-		&route, &req, &hostOverride, &worktree, &branch, &t.RetryCount,
+		&route, &req, &hostOverride, &worktree, &branch, &t.RetryCount, &t.Feedback,
 		&createdAt, &updatedAt); err != nil {
 		return core.Ticket{}, err
 	}

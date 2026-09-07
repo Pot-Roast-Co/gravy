@@ -40,7 +40,15 @@ type (
 		section Section
 		focus   string
 	}
+
+	// enteredMsg tells a screen it has just become active, and which row it should open. It is
+	// how a screen knows to load: no message reaches a screen that is not being shown.
+	enteredMsg struct{ focus string }
 )
+
+func entered(focus string) tea.Cmd {
+	return func() tea.Msg { return enteredMsg{focus: focus} }
+}
 
 // Goto returns a command asking the frame to switch section.
 func Goto(s Section, focus string) tea.Cmd {
@@ -169,7 +177,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gotoMsg:
 		m.active, m.showHelp = msg.section, false
 		m.focus = msg.focus
-		return m, nil
+		return m, entered(msg.focus)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -188,6 +196,7 @@ func (m Model) viewContext() ViewContext {
 		height = 0
 	}
 	return ViewContext{
+		Svc:   m.svc,
 		Width: m.width, Height: height,
 		Theme: m.theme, Status: m.status, Filter: m.filter,
 	}
@@ -241,7 +250,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if s, ok := m.keys.SectionFor(key); ok {
 		m.active, m.showHelp = s, false
-		return m, nil
+		// Tell the destination it is now on screen, so a screen that loads its own data
+		// knows to. Nothing else reaches a screen that was not being shown.
+		return m, entered(m.focus)
 	}
 
 	screen, cmd := m.screens[m.active].Update(msg, m.viewContext())

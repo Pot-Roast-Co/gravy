@@ -29,6 +29,12 @@ type Service interface {
 	// runs
 	ListRuns(ctx context.Context, ticketID string) ([]core.Run, error)
 
+	// review
+	GetReview(ctx context.Context, ticketID string) (ReviewBundle, error)
+	Approve(ctx context.Context, ticketID string) error
+	RequestChanges(ctx context.Context, ticketID, feedback string) error
+	Reject(ctx context.Context, ticketID string) error
+
 	// attention
 	ListAttention(ctx context.Context) ([]core.Attention, error)
 	ResolveAttention(ctx context.Context, id string) error

@@ -90,6 +90,10 @@ type Ticket struct {
 	Branch       string
 	// RetryCount is the self-correction budget consumed so far.
 	RetryCount int
+	// Feedback is what a reviewer wrote when sending the work back. It is carried into the
+	// next attempt's prompt and cleared once the ticket is approved or rejected — an agent
+	// asked to try again with no new information will usually produce the same output.
+	Feedback string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

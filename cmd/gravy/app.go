@@ -96,12 +96,21 @@ func newApp(ctx context.Context) (*app, error) {
 
 	return &app{
 		cfg: cfg, home: home, db: db, host: h,
-		svc:   api.NewLocal(db, sched, []host.Host{h}, newID),
+		svc:   api.NewLocal(db, sched, []host.Host{h}, newID).WithLander(lander{orch}),
 		sched: sched, orch: orch, log: log,
 	}, nil
 }
 
 func (a *app) Close() error { return a.db.Close() }
+
+// lander adapts the orchestrator to the narrow interface api needs, so api states what it
+// requires rather than depending on how landing works.
+type lander struct{ orch *agentrun.Orchestrator }
+
+func (l lander) Approve(ctx context.Context, ticketID string) error {
+	_, err := l.orch.Land().Approve(ctx, ticketID)
+	return err
+}
 
 // loop builds the scheduler loop.
 func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log) }

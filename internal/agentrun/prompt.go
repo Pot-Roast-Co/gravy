@@ -27,6 +27,12 @@ func (SimplePrompt) Build(_ context.Context, t core.Ticket, p core.Project, atte
 		b.WriteString("\n\n")
 	}
 
+	if fb := strings.TrimSpace(t.Feedback); fb != "" {
+		b.WriteString("## A reviewer sent this back\n\n")
+		b.WriteString(fb)
+		b.WriteString("\n\nAddress this specifically. It is why the previous attempt was not accepted.\n\n")
+	}
+
 	b.WriteString("## Working agreement\n\n")
 	b.WriteString("- You are working in an isolated git worktree. Everything you need is here.\n")
 	b.WriteString("- Make the change the ticket asks for, and nothing else.\n")

@@ -28,6 +28,15 @@ type Local struct {
 	newID  func() string
 	now    func() time.Time
 	events *broker
+	// lander is nil on a client that may not merge, which is why Approve checks it.
+	lander Lander
+}
+
+// WithLander gives the service the merge gate. A service without one can read and queue work
+// but cannot land it.
+func (l *Local) WithLander(ld Lander) *Local {
+	l.lander = ld
+	return l
 }
 
 // NewLocal returns a Service backed by the store.

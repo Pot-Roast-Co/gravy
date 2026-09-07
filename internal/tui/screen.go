@@ -61,6 +61,9 @@ func (s Section) Key() string { return strconv.Itoa(int(s) + 1) }
 // The frame fetches; screens render. A screen that wants data not in here is asking for an
 // api.Service method, not for permission to open the store.
 type ViewContext struct {
+	// Svc is the service. Screens issue their own reads and calls through it — the TUI holds
+	// no domain logic, but "render Service results and send Service calls" is exactly its job.
+	Svc api.Service
 	// Width and Height are the space the screen owns, excluding the header and status bar.
 	Width, Height int
 	Theme         Theme

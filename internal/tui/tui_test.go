@@ -22,6 +22,15 @@ type fakeService struct {
 	statusE error
 	events  chan api.Event
 	stopped bool
+
+	// review is what GetReview returns; the rest record what the screen asked for, which is
+	// what the approve/request-changes/reject assertions check.
+	review    api.ReviewBundle
+	reviewErr error
+	actionErr error
+	approved  []string
+	rejected  []string
+	changes   map[string]string
 }
 
 func newFake() *fakeService {
@@ -49,6 +58,40 @@ func (f *fakeService) Events(context.Context) (<-chan api.Event, func(), error) 
 		return nil, nil, f.statusE
 	}
 	return f.events, func() { f.stopped = true }, nil
+}
+
+func (f *fakeService) GetReview(_ context.Context, id string) (api.ReviewBundle, error) {
+	if f.reviewErr != nil {
+		return api.ReviewBundle{}, f.reviewErr
+	}
+	return f.review, nil
+}
+
+func (f *fakeService) Approve(_ context.Context, id string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.approved = append(f.approved, id)
+	return nil
+}
+
+func (f *fakeService) Reject(_ context.Context, id string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.rejected = append(f.rejected, id)
+	return nil
+}
+
+func (f *fakeService) RequestChanges(_ context.Context, id, feedback string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	if f.changes == nil {
+		f.changes = map[string]string{}
+	}
+	f.changes[id] = feedback
+	return nil
 }
 
 func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) { return nil, nil }
