@@ -30,6 +30,12 @@ var toolchains = []struct {
 	{"requirements.txt", []string{"python3", "pip", "pytest"}, "a Python project"},
 	{"Package.swift", []string{"swift", "xcodebuild"}, "a Swift package"},
 	{"Gemfile", []string{"bundle", "ruby", "rake"}, "a Ruby project"},
+	// A Makefile is usually the front door to the others: a project whose gate is `make check`
+	// hands its agent a command it is not allowed to run, and the agent then reinvents the
+	// gate one tool at a time.
+	{"Makefile", []string{"make"}, "a Makefile"},
+	{"justfile", []string{"just"}, "a justfile"},
+	{"Taskfile.yml", []string{"task"}, "a Taskfile"},
 }
 
 // seedAllowlist detects a project's toolchain and returns the commands it needs.

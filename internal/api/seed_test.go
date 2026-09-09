@@ -68,6 +68,13 @@ func TestSeedAllowlist(t *testing.T) {
 			want:  []string{"go", "npm", "node", "cd"},
 		},
 		{
+			// The gate a project actually runs. Without it the agent is handed `make check`
+			// and refused, then reinvents it one tool at a time.
+			name:  "a Makefile is the front door",
+			files: []string{"/repo/go.mod", "/repo/Makefile"},
+			want:  []string{"go", "make", "cd"},
+		},
+		{
 			name:  "nothing recognised stays empty rather than guessing",
 			files: []string{"/repo/README.md"},
 			none:  true,
