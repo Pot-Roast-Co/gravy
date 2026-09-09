@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -309,7 +310,21 @@ func (r *LocalRepo) Rebase(ctx context.Context, w Worktree, onto string) (Rebase
 		if _, aerr := r.runner.run(ctx, w.Path, "rebase", "--abort"); aerr != nil {
 			return RebaseResult{}, fmt.Errorf("rebase onto %q failed and could not be aborted: %w", onto, aerr)
 		}
-		return RebaseResult{Clean: false, ConflictFiles: conflicts}, nil
+
+		// A rebase git declined to begin is not a conflict. Reporting it as one produced
+		// "merge_conflict files=<nil>" on a branch whose target had never moved, and threw
+		// away the one line that said what was actually wrong — usually unstaged changes left
+		// in the worktree by whoever last ran the tests there.
+		detail := strings.TrimSpace(res.stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(res.stdout)
+		}
+		return RebaseResult{
+			Clean:         false,
+			ConflictFiles: conflicts,
+			Refused:       len(conflicts) == 0,
+			Detail:        firstLine(detail),
+		}, nil
 	}
 
 	after, err := r.runner.mustRun(ctx, w.Path, "rev-parse", "HEAD")
@@ -548,4 +563,84 @@ func (r *LocalRepo) OpenWorktree(ctx context.Context, branch string) (Worktree, 
 		}
 	}
 	return Worktree{}, false, nil
+}
+
+// ReviewCheckoutDirName is the directory a ticket's review checkout lives in, beside its
+// worktree.
+func ReviewCheckoutDirName(ticketID string) string { return "review-" + ticketID }
+
+// ReviewCheckout creates a throwaway checkout that shows a ticket's work as uncommitted changes.
+//
+// Gravy commits what the agent produced, which makes the diff durable but leaves the worktree
+// clean — and every editor's git integration (gutter marks, changed-file list, click-to-diff)
+// reports uncommitted changes, so it has nothing to show. Reading the work in an editor
+// therefore means reading files with no indication of what moved.
+//
+// The trick is to check out the commit and then reset the index back to its base: the files on
+// disk are the new versions, git sees every one of them as modified, and the editor lights up
+// exactly as it would for work you had just typed. It is a view, not a branch — nothing is
+// committed here and nothing is read back from it.
+func (r *LocalRepo) ReviewCheckout(ctx context.Context, ticketID, commit, base string) (Worktree, error) {
+	if commit == "" || base == "" {
+		return Worktree{}, fmt.Errorf("review checkout %s: need both a commit and its base", ticketID)
+	}
+
+	dir := filepath.Join(r.worktreeRoot, ReviewCheckoutDirName(ticketID))
+
+	// Reopening an existing checkout is the common case: pressing the key twice should show
+	// the same thing rather than failing on a directory that is already there.
+	if _, err := os.Stat(dir); err == nil {
+		return Worktree{Path: dir, Base: base}, nil
+	}
+
+	// Detached: this checkout is a view of a commit, and giving it a branch would put a second
+	// name on work that already has one.
+	if _, err := r.runner.mustRun(ctx, r.repoPath, "worktree", "add", "--detach", dir, commit); err != nil {
+		return Worktree{}, fmt.Errorf("review checkout %s: %w", ticketID, err)
+	}
+
+	// A mixed reset: the working tree keeps the new content, the index goes back to the base,
+	// so every file the ticket touched reads as an unstaged modification.
+	if _, err := r.runner.mustRun(ctx, dir, "reset", "--quiet", base); err != nil {
+		// Leaving a half-made checkout behind would make the next attempt reuse it.
+		_ = r.RemoveWorktree(ctx, Worktree{Path: dir})
+		return Worktree{}, fmt.Errorf("review checkout %s: reset to base: %w", ticketID, err)
+	}
+
+	return Worktree{Path: dir, Base: base}, nil
+}
+
+// DiscardReviewCheckout removes a review checkout. Removing one that is not there is not an
+// error: it is a view, and the point is that it can be thrown away at any time.
+func (r *LocalRepo) DiscardReviewCheckout(ctx context.Context, ticketID string) error {
+	dir := filepath.Join(r.worktreeRoot, ReviewCheckoutDirName(ticketID))
+	if _, err := os.Stat(dir); err != nil {
+		return nil
+	}
+	return r.RemoveWorktree(ctx, Worktree{Path: dir})
+}
+
+// DirtyFiles lists paths that are modified, staged or untracked in a worktree.
+//
+// Landing checks this before rebasing. Git refuses to rebase a dirty tree, and discovering that
+// from the rebase means discovering it as a failure with a misleading name — the caller can say
+// which files instead, which is the only thing the human needs to know.
+func (r *LocalRepo) DirtyFiles(ctx context.Context, w Worktree) ([]string, error) {
+	out, err := r.runner.mustRun(ctx, w.Path, "status", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("status in %q: %w", w.Path, err)
+	}
+	var files []string
+	// Split before trimming: the status is two columns and the first is often a space, so
+	// trimming the whole output eats the leading space of the first line and takes the first
+	// character of its path with it.
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r\n")
+		if len(line) < 4 {
+			continue
+		}
+		// "XY path", where XY is the two-character status.
+		files = append(files, strings.TrimSpace(line[3:]))
+	}
+	return files, nil
 }

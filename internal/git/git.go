@@ -25,6 +25,14 @@ type Worktree struct {
 type RebaseResult struct {
 	Clean         bool
 	ConflictFiles []string
+	// Refused reports that git would not start the rebase at all, as opposed to starting one
+	// and hitting a conflict. The two look identical from an exit code and are nothing alike:
+	// a conflict needs the human to resolve overlapping edits, a refusal needs them to deal
+	// with something in the worktree.
+	Refused bool
+	// Detail is git's own explanation, kept because it is invariably more useful than any
+	// summary of it. Empty when git said nothing.
+	Detail string
 	// Replayed reports whether any commits were actually moved. When false the branch was
 	// already on top of the target and there is nothing to re-validate.
 	Replayed bool

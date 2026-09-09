@@ -717,3 +717,177 @@ func TestConfiguredIdentityIsRespected(t *testing.T) {
 		t.Errorf("author = %q; a configured identity must not be replaced by the fallback", author)
 	}
 }
+
+// TestReviewCheckoutShowsWorkAsUncommitted is the whole point of the checkout.
+//
+// Gravy commits what the agent produced, so the ticket's worktree is clean — and every editor's
+// git integration reports uncommitted changes, so it shows nothing there. The checkout must put
+// the new content on disk with the index at its base, which is the state editors display.
+func TestReviewCheckoutShowsWorkAsUncommitted(t *testing.T) {
+	r, repoPath := testRepo(t)
+	ctx := context.Background()
+
+	// A ticket's worktree with one commit on it, as a run leaves behind.
+	wt, err := r.CreateWorktree(ctx, "gravy/T-1-work", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() { println(\"changed\") }\n")
+	writeFile(t, wt.Path, "added.go", "package main\n")
+	if _, err := r.CommitAll(ctx, wt, "gravy: T-1 attempt 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The worktree is clean, which is exactly why an editor shows nothing there.
+	if out := strings.TrimSpace(git(t, wt.Path, "status", "--porcelain")); out != "" {
+		t.Fatalf("the ticket worktree is not clean: %q", out)
+	}
+
+	co, err := r.ReviewCheckout(ctx, "T-1", "gravy/T-1-work", "gravy/T-1-work~1")
+	if err != nil {
+		t.Fatalf("ReviewCheckout: %v", err)
+	}
+
+	// The new content is on disk.
+	body := readFile(t, co.Path, "main.go")
+	if !strings.Contains(body, "changed") {
+		t.Errorf("main.go in the checkout is not the new version: %q", body)
+	}
+
+	// And git reports both files as changed, which is what lights up an editor.
+	status := git(t, co.Path, "status", "--porcelain")
+	for _, want := range []string{"main.go", "added.go"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("status does not report %s as changed:\n%s", want, status)
+		}
+	}
+	if strings.TrimSpace(status) == "" {
+		t.Error("the checkout is clean; an editor would show nothing")
+	}
+
+	// It is a view, not a branch: nothing new may appear in the repository's branch list.
+	branches := git(t, repoPath, "branch", "--list")
+	if strings.Count(branches, "T-1") > 1 {
+		t.Errorf("the checkout created a branch:\n%s", branches)
+	}
+}
+
+// TestReviewCheckoutIsReopenable: pressing the key twice should show the same thing rather than
+// failing on a directory that is already there.
+func TestReviewCheckoutIsReopenable(t *testing.T) {
+	r, _ := testRepo(t)
+	ctx := context.Background()
+
+	wt, err := r.CreateWorktree(ctx, "gravy/T-2-work", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() { println(\"x\") }\n")
+	if _, err := r.CommitAll(ctx, wt, "gravy: T-2 attempt 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := r.ReviewCheckout(ctx, "T-2", "gravy/T-2-work", "gravy/T-2-work~1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.ReviewCheckout(ctx, "T-2", "gravy/T-2-work", "gravy/T-2-work~1")
+	if err != nil {
+		t.Fatalf("reopening failed: %v", err)
+	}
+	if first.Path != second.Path {
+		t.Errorf("reopening gave a different path: %q then %q", first.Path, second.Path)
+	}
+
+	if err := r.DiscardReviewCheckout(ctx, "T-2"); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := os.Stat(first.Path); !os.IsNotExist(err) {
+		t.Error("the checkout survived being discarded")
+	}
+	// Discarding again is not an error: it is a view, and the point is that it can go at any time.
+	if err := r.DiscardReviewCheckout(ctx, "T-2"); err != nil {
+		t.Errorf("discarding twice: %v", err)
+	}
+}
+
+// readFile reads a file from a fixture tree.
+func readFile(t *testing.T, dir, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestRebaseRefusalIsNotAConflict is the day-one bug.
+//
+// Unstaged changes make git decline to start a rebase at all. Reported as a conflict, that
+// became "merge_conflict files=<nil>" on a branch whose target had never moved, with git's one
+// useful line — "cannot rebase: You have unstaged changes" — discarded.
+func TestRebaseRefusalIsNotAConflict(t *testing.T) {
+	r, _ := testRepo(t)
+	ctx := context.Background()
+
+	wt, err := r.CreateWorktree(ctx, "gravy/T-1-work", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() { println(\"one\") }\n")
+	if _, err := r.CommitAll(ctx, wt, "gravy: T-1 attempt 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// What a human leaves behind after running the tests in there.
+	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() { println(\"edited by hand\") }\n")
+
+	dirt, err := r.DirtyFiles(ctx, wt)
+	if err != nil {
+		t.Fatalf("DirtyFiles: %v", err)
+	}
+	if len(dirt) != 1 || dirt[0] != "main.go" {
+		t.Fatalf("dirty = %v, want main.go", dirt)
+	}
+
+	res, err := r.Rebase(ctx, wt, "main")
+	if err != nil {
+		t.Fatalf("Rebase: %v", err)
+	}
+	if res.Clean {
+		t.Fatal("a rebase of a dirty worktree reported success")
+	}
+	if !res.Refused {
+		t.Error("a refusal to start was reported as a conflict")
+	}
+	if len(res.ConflictFiles) != 0 {
+		t.Errorf("a refusal reported conflicting files: %v", res.ConflictFiles)
+	}
+	// The one line that says what is actually wrong.
+	if !strings.Contains(strings.ToLower(res.Detail), "unstaged") {
+		t.Errorf("git's explanation was discarded: %q", res.Detail)
+	}
+}
+
+// TestDirtyFilesSeesUntracked too, since a build artefact is what usually causes this.
+func TestDirtyFilesSeesUntracked(t *testing.T) {
+	r, _ := testRepo(t)
+	ctx := context.Background()
+
+	wt, err := r.CreateWorktree(ctx, "gravy/T-2-work", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirt, err := r.DirtyFiles(ctx, wt); err != nil || len(dirt) != 0 {
+		t.Fatalf("a fresh worktree reported %v (%v)", dirt, err)
+	}
+
+	writeFile(t, wt.Path, "erl_crash.dump", "junk\n")
+	dirt, err := r.DirtyFiles(ctx, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirt) != 1 || dirt[0] != "erl_crash.dump" {
+		t.Errorf("dirty = %v, want the untracked file", dirt)
+	}
+}
