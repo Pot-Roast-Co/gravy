@@ -4,12 +4,25 @@ import "time"
 
 // Project is a registered repository and the policy Gravy applies to it.
 type Project struct {
-	ID           string
-	Slug         string
-	Name         string
-	RepoPath     string
+	ID   string
+	Slug string
+	Name string
+	// RepoPath is the working tree on HostID. Empty is a project with no repository yet: a
+	// place to keep goals and notes while the shape of the thing is still being decided.
+	// Nothing can run in one, and the scheduler says so rather than failing a ticket in it.
+	RepoPath string
+	// Notes are what this project is for — goals, constraints, decisions. They are read by
+	// planning, which is the difference between proposing work for a repository and proposing
+	// work for a project someone actually has intentions about.
+	Notes        string
 	TargetBranch string
 	MergeMode    LandMode
+	// HostID pins the project to one machine. Empty means any host that meets Requirements.
+	//
+	// A project belongs to a machine because its clone does: each host has its own checkout
+	// and its own worktrees, with no shared filesystem, so RepoPath means nothing anywhere
+	// else. An Xcode project on a Mac is the case this exists for.
+	HostID string
 
 	// Requirements a host must satisfy to run this project's tickets (OS, tools).
 	Requirements Requirements
