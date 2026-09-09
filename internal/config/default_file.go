@@ -12,6 +12,21 @@ const defaultFile = `# ~/.gravy/config.yaml — global Gravy configuration.
 #
 # Every value below is the default. Delete any line to keep the default.
 
+# Other machines Gravy may run work on. The one you are sitting at is always available and is
+# not listed here.
+#
+# "ssh" is whatever the ssh command accepts — normally a Host alias from ~/.ssh/config — so keys,
+# ports and jump hosts stay configured where they already are. Each machine needs its own clone
+# of any repository it runs, and its own authenticated agent CLI: Gravy drives the CLIs you have
+# logged in, and it cannot log in for you on another machine.
+#
+# Pin a project to one with: gravy project add -host air /path/on/that/machine
+#
+# hosts:
+#   - id: air
+#     ssh: air
+#     workers: 2
+
 concurrency:
   # Worker slots shared across all projects. Project availability, not this number, limits any
   # single repository: with the default serial mode, N projects run N agents concurrently, one

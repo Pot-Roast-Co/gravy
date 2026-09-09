@@ -10,7 +10,7 @@ import (
 )
 
 const projectColumns = `id, slug, name, repo_path, target_branch, merge_mode, requirements,
-	validation, allowlist, routes, parallel_mode, max_concurrency, created_at`
+	validation, allowlist, routes, parallel_mode, max_concurrency, created_at, host_id, notes`
 
 // CreateProject inserts a project.
 func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
@@ -32,10 +32,10 @@ func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
 	}
 
 	_, err = d.exec(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Slug, p.Name, p.RepoPath, p.TargetBranch, string(p.MergeMode),
 		req, val, allow, routes, boolToInt(p.ParallelMode), p.MaxConcurrency,
-		unixOrZero(p.CreatedAt))
+		unixOrZero(p.CreatedAt), p.HostID, p.Notes)
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Slug, err)
 	}
@@ -105,10 +105,11 @@ func (d *DB) UpdateProject(ctx context.Context, p core.Project) error {
 
 	res, err := d.exec(ctx, `UPDATE projects SET
 		slug=?, name=?, repo_path=?, target_branch=?, merge_mode=?, requirements=?,
-		validation=?, allowlist=?, routes=?, parallel_mode=?, max_concurrency=?
+		validation=?, allowlist=?, routes=?, parallel_mode=?, max_concurrency=?, host_id=?,
+		notes=?
 		WHERE id=?`,
 		p.Slug, p.Name, p.RepoPath, p.TargetBranch, string(p.MergeMode), req, val, allow,
-		routes, boolToInt(p.ParallelMode), p.MaxConcurrency, p.ID)
+		routes, boolToInt(p.ParallelMode), p.MaxConcurrency, p.HostID, p.Notes, p.ID)
 	if err != nil {
 		return fmt.Errorf("update project %q: %w", p.ID, err)
 	}
@@ -137,7 +138,8 @@ func scanProject(s scanner) (core.Project, error) {
 		createdAt               int64
 	)
 	if err := s.Scan(&p.ID, &p.Slug, &p.Name, &p.RepoPath, &p.TargetBranch, &mergeMode,
-		&req, &val, &allow, &routes, &parallel, &p.MaxConcurrency, &createdAt); err != nil {
+		&req, &val, &allow, &routes, &parallel, &p.MaxConcurrency, &createdAt,
+		&p.HostID, &p.Notes); err != nil {
 		return core.Project{}, err
 	}
 	p.MergeMode = core.LandMode(mergeMode)

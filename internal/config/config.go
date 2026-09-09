@@ -14,6 +14,9 @@ import (
 // Per-project settings are not here: they live in SQLite so they can be edited from the TUI
 // without hand-editing a file (ARCHITECTURE.md §5).
 type Config struct {
+	// Hosts are the machines beyond this one that Gravy may run work on. The local machine is
+	// always present and is not listed here.
+	Hosts         []Host                  `yaml:"hosts,omitempty"`
 	Concurrency   Concurrency             `yaml:"concurrency"`
 	Providers     map[string]Provider     `yaml:"providers"`
 	Routes        map[core.Route][]string `yaml:"routes"`
@@ -22,6 +25,19 @@ type Config struct {
 	Context       Context                 `yaml:"context"`
 	Notifications Notifications           `yaml:"notifications"`
 	Retention     Retention               `yaml:"retention"`
+}
+
+// Host is another machine Gravy can run work on.
+//
+// Addressing is left to ssh: Target is whatever `ssh` accepts, normally a Host alias from
+// ~/.ssh/config, so keys, ports and jump hosts stay configured where they already are.
+type Host struct {
+	// ID names the host in routes, project pins and explanations.
+	ID string `yaml:"id"`
+	// Target is the ssh destination.
+	Target string `yaml:"ssh"`
+	// Workers is how many agents may run there at once.
+	Workers int `yaml:"workers"`
 }
 
 // Retention controls how long artefacts are kept on disk.
