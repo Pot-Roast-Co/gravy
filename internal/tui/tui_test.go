@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -40,18 +41,33 @@ type fakeService struct {
 	resolved  []string
 
 	// queue is what ListQueue returns; the rest record what the queue screen asked for.
-	settings  api.Settings
-	saved     []config.Config
-	projects  []core.Project
-	queue     []api.TicketDetail
-	created   []api.CreateTicketReq
-	updated   []core.Ticket
-	deleted   []string
-	reordered [][3]string
-	moved     [][2]string
-	moveErr   error
-	runs      []core.Run
-	explain   api.Explanation
+	settings        api.Settings
+	saved           []config.Config
+	projects        []core.Project
+	savedProjects   []core.Project
+	deletedProjects []string
+	allTickets      []core.Ticket
+	queue           []api.TicketDetail
+	added           []api.AddProjectReq
+	planReply       api.PlanReply
+	planErr         error
+	planned         []api.PlanReq
+	// checkoutPath is what ReviewCheckout returns; the rest record what was asked for.
+	checkoutPath string
+	checkoutErr  error
+	checkedOut   []string
+	rereviewed   []string
+	rereviewErr  error
+	discarded    []string
+	planOK       []api.ApprovePlanReq
+	created      []api.CreateTicketReq
+	updated      []core.Ticket
+	deleted      []string
+	reordered    [][3]string
+	moved        [][2]string
+	moveErr      error
+	runs         []core.Run
+	explain      api.Explanation
 }
 
 func newFake() *fakeService {
@@ -140,12 +156,68 @@ func (f *fakeService) KillRun(_ context.Context, runID string) error {
 	return nil
 }
 
-func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) { return nil, nil }
-func (f *fakeService) AddProject(context.Context, api.AddProjectReq) (core.Project, error) {
-	return core.Project{}, nil
+func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) {
+	return f.projects, nil
 }
+func (f *fakeService) AddProject(_ context.Context, req api.AddProjectReq) (core.Project, error) {
+	if f.actionErr != nil {
+		return core.Project{}, f.actionErr
+	}
+	f.added = append(f.added, req)
+	return core.Project{ID: "proj-new", Name: filepath.Base(req.Path)}, nil
+}
+func (f *fakeService) Rereview(_ context.Context, ticketID string) error {
+	f.rereviewed = append(f.rereviewed, ticketID)
+	return f.rereviewErr
+}
+
+func (f *fakeService) ReviewCheckout(_ context.Context, ticketID string) (string, error) {
+	if f.checkoutErr != nil {
+		return "", f.checkoutErr
+	}
+	f.checkedOut = append(f.checkedOut, ticketID)
+	return f.checkoutPath, nil
+}
+
+func (f *fakeService) DiscardReviewCheckout(_ context.Context, ticketID string) error {
+	f.discarded = append(f.discarded, ticketID)
+	return nil
+}
+
+func (f *fakeService) Plan(_ context.Context, req api.PlanReq) (api.PlanReply, error) {
+	f.planned = append(f.planned, req)
+	if f.planErr != nil {
+		return api.PlanReply{}, f.planErr
+	}
+	reply := f.planReply
+	if reply.Session == "" {
+		reply.Session = "sess-1"
+	}
+	return reply, nil
+}
+
+func (f *fakeService) ApprovePlan(_ context.Context, req api.ApprovePlanReq) ([]core.Ticket, error) {
+	if f.actionErr != nil {
+		return nil, f.actionErr
+	}
+	f.planOK = append(f.planOK, req)
+	out := make([]core.Ticket, 0, len(req.Tickets))
+	for i, t := range req.Tickets {
+		out = append(out, core.Ticket{ID: fmt.Sprintf("plan-%d", i), Title: t.Title})
+	}
+	return out, nil
+}
+
+func (f *fakeService) DeleteProject(_ context.Context, id string) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.deletedProjects = append(f.deletedProjects, id)
+	return nil
+}
+
 func (f *fakeService) ListTickets(context.Context, api.TicketFilter) ([]core.Ticket, error) {
-	return nil, nil
+	return f.allTickets, nil
 }
 func (f *fakeService) CreateTicket(_ context.Context, req api.CreateTicketReq) (core.Ticket, error) {
 	if f.actionErr != nil {
@@ -183,6 +255,7 @@ func (f *fakeService) UpdateProject(_ context.Context, p core.Project) error {
 		return f.actionErr
 	}
 	f.projects = append(f.projects, p)
+	f.savedProjects = append(f.savedProjects, p)
 	return nil
 }
 
@@ -262,7 +335,9 @@ func sendCmd(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func key(s string) tea.KeyMsg {
-	if len(s) == 1 {
+	// Counted in runes, not bytes: "é" is one key press and two bytes, and measuring it as
+	// two would fall through to the panic below.
+	if utf8.RuneCountInString(s) == 1 {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
 	switch s {
@@ -368,11 +443,14 @@ func TestGlobalKeysWorkFromEverySection(t *testing.T) {
 				t.Errorf("esc did not close help from %s", start.Title())
 			}
 
-			// Every section key jumps from here.
+			// Every section key jumps from here. Asserted on the active section rather than
+			// on the rendered title: Settings is deliberately absent from the header row, so
+			// a view that mentions it is not what "arrived" means.
 			for _, dest := range AllSections {
 				m = send(t, m, key(dest.Key()))
-				if !strings.Contains(m.View(), dest.Title()) {
-					t.Errorf("key %q from %s did not reach %s", dest.Key(), start.Title(), dest.Title())
+				if m.active != dest {
+					t.Errorf("key %q from %s reached %v, want %s",
+						dest.Key(), start.Title(), m.active, dest.Title())
 				}
 			}
 

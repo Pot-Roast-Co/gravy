@@ -67,7 +67,7 @@ func (d dashboard) View(ctx ViewContext) string {
 			th.Header.Render("No projects yet"),
 			"",
 			th.Muted.Render("Register a repository to get started:"),
-			th.Key.Render("  gravy project add <path>"),
+			th.Key.Render("  P") + th.Muted.Render(" adds a project"),
 		}, "\n")
 	}
 

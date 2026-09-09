@@ -8,15 +8,18 @@ import (
 	"github.com/pot-roast-co/gravy/internal/api"
 )
 
-// Section is one destination in the frame, reachable by its number key.
+// Section is one destination in the frame.
 //
-// M0 ships seven, which is why the global keymap is 1-7. Done and history (GR-030) is M1 and
-// deliberately absent rather than present and empty.
+// The number row is the ticket lifecycle in order — plan, write it down, queue it, run it,
+// review it, decide — which is why Settings sits off it on SettingsKey. Done and history
+// (GR-030) is M1 and deliberately absent rather than present and empty.
 type Section int
 
-// The sections, in the order they appear in the header and on the number keys.
+// The sections, in the order they appear in the header.
 const (
 	SectionDashboard Section = iota
+	SectionPlan
+	SectionProjects
 	SectionBacklog
 	SectionReady
 	SectionRunning
@@ -25,17 +28,31 @@ const (
 	SectionSettings
 )
 
-// AllSections lists every section in header order.
-var AllSections = []Section{
-	SectionDashboard, SectionBacklog, SectionReady, SectionRunning,
-	SectionReview, SectionNeedsYou, SectionSettings,
+// SettingsKey is what jumps to Settings.
+//
+// Not "s": that is already save on the Settings screen itself and a binding on Review, and the
+// frame checks global keys before a screen's own — so a global "s" would break saving in the
+// very screen it opens. "," is free, and is the conventional preferences key.
+const SettingsKey = ","
+
+// NumberedSections are the sections on the number row, in lifecycle order.
+var NumberedSections = []Section{
+	SectionDashboard, SectionPlan, SectionProjects, SectionBacklog, SectionReady,
+	SectionRunning, SectionReview, SectionNeedsYou,
 }
+
+// AllSections lists every section in header order: the numbered ones, then Settings.
+var AllSections = append(append([]Section{}, NumberedSections...), SectionSettings)
 
 // Title is the section's name in the header and help.
 func (s Section) Title() string {
 	switch s {
 	case SectionDashboard:
 		return "Dashboard"
+	case SectionPlan:
+		return "Plan"
+	case SectionProjects:
+		return "Projects"
 	case SectionBacklog:
 		return "Backlog"
 	case SectionReady:
@@ -53,8 +70,18 @@ func (s Section) Title() string {
 	}
 }
 
-// Key is the number key that jumps to the section.
-func (s Section) Key() string { return strconv.Itoa(int(s) + 1) }
+// Key is the key that jumps to the section.
+func (s Section) Key() string {
+	if s == SectionSettings {
+		return SettingsKey
+	}
+	for i, n := range NumberedSections {
+		if n == s {
+			return strconv.Itoa(i + 1)
+		}
+	}
+	return ""
+}
 
 // ViewContext is everything a screen needs to draw itself.
 //

@@ -40,9 +40,12 @@ type KeyMap struct {
 	// Sections jumps to a section by number. Its Keys are generated from AllSections.
 	Sections Binding
 	Project  Binding
-	Filter   Binding
-	Help     Binding
-	Quit     Binding
+	// AddProject opens the registration prompt. It is global rather than a Settings key
+	// because the first-run dashboard is empty and has nothing to navigate to yet.
+	AddProject Binding
+	Filter     Binding
+	Help       Binding
+	Quit       Binding
 	// Cancel backs out of the help overlay or an in-progress filter.
 	Cancel Binding
 }
@@ -56,16 +59,20 @@ func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Sections: Binding{Keys: keys, Help: "jump to a section"},
 		Project:  Binding{Keys: []string{"p"}, Help: "cycle the project filter"},
-		Filter:   Binding{Keys: []string{"/"}, Help: "filter the current screen"},
-		Help:     Binding{Keys: []string{"?"}, Help: "toggle this help"},
-		Quit:     Binding{Keys: []string{"q", "ctrl+c"}, Help: "quit"},
-		Cancel:   Binding{Keys: []string{"esc"}, Help: "close help, or cancel a filter"},
+		// Shift+P, so that it neither shadows Review's `a` (approve) nor Backlog's `n`
+		// (new ticket): a global binding is checked before a screen's own keys and would
+		// silently take one away.
+		AddProject: Binding{Keys: []string{"P"}, Help: "add a project"},
+		Filter:     Binding{Keys: []string{"/"}, Help: "filter the current screen"},
+		Help:       Binding{Keys: []string{"?"}, Help: "toggle this help"},
+		Quit:       Binding{Keys: []string{"q", "ctrl+c"}, Help: "quit"},
+		Cancel:     Binding{Keys: []string{"esc"}, Help: "close help, or cancel a filter"},
 	}
 }
 
 // Bindings lists every global binding in the order help presents them.
 func (k KeyMap) Bindings() []Binding {
-	return []Binding{k.Sections, k.Project, k.Filter, k.Help, k.Cancel, k.Quit}
+	return []Binding{k.Sections, k.Project, k.AddProject, k.Filter, k.Help, k.Cancel, k.Quit}
 }
 
 // SectionFor returns the section a number key selects.

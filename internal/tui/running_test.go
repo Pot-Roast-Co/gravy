@@ -42,7 +42,7 @@ func runningFixture() *fakeService {
 func openRunning(t *testing.T, f *fakeService) Model {
 	t.Helper()
 	m := boot(t, f, 90, 26)
-	m = send(t, m, key("4"))
+	m = send(t, m, key(SectionRunning.Key()))
 	m = send(t, m, enteredMsg{focus: "c9d4aa01"})
 	m = send(t, m, runDetailMsg{runs: f.runs, explain: f.explain})
 	return m
@@ -166,7 +166,7 @@ func TestKillConfirmsFirst(t *testing.T) {
 // TestNothingRunningGuides is the empty state.
 func TestNothingRunningGuides(t *testing.T) {
 	m := boot(t, newFake(), 90, 26)
-	m = send(t, m, key("4"))
+	m = send(t, m, key(SectionRunning.Key()))
 	m = send(t, m, enteredMsg{})
 	if !strings.Contains(m.View(), "Nothing running") {
 		t.Errorf("empty running screen is not explained:\n%s", m.View())

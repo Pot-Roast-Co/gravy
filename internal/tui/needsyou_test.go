@@ -54,7 +54,7 @@ func queueFixture() *fakeService {
 func openQueue(t *testing.T, f *fakeService) Model {
 	t.Helper()
 	m := boot(t, f, 96, 30)
-	m = send(t, m, key("6"))
+	m = send(t, m, key(SectionNeedsYou.Key()))
 	m = send(t, m, enteredMsg{})
 	return m
 }

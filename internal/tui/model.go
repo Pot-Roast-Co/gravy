@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/config"
 )
 
 // connState is how the frame is currently getting its data.
@@ -54,6 +56,43 @@ type (
 	sweepMsg struct{ ids []string }
 )
 
+// newAttention reports whether the Needs You queue grew, which is the moment worth hearing.
+//
+// Growth, not change: resolving an item also changes the queue, and a bell for work leaving it
+// is a bell for something the human just did.
+func (m Model) newAttention(next api.SystemStatus) bool {
+	return m.bell && m.conn == connReady && len(next.Attention) > m.attention
+}
+
+// refreshScreen tells the active screen the snapshot moved.
+func (m Model) refreshScreen() tea.Cmd {
+	return func() tea.Msg { return refreshedMsg{} }
+}
+
+// ringBell writes the terminal bell.
+//
+// To stderr, because Bubble Tea renders on stdout and a stray byte there would land in the
+// middle of a frame. The daemon writes its own bell into a log file, where nobody can hear it —
+// this is the copy that reaches a person.
+var ringBell tea.Cmd = func() tea.Msg {
+	fmt.Fprint(os.Stderr, "\a")
+	return nil
+}
+
+// bellSettingMsg carries whether notifications are switched on at all.
+type bellSettingMsg struct{ enabled bool }
+
+// loadBellSetting asks once, at connect. A client that cannot read settings simply stays quiet.
+func loadBellSetting(svc api.Service) tea.Cmd {
+	return func() tea.Msg {
+		st, err := svc.GetSettings(context.Background())
+		if err != nil {
+			return bellSettingMsg{enabled: false}
+		}
+		return bellSettingMsg{enabled: st.Config.Notifications.Mode != config.NotifyOff}
+	}
+}
+
 func entered(focus string) tea.Cmd {
 	return func() tea.Msg { return enteredMsg{focus: focus} }
 }
@@ -88,7 +127,17 @@ type Model struct {
 	// pain being removed.
 	projectIdx int
 
-	showHelp  bool
+	// attention is how many items were in the Needs You queue at the last refresh, so a new
+	// one can be heard. The daemon cannot ring a bell — it has no terminal, and writes one
+	// into its log file — so the client that does own a terminal rings it.
+	attention int
+	// bell is off when the human has turned notifications off entirely.
+	bell bool
+
+	showHelp bool
+	// adding is the global P prompt. It sits on the frame, not on a screen, so that it is
+	// reachable from the empty first-run dashboard.
+	adding    addProject
 	filtering bool
 	filter    string
 	// focus is the row a screen asked the destination to select when navigating.
@@ -162,16 +211,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectedMsg:
 		m.conn, m.connErr = connReady, nil
 		m.status = msg.status
+		// The count at connect is the baseline: arriving to a queue that already has three
+		// items in it is not three things happening now.
+		m.attention = len(msg.status.Attention)
 		m.events, m.stopEvents = msg.events, msg.stop
-		return m, waitForEvent(msg.events)
+		return m, tea.Batch(waitForEvent(msg.events), loadBellSetting(m.svc))
+
+	case bellSettingMsg:
+		m.bell = msg.enabled
+		return m, nil
 
 	case connectErrMsg:
 		m.conn, m.connErr = connUnreachable, msg.err
 		return m, nil
 
 	case statusMsg:
+		rang := m.newAttention(msg.status)
 		m.status = msg.status
+		m.attention = len(msg.status.Attention)
 		m.conn, m.connErr = connReady, nil
+		if rang {
+			return m, tea.Batch(ringBell, m.refreshScreen())
+		}
 		screen, cmd := m.screens[m.active].Update(refreshedMsg{}, m.viewContext())
 		m.screens[m.active] = screen
 		return m, cmd
@@ -188,6 +249,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.connErr = fmt.Errorf("the event stream closed")
 		}
 		return m, nil
+
+	case addProjectDoneMsg:
+		m.adding.done(msg)
+		if msg.err != nil {
+			return m, nil
+		}
+		// Registering changes what every screen renders, so re-read rather than waiting for
+		// an event the frame may not be subscribed to yet on a first run.
+		return m, refreshStatus(m.svc)
 
 	case sweepMsg:
 		m.active, m.showHelp = SectionReview, false
@@ -235,6 +305,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.stopEvents()
 		}
 		return m, tea.Quit
+	}
+
+	// The prompt is modal: while it is open it takes every key before anything else, or a
+	// path containing a "q" would quit the program mid-word.
+	if m.adding.open {
+		cmd := m.adding.handleKey(msg, m.svc)
+		return m, cmd
 	}
 
 	// A screen with a prompt or a mode of its own gets the keyboard before the global keymap,
@@ -285,6 +362,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case m.keys.Project.Matches(key):
 		m.projectIdx = m.nextProject()
+		return m, nil
+
+	case m.keys.AddProject.Matches(key):
+		m.adding.show()
+		m.showHelp = false
 		return m, nil
 	}
 
@@ -347,8 +429,10 @@ func (m Model) View() string {
 }
 
 func (m Model) headerView() string {
-	parts := make([]string, 0, len(AllSections))
-	for _, s := range AllSections {
+	// The numbered sections only. Settings is configuration rather than a stage of the
+	// lifecycle, and its key is advertised in the status bar instead.
+	parts := make([]string, 0, len(NumberedSections))
+	for _, s := range NumberedSections {
 		label := fmt.Sprintf("%s %s", s.Key(), s.Title())
 		if s == m.active {
 			parts = append(parts, m.theme.ActiveTab.Render(label))
@@ -373,6 +457,8 @@ func (m Model) bodyView(height int) string {
 
 	var body string
 	switch {
+	case m.adding.open:
+		body = m.adding.view(m.theme, m.width)
 	case m.showHelp:
 		body = helpView(m.keys, m.theme, m.width)
 	case m.conn == connUnreachable:

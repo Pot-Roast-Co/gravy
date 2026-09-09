@@ -28,7 +28,7 @@ func backlogFixture() *fakeService {
 func openBacklog(t *testing.T, f *fakeService) Model {
 	t.Helper()
 	m := boot(t, f, 96, 28)
-	m = send(t, m, key("2"))
+	m = send(t, m, key(SectionBacklog.Key()))
 	m = send(t, m, enteredMsg{})
 	m = send(t, m, queueLoadedMsg{state: core.StateBacklog, items: f.queue})
 	return m
@@ -266,7 +266,7 @@ func TestEditSavesTheChangedFields(t *testing.T) {
 func TestReadyCannotGoBackwards(t *testing.T) {
 	f := backlogFixture()
 	m := boot(t, f, 96, 28)
-	m = send(t, m, key("3"))
+	m = send(t, m, key(SectionReady.Key()))
 	m = send(t, m, queueLoadedMsg{state: core.StateReady, items: f.queue})
 
 	m, cmd := sendCmd(t, m, key(" "))
@@ -280,5 +280,35 @@ func TestReadyCannotGoBackwards(t *testing.T) {
 	}
 	if len(f.moved) != 0 {
 		t.Errorf("a Ready ticket was moved anyway: %v", f.moved)
+	}
+}
+
+// TestQueueNoticeDoesNotSquatOnTheFooter is what a stuck "saved" costs.
+//
+// The footer is where the keys are documented, so a confirmation left sitting in it means the
+// screen stops telling you what you can do — and right after saving a ticket, the next thing you
+// want is how to queue it.
+func TestQueueNoticeDoesNotSquatOnTheFooter(t *testing.T) {
+	f := populated()
+	m := boot(t, f, 100, 30)
+	m = send(t, m, key(SectionBacklog.Key()))
+
+	// A finished action leaves its confirmation.
+	m = send(t, m, queueDoneMsg{verb: "saved"})
+	if !strings.Contains(m.View(), "saved") {
+		t.Fatal("the confirmation was never shown")
+	}
+	if strings.Contains(m.View(), "space queue it") {
+		t.Fatal("expected the notice to replace the hints while it is fresh")
+	}
+
+	// The next key restores the keys.
+	m = send(t, m, key("j"))
+	view := m.View()
+	if strings.Contains(view, "saved") {
+		t.Errorf("the confirmation outlived the key that followed it:\n%s", view)
+	}
+	if !strings.Contains(view, "space queue it") {
+		t.Errorf("the footer does not say how to queue a ticket:\n%s", view)
 	}
 }

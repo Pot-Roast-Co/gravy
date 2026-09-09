@@ -32,8 +32,10 @@ type settingField struct {
 // It works on a copy and saves on demand: a config file rewritten on every keystroke would be
 // read by a daemon mid-edit, and a half-typed duration is not a configuration.
 type settings struct {
-	loaded   api.Settings
-	cfg      config.Config
+	loaded api.Settings
+	cfg    config.Config
+	// agents is what this build can run, used to refuse a route naming something it cannot.
+	agents   []api.AgentOption
 	projects []core.Project
 	dirtyIDs map[string]bool
 
@@ -95,6 +97,7 @@ func (s *settings) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 
 	case settingsLoadedMsg:
 		s.loaded, s.cfg, s.projects = msg.settings, msg.settings.Config, msg.projects
+		s.agents = msg.settings.Agents
 		s.loadedOK, s.err, s.dirty = true, nil, false
 		s.dirtyIDs = map[string]bool{}
 		s.fields = buildFields(s)
@@ -224,7 +227,7 @@ func buildFields(s *settings) []settingField {
 				Hint: "comma-separated provider/model, first usable one wins",
 				Get:  func(s *settings) string { return strings.Join(s.cfg.Routes[route], ", ") },
 				Set: func(s *settings, v string) error {
-					choices, err := parseChoices(v)
+					choices, err := parseChoices(v, s.agents)
 					if err != nil {
 						return err
 					}
@@ -364,78 +367,90 @@ func buildFields(s *settings) []settingField {
 	)
 
 	// Projects, which live in the database rather than the config file.
-	for i := range s.projects {
-		idx := i
-		p := &s.projects[idx]
-		mark := func(s *settings) { s.dirtyIDs[s.projects[idx].ID] = true }
-
+	// Hosts. Editing them needs a restart, which the screen already reports through
+	// PendingRestart: the object graph binds hosts at startup, and pretending a new machine
+	// joined a running daemon would be a lie the user only discovers when work does not run.
+	for i := range s.cfg.Hosts {
+		hIdx := i
 		out = append(out,
 			settingField{
-				Section: "Project " + p.Slug, Label: "target branch",
-				Hint: "the branch approved work merges into",
-				Get:  func(s *settings) string { return s.projects[idx].TargetBranch },
+				Section: "Host " + s.cfg.Hosts[hIdx].ID, Label: "ssh",
+				Hint: "ssh destination, normally a Host alias from ~/.ssh/config",
+				Get:  func(s *settings) string { return s.cfg.Hosts[hIdx].Target },
 				Set: func(s *settings, v string) error {
 					if strings.TrimSpace(v) == "" {
-						return fmt.Errorf("a project needs a target branch")
+						return fmt.Errorf("a host needs an ssh destination")
 					}
-					s.projects[idx].TargetBranch = v
-					mark(s)
+					s.cfg.Hosts[hIdx].Target = strings.TrimSpace(v)
+					s.dirty = true
 					return nil
 				},
 			},
 			settingField{
-				Section: "Project " + p.Slug, Label: "parallel",
-				Hint: "true runs several tickets at once and you handle the conflicts",
-				Get:  func(s *settings) string { return strconv.FormatBool(s.projects[idx].ParallelMode) },
-				Set: func(s *settings, v string) error {
-					b, err := strconv.ParseBool(v)
-					if err != nil {
-						return fmt.Errorf("parallel must be true or false")
-					}
-					s.projects[idx].ParallelMode = b
-					if b && s.projects[idx].MaxConcurrency < 1 {
-						s.projects[idx].MaxConcurrency = 2
-					}
-					mark(s)
-					return nil
-				},
-			},
-			settingField{
-				Section: "Project " + p.Slug, Label: "max concurrency",
-				Hint: "tickets in flight at once when parallel",
-				Get:  func(s *settings) string { return strconv.Itoa(s.projects[idx].MaxConcurrency) },
+				Section: "Host " + s.cfg.Hosts[hIdx].ID, Label: "workers",
+				Hint: "agents that may run on this machine at once",
+				Get:  func(s *settings) string { return strconv.Itoa(s.cfg.Hosts[hIdx].Workers) },
 				Set: func(s *settings, v string) error {
 					n, err := strconv.Atoi(v)
 					if err != nil || n < 1 {
-						return fmt.Errorf("concurrency must be at least 1")
+						return fmt.Errorf("workers must be at least 1")
 					}
-					s.projects[idx].MaxConcurrency = n
-					mark(s)
+					s.cfg.Hosts[hIdx].Workers = n
+					s.dirty = true
 					return nil
 				},
 			},
 			settingField{
-				Section: "Project " + p.Slug, Label: "validation",
-				Hint: "name:command, separated by ; — what must pass before review",
-				Get: func(s *settings) string {
-					parts := make([]string, 0, len(s.projects[idx].Validation))
-					for _, st := range s.projects[idx].Validation {
-						parts = append(parts, st.Name+":"+st.Cmd)
-					}
-					return strings.Join(parts, "; ")
-				},
+				Section: "Host " + s.cfg.Hosts[hIdx].ID, Label: "remove",
+				Hint: "type the host id to stop using this machine",
+				Get:  func(s *settings) string { return "" },
 				Set: func(s *settings, v string) error {
-					steps, err := parseSteps(v)
-					if err != nil {
-						return err
+					if strings.TrimSpace(v) != s.cfg.Hosts[hIdx].ID {
+						return fmt.Errorf("type %q to remove it", s.cfg.Hosts[hIdx].ID)
 					}
-					s.projects[idx].Validation = steps
-					mark(s)
+					// A project left pointing at a removed host would have nowhere to run,
+					// and would say so only when a ticket was already waiting.
+					for _, p := range s.projects {
+						if p.HostID == s.cfg.Hosts[hIdx].ID {
+							return fmt.Errorf("project %s is on this host; move it first", p.Slug)
+						}
+					}
+					s.cfg.Hosts = append(s.cfg.Hosts[:hIdx], s.cfg.Hosts[hIdx+1:]...)
+					s.dirty = true
 					return nil
 				},
 			},
 		)
 	}
+
+	out = append(out, settingField{
+		Section: "Hosts", Label: "new host",
+		Hint: `an id and an ssh destination: "air" or "air=air.local"`,
+		Get:  func(s *settings) string { return "" },
+		Set: func(s *settings, v string) error {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				return nil
+			}
+			id, target, ok := strings.Cut(v, "=")
+			id = strings.TrimSpace(id)
+			if !ok || strings.TrimSpace(target) == "" {
+				target = id
+			}
+			if id == "" || strings.ContainsAny(id, " \t/,:") {
+				return fmt.Errorf("use a word without spaces, slashes, commas or colons")
+			}
+			if knownHost(s, id) {
+				return fmt.Errorf("there is already a host called %q", id)
+			}
+			s.cfg.Hosts = append(s.cfg.Hosts, config.Host{
+				ID: id, Target: strings.TrimSpace(target), Workers: 2,
+			})
+			s.dirty = true
+			return nil
+		},
+	})
+
 	return out
 }
 
@@ -452,32 +467,6 @@ func durationField(section, label, hint string, ref func(*settings) *config.Dura
 			return nil
 		},
 	}
-}
-
-// parseSteps reads "name:command; name:command" into validation steps.
-func parseSteps(v string) ([]core.Step, error) {
-	if strings.TrimSpace(v) == "" {
-		return nil, nil
-	}
-	var out []core.Step
-	for _, part := range strings.Split(v, ";") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		name, cmd, ok := strings.Cut(part, ":")
-		if !ok {
-			name, cmd = "check", part
-		}
-		if strings.TrimSpace(cmd) == "" {
-			return nil, fmt.Errorf("validation step %q has no command", part)
-		}
-		out = append(out, core.Step{
-			Name: strings.TrimSpace(name), Cmd: strings.TrimSpace(cmd),
-			Required: true, Timeout: 10 * time.Minute,
-		})
-	}
-	return out, nil
 }
 
 func sortedProviderIDs(c config.Config) []string {
@@ -607,9 +596,102 @@ func configuredBuckets(c config.Config) []core.Route {
 	return out
 }
 
+// knownHost reports whether a host id is one the daemon knows about.
+func knownHost(s *settings, id string) bool {
+	for _, n := range hostNames(s) {
+		if n == id {
+			return true
+		}
+	}
+	return false
+}
+
+// hostNames lists the configured hosts, for an error that says what would work.
+// The machine running the daemon is always available and is never listed in the file, so it is
+// added here rather than being a name that mysteriously fails validation.
+func hostNames(s *settings) []string {
+	out := []string{localHostID}
+	for _, h := range s.cfg.Hosts {
+		out = append(out, h.ID)
+	}
+	return out
+}
+
+// localHostID is the id the daemon registers its own machine under.
+const localHostID = "local"
+
+// formatProjectRoutes renders a project's route overrides as one editable line.
+func formatProjectRoutes(routes map[core.Route][]core.Choice) string {
+	if len(routes) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(routes))
+	for r := range routes {
+		names = append(names, string(r))
+	}
+	sort.Strings(names)
+
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		choices := routes[core.Route(n)]
+		rendered := make([]string, 0, len(choices))
+		for _, c := range choices {
+			rendered = append(rendered, config.FormatChoice(c))
+		}
+		parts = append(parts, n+"="+strings.Join(rendered, " "))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// parseProjectRoutes reads "route=provider/model provider/model, route=..." back.
+//
+// A project's overrides are per route, so the shape has to carry both — and it is validated the
+// same way the global buckets are, because a typo here fails at run time with a ticket already
+// waiting on it.
+func parseProjectRoutes(v string, agents []api.AgentOption) (map[core.Route][]core.Choice, error) {
+	if strings.TrimSpace(v) == "" {
+		return nil, nil
+	}
+	out := map[core.Route][]core.Choice{}
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, list, ok := strings.Cut(part, "=")
+		if !ok {
+			return nil, fmt.Errorf("%q is not \"route=provider/model\"", part)
+		}
+		route := core.Route(strings.TrimSpace(name))
+		if !route.Named() {
+			return nil, fmt.Errorf("%q is not a bucket name", name)
+		}
+		var choices []core.Choice
+		for _, f := range strings.Fields(list) {
+			c, err := config.ParseChoice(f)
+			if err != nil {
+				return nil, err
+			}
+			if err := knownAgent(c, agents); err != nil {
+				return nil, err
+			}
+			choices = append(choices, c)
+		}
+		if len(choices) == 0 {
+			return nil, fmt.Errorf("bucket %q has no agents", route)
+		}
+		out[route] = choices
+	}
+	return out, nil
+}
+
 // parseChoices reads "provider/model, provider/model" and refuses a typo here rather than at run
 // time with a ticket already waiting on it.
-func parseChoices(v string) ([]string, error) {
+//
+// It checks the names against what this build can actually run, not just the shape. A route of
+// "codex/sol" parses perfectly and is still wrong: no such model exists, and the only way anyone
+// found out was a ticket reaching review with a 400 from the provider attached to it.
+func parseChoices(v string, agents []api.AgentOption) ([]string, error) {
 	if strings.TrimSpace(v) == "" {
 		return nil, nil
 	}
@@ -619,10 +701,45 @@ func parseChoices(v string) ([]string, error) {
 		if part == "" {
 			continue
 		}
-		if _, err := config.ParseChoice(part); err != nil {
+		choice, err := config.ParseChoice(part)
+		if err != nil {
+			return nil, err
+		}
+		if err := knownAgent(choice, agents); err != nil {
 			return nil, err
 		}
 		out = append(out, part)
 	}
 	return out, nil
+}
+
+// knownAgent reports whether this build can run a choice.
+//
+// Silent when the service did not say what it has: a client that cannot enumerate agents should
+// not refuse a configuration it has no basis to judge.
+func knownAgent(c core.Choice, agents []api.AgentOption) error {
+	if len(agents) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(agents))
+	for _, a := range agents {
+		names = append(names, a.ProviderID)
+		if a.ProviderID != c.ProviderID {
+			continue
+		}
+		// A provider that does not enumerate its models accepts any of them, and one whose
+		// list is only a suggestion is not evidence that an unlisted name is wrong.
+		if len(a.Models) == 0 || a.Open {
+			return nil
+		}
+		for _, m := range a.Models {
+			if m == c.Model {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s has no model %q — it offers: %s",
+			c.ProviderID, c.Model, strings.Join(a.Models, ", "))
+	}
+	return fmt.Errorf("no agent called %q in this build — it has: %s",
+		c.ProviderID, strings.Join(names, ", "))
 }

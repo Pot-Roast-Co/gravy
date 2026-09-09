@@ -153,7 +153,9 @@ func TestNoProjectsTellsYouHowToStart(t *testing.T) {
 	f := newFake()
 	f.status.Projects = nil
 	m := boot(t, f, 100, 30)
-	if !strings.Contains(m.View(), "gravy project add") {
+	// It names the key, not a shell command: the whole point of the global P is that a fresh
+	// install never has to leave the TUI to register its first repository.
+	if !strings.Contains(m.View(), "adds a project") {
 		t.Errorf("a fresh install is not told how to start:\n%s", m.View())
 	}
 }

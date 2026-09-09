@@ -21,6 +21,8 @@ type placeholder struct {
 func newPlaceholders() map[Section]Screen {
 	tickets := map[Section]string{
 		SectionDashboard: "GR-025",
+		SectionPlan:      "",
+		SectionProjects:  "",
 		SectionBacklog:   "GR-026",
 		SectionReady:     "GR-026",
 		SectionRunning:   "GR-027",
@@ -40,6 +42,8 @@ func newPlaceholders() map[Section]Screen {
 	screens[SectionBacklog] = newQueue(core.StateBacklog)
 	screens[SectionReady] = newQueue(core.StateReady)
 	screens[SectionSettings] = newSettings()
+	screens[SectionPlan] = newPlan()
+	screens[SectionProjects] = newProjects()
 	return screens
 }
 

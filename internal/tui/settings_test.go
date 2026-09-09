@@ -29,7 +29,7 @@ func testProjects() []core.Project {
 func openSettings(t *testing.T, f *fakeService) Model {
 	t.Helper()
 	m := boot(t, f, 92, 30)
-	m = send(t, m, key("7"))
+	m = send(t, m, key(SectionSettings.Key()))
 	m = send(t, m, settingsLoadedMsg{settings: f.settings, projects: testProjects()})
 	return m
 }
@@ -86,8 +86,11 @@ func TestEveryConfigSectionIsEditable(t *testing.T) {
 		sections[f.Section] = true
 	}
 	for _, want := range []string{
+		// Global configuration only. A project's own settings moved to the Projects screen,
+		// where there is a selected project to attach them to — six rows per project in this
+		// flat list was unreadable past two or three of them.
 		"Concurrency", "Buckets", "Bucket planning", "Bucket implementation", "Agents",
-		"Timeouts", "Retry", "Retention", "Project gravy",
+		"Timeouts", "Retry", "Retention",
 	} {
 		if !sections[want] {
 			t.Errorf("no editable fields in section %q", want)
@@ -185,44 +188,6 @@ func TestRouteChoicesAreValidatedOnEntry(t *testing.T) {
 	}
 }
 
-// TestProjectFieldsSaveThroughTheirOwnCall: projects live in the database, not the config file.
-func TestProjectFieldsSaveThroughTheirOwnCall(t *testing.T) {
-	f := settingsFixture()
-	m := openSettings(t, f)
-
-	m = focus(t, m, "validation")
-	m = typeInto(t, m, "test:go test ./...; lint:golangci-lint run")
-
-	m, cmd := sendCmd(t, m, key("s"))
-	m = send(t, m, cmd())
-	if strings.Contains(m.View(), "failed") {
-		t.Fatalf("saving the project failed:\n%s", m.View())
-	}
-
-	if len(f.projects) != 1 {
-		t.Fatalf("updated %d projects, want 1", len(f.projects))
-	}
-	steps := f.projects[0].Validation
-	if len(steps) != 2 || steps[0].Name != "test" || steps[1].Cmd != "golangci-lint run" {
-		t.Errorf("validation steps = %+v", steps)
-	}
-}
-
-// TestUntouchedProjectsAreNotWritten avoids rewriting rows nobody edited.
-func TestUntouchedProjectsAreNotWritten(t *testing.T) {
-	f := settingsFixture()
-	m := openSettings(t, f)
-	m = focus(t, m, "workers")
-	m = typeInto(t, m, "6")
-
-	m, cmd := sendCmd(t, m, key("s"))
-	send(t, m, cmd())
-
-	if len(f.projects) != 0 {
-		t.Errorf("wrote %d projects for a config-only edit", len(f.projects))
-	}
-}
-
 // TestPendingRestartIsSurfaced is the honesty requirement: a setting that was saved but is not
 // in effect must say so, or you believe something untrue about your own daemon.
 func TestPendingRestartIsSurfaced(t *testing.T) {
@@ -261,7 +226,7 @@ func TestUnsavedChangesAreVisible(t *testing.T) {
 func TestTypingASettingDoesNotQuit(t *testing.T) {
 	f := settingsFixture()
 	m := openSettings(t, f)
-	m = focus(t, m, "validation")
+	m = focus(t, m, "workers")
 	m = send(t, m, key("enter"))
 
 	scr := m.screens[SectionSettings].(*settings)
@@ -276,8 +241,10 @@ func TestTypingASettingDoesNotQuit(t *testing.T) {
 	if !strings.Contains(m.View(), "q1 make quick") {
 		t.Errorf("the field did not receive the keystrokes:\n%s", m.View())
 	}
-	if !strings.Contains(m.View(), "Settings") {
-		t.Errorf("typing left the settings screen:\n%s", m.View())
+	// Checked on the active section: Settings is deliberately off the header row, so its
+	// title is not in the view even while it is the screen you are on.
+	if m.active != SectionSettings {
+		t.Errorf("typing left the settings screen for %v", m.active)
 	}
 }
 
@@ -384,5 +351,163 @@ func TestDeletingABucketNeedsItsName(t *testing.T) {
 	}
 	if _, still := scr.cfg.Concurrency.Routes[core.RoutePlanning]; still {
 		t.Error("the bucket's capacity outlived the bucket")
+	}
+}
+
+// TestRouteRefusesAnAgentThisBuildCannotRun is the check that would have caught "codex/sol".
+//
+// It parses perfectly as provider/model and is still wrong: no such model exists. The only way
+// anyone found out was a ticket reaching review with a 400 from the provider attached to it.
+func TestRouteRefusesAnAgentThisBuildCannotRun(t *testing.T) {
+	agents := []api.AgentOption{
+		{ProviderID: "claude-code", Models: []string{"opus", "sonnet", "haiku"}},
+		{ProviderID: "codex", Models: []string{"default"}},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		in      string
+		wantErr string
+	}{
+		{name: "a real pair", in: "claude-code/sonnet"},
+		{name: "several real pairs", in: "codex/default, claude-code/opus"},
+		{name: "the model that started this", in: "codex/sol", wantErr: `codex has no model "sol"`},
+		{name: "an unknown provider", in: "gpt/4", wantErr: `no agent called "gpt"`},
+		{name: "still catches the shape", in: "claude-code", wantErr: "not \"provider/model\""},
+		{name: "empty is no route at all", in: "  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseChoices(tc.in, agents)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("parseChoices(%q) = %v, want nil", tc.in, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("parseChoices(%q) = nil, want %q", tc.in, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("parseChoices(%q) = %q, want it to mention %q", tc.in, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRouteErrorNamesTheAlternatives: being told "no" without being told what would work is how
+// someone ends up guessing a second wrong model.
+func TestRouteErrorNamesTheAlternatives(t *testing.T) {
+	agents := []api.AgentOption{{ProviderID: "codex", Models: []string{"default"}}}
+	_, err := parseChoices("codex/sol", agents)
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "default") {
+		t.Errorf("the error does not say what would work: %v", err)
+	}
+}
+
+// TestRouteAcceptsAnythingWhenModelsAreUnknown: a provider that cannot enumerate its models is
+// not evidence that a model is wrong — an API-key login can name models the adapter has no list
+// for.
+func TestRouteAcceptsAnythingWhenModelsAreUnknown(t *testing.T) {
+	agents := []api.AgentOption{{ProviderID: "codex"}}
+	if _, err := parseChoices("codex/gpt-5-codex", agents); err != nil {
+		t.Errorf("refused a model it has no basis to judge: %v", err)
+	}
+}
+
+// TestRouteValidationIsSilentWithoutAgents: a client that cannot enumerate agents must not
+// refuse a configuration it has no basis to judge.
+func TestRouteValidationIsSilentWithoutAgents(t *testing.T) {
+	if _, err := parseChoices("anything/at-all", nil); err != nil {
+		t.Errorf("refused without knowing what this build has: %v", err)
+	}
+}
+
+// TestRouteAcceptsAnUnlistedModelWhenTheListIsOpen is the correction.
+//
+// The codex adapter's model list is transcribed from an interactive picker by hand, so refusing
+// a name missing from it would break the day OpenAI ships a model — which is exactly what a
+// stale note about ChatGPT-account logins nearly caused here. "gpt-5.6-sol" was verified working
+// on such a login while the adapter still claimed no model could be named.
+func TestRouteAcceptsAnUnlistedModelWhenTheListIsOpen(t *testing.T) {
+	agents := []api.AgentOption{
+		{ProviderID: "codex", Models: []string{"default", "gpt-5.6-sol"}, Open: true},
+		{ProviderID: "claude-code", Models: []string{"opus", "sonnet"}},
+	}
+
+	for _, in := range []string{"codex/gpt-5.6-sol", "codex/whatever-ships-next", "codex/default"} {
+		if _, err := parseChoices(in, agents); err != nil {
+			t.Errorf("parseChoices(%q) = %v, want nil: the list is advisory", in, err)
+		}
+	}
+
+	// A closed list still refuses, so the check has not become decorative.
+	if _, err := parseChoices("claude-code/nonesuch", agents); err == nil {
+		t.Error("a closed list accepted an unknown model")
+	}
+}
+
+func TestProjectRoutesRoundTrip(t *testing.T) {
+	agents := []api.AgentOption{
+		{ProviderID: "codex", Models: []string{"default", "gpt-5.6-sol"}, Open: true},
+		{ProviderID: "claude-code", Models: []string{"opus", "sonnet"}},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		in      string
+		wantErr string
+	}{
+		{name: "one bucket", in: "implementation=codex/gpt-5.6-sol"},
+		{name: "a fallback list", in: "implementation=codex/gpt-5.6-sol claude-code/sonnet"},
+		{name: "several buckets", in: "implementation=codex/default, review=claude-code/sonnet"},
+		{name: "empty is no override", in: "   "},
+		{name: "missing the route", in: "codex/default", wantErr: `not "route=provider/model"`},
+		{name: "a bucket with no agents", in: "implementation=", wantErr: "has no agents"},
+		{name: "an unknown model on a closed list", in: "review=claude-code/nope", wantErr: "has no model"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseProjectRoutes(tc.in, agents)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseProjectRoutes(%q) = %v, want %q", tc.in, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseProjectRoutes(%q): %v", tc.in, err)
+			}
+			// What is parsed must render back to something that parses again, or editing a
+			// project's agents twice loses them.
+			again, err := parseProjectRoutes(formatProjectRoutes(got), agents)
+			if err != nil {
+				t.Fatalf("re-parsing what was rendered: %v", err)
+			}
+			if len(again) != len(got) {
+				t.Errorf("round trip changed %d buckets into %d", len(got), len(again))
+			}
+		})
+	}
+}
+
+// TestProjectHostMustExist: a project pointed at a machine that is not configured has nowhere to
+// run, and would say so only once a ticket was waiting on it.
+func TestProjectHostMustExist(t *testing.T) {
+	f := newFake()
+	f.settings.Config.Hosts = []config.Host{{ID: "air", Target: "air", Workers: 2}}
+	m := openSettings(t, f)
+
+	scr := m.screens[SectionSettings].(*settings)
+	if !knownHost(scr, "air") {
+		t.Error("a configured host is not recognised")
+	}
+	// The machine running the daemon is always available and is never in the file.
+	if !knownHost(scr, "local") {
+		t.Error("the local machine is not recognised as a host")
+	}
+	if knownHost(scr, "nonesuch") {
+		t.Error("an unconfigured host was accepted")
 	}
 }

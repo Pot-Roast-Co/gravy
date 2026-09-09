@@ -156,6 +156,11 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		return q, nil
 	}
 
+	// A confirmation is feedback about the last key, not a permanent state. Left in place it
+	// occupies the footer, which is where the keys are documented — so after saving a ticket
+	// the screen stops telling you how to queue it, which is the next thing you want.
+	q.notice = ""
+
 	// `n` works on an empty queue; everything else needs a row.
 	if key == "n" {
 		q.startForm("", core.Ticket{})
@@ -358,7 +363,7 @@ func (q *queue) submitForm(ctx ViewContext) tea.Cmd {
 	}
 	if project == "" {
 		return func() tea.Msg {
-			return queueDoneMsg{verb: "create", err: fmt.Errorf("no project selected — register one with `gravy project add`, or pick one with p")}
+			return queueDoneMsg{verb: "create", err: fmt.Errorf("no project selected — add one with P, or pick one with p")}
 		}
 	}
 	return func() tea.Msg {

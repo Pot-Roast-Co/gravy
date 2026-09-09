@@ -122,7 +122,7 @@ func TestSweepApprovesThroughTheSameCodePath(t *testing.T) {
 
 	// Approving from the plain review screen.
 	direct := boot(t, f, 90, 26)
-	direct = send(t, direct, key("5"))
+	direct = send(t, direct, key(SectionReview.Key()))
 	direct = send(t, direct, enteredMsg{focus: "m1"})
 	direct = send(t, direct, reviewLoadedMsg{bundle: bundleFor(f, "m1")})
 	_, dcmd := sendCmd(t, direct, key("a"))

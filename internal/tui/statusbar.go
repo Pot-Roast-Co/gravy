@@ -56,7 +56,9 @@ func (s statusBar) view(th Theme, width int) string {
 	}, th.Muted.Render("  ·  "))
 
 	// A filter in progress replaces the hint, because that is what the next keystroke does.
-	right := th.Muted.Render("? help")
+	// Settings is not on the number row — that row is the ticket lifecycle — so its key lives
+	// here, beside the other one that is always available. Off the row but never hidden.
+	right := th.Muted.Render(SettingsKey + " settings  ·  ? help")
 	if s.filtering {
 		right = th.Accent.Render("/" + s.filter)
 	} else if s.filter != "" {

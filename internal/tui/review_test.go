@@ -5,11 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pot-roast-co/gravy/internal/api"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/git"
+	rev "github.com/pot-roast-co/gravy/internal/review"
 	"github.com/pot-roast-co/gravy/internal/store"
 )
 
@@ -49,7 +51,7 @@ func reviewFixture() *fakeService {
 func openReview(t *testing.T, f *fakeService, w, h int) Model {
 	t.Helper()
 	m := boot(t, f, w, h)
-	m = send(t, m, key("5"))
+	m = send(t, m, key(SectionReview.Key()))
 	m = send(t, m, enteredMsg{focus: f.review.Ticket.ID})
 	m = send(t, m, reviewLoadedMsg{bundle: f.review})
 	return m
@@ -119,20 +121,23 @@ func TestEnterExpandsAndCollapses(t *testing.T) {
 // to real tools, not a diff viewer.
 func TestLargePatchTruncatesWithAnOffer(t *testing.T) {
 	f := reviewFixture()
+	// Past maxPatchLines, which is a guard against a generated file rather than a reading
+	// limit — an ordinary change must not hit it.
 	var big strings.Builder
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 2000; i++ {
 		fmt.Fprintf(&big, "+line %d\n", i)
 	}
 	f.review.Diff.Files = []git.FileDiff{
-		{Path: "huge.go", Status: "modified", Additions: 500, Patch: big.String()},
+		{Path: "huge.go", Status: "modified", Additions: 2000, Patch: big.String()},
 	}
 
 	m := openReview(t, f, 80, 50)
 	m = send(t, m, key("enter"))
+	m = send(t, m, key("G")) // the marker is at the end of a patch that now scrolls
 	view := m.View()
 
 	if !strings.Contains(view, "truncated") {
-		t.Errorf("a 500-line patch was not truncated:\n%s", view)
+		t.Errorf("a 2000-line patch was not truncated:\n%s", view)
 	}
 	if n := len(strings.Split(view, "\n")); n != 50 {
 		t.Errorf("expanded view is %d lines, want 50", n)
@@ -249,17 +254,71 @@ func TestRejectRequiresConfirmation(t *testing.T) {
 
 // TestExternalEscapesSayTheyAreNotWired covers the part of the ticket that is deliberately not
 // built: a key that silently does nothing is worse than one that explains itself.
-func TestExternalEscapesSayTheyAreNotWired(t *testing.T) {
+// TestExternalEscapesRefuseAMissingWorktree: the worktree lives on the machine running the
+// daemon, which is not necessarily this one. Launching an editor on a directory that is not
+// there is worse than saying so.
+func TestExternalEscapesRefuseAMissingWorktree(t *testing.T) {
 	f := reviewFixture()
-	for _, k := range []string{"e", "d", "!"} {
+	// e goes through the service to build a review checkout, so it is covered separately.
+	for _, k := range []string{"d", "!"} {
 		m := openReview(t, f, 80, 24)
-		m = send(t, m, key(k))
-		view := m.View()
-		if !strings.Contains(view, "not wired up yet") {
-			t.Errorf("key %q gave no feedback:\n%s", k, view)
+		m, cmd := sendCmd(t, m, key(k))
+		if cmd != nil {
+			t.Errorf("key %q launched a tool on a worktree that is not on this machine", k)
 		}
-		if !strings.Contains(view, "worktree") {
-			t.Errorf("key %q did not say where the worktree is:\n%s", k, view)
+		if view := m.View(); !strings.Contains(view, "not on this machine") {
+			t.Errorf("key %q gave no reason:\n%s", k, view)
+		}
+	}
+}
+
+// TestExternalEscapesHandOffTheTerminal covers the real path, on a worktree that exists.
+func TestExternalEscapesHandOffTheTerminal(t *testing.T) {
+	wt := t.TempDir()
+	f := reviewFixture()
+	f.review.Ticket.WorktreePath = wt
+
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "true") // a real program, so building the command succeeds
+	t.Setenv("SHELL", "/bin/sh")
+
+	for _, k := range []string{"d", "!"} {
+		m := openReview(t, f, 80, 24)
+		m, cmd := sendCmd(t, m, key(k))
+		if cmd == nil {
+			t.Errorf("key %q did not hand off:\n%s", k, m.View())
+		}
+	}
+}
+
+// TestEditorHandOffNeedsAnEditor: a key that silently does nothing because the environment is
+// empty is indistinguishable from a broken one.
+func TestEditorHandOffNeedsAnEditor(t *testing.T) {
+	f := reviewFixture()
+	f.checkoutPath = t.TempDir()
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+
+	m := openReview(t, f, 80, 24)
+	m, cmd := sendCmd(t, m, key("e"))
+	if cmd == nil {
+		t.Fatal("e did not ask for a checkout")
+	}
+	m = send(t, m, cmd()) // the checkout arrives; the editor is chosen here
+
+	if view := m.View(); !strings.Contains(view, "VISUAL or EDITOR") {
+		t.Errorf("e did not say what to set:\n%s", view)
+	}
+}
+
+// TestReviewOffersTheEscapes: they are only useful if the screen says they exist.
+func TestReviewOffersTheEscapes(t *testing.T) {
+	// Wide enough for the whole footer; it trims from the end on narrow terminals.
+	m := openReview(t, reviewFixture(), 140, 30)
+	view := m.View()
+	for _, want := range []string{"e editor", "d difftool", "! shell"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the footer omits %q:\n%s", want, view)
 		}
 	}
 }
@@ -267,7 +326,7 @@ func TestExternalEscapesSayTheyAreNotWired(t *testing.T) {
 // TestReviewWithNothingPendingGuides is the empty state.
 func TestReviewWithNothingPendingGuides(t *testing.T) {
 	m := boot(t, newFake(), 80, 24)
-	m = send(t, m, key("5"))
+	m = send(t, m, key(SectionReview.Key()))
 	m = send(t, m, enteredMsg{})
 	if !strings.Contains(m.View(), "Nothing awaiting review") {
 		t.Errorf("empty review screen is not explained:\n%s", m.View())
@@ -278,10 +337,365 @@ func TestReviewWithNothingPendingGuides(t *testing.T) {
 func TestReviewLoadFailureIsVisible(t *testing.T) {
 	f := reviewFixture()
 	m := boot(t, f, 80, 24)
-	m = send(t, m, key("5"))
+	m = send(t, m, key(SectionReview.Key()))
 	m = send(t, m, reviewErrMsg{err: fmt.Errorf("worktree is gone")})
 	view := m.View()
 	if !strings.Contains(view, "Could not load") || !strings.Contains(view, "worktree is gone") {
 		t.Errorf("a failed load is not reported:\n%s", view)
+	}
+}
+
+// TestEditorOpensAReviewCheckout is the point of the checkout.
+//
+// Gravy commits what the agent produced, so the ticket's own worktree is clean and an editor's
+// git integration has nothing to show there. The checkout puts the same content on disk with the
+// index at its base, which is the state every editor is built to display.
+func TestEditorOpensAReviewCheckout(t *testing.T) {
+	f := reviewFixture()
+	f.checkoutPath = t.TempDir()
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "true")
+
+	m := openReview(t, f, 80, 24)
+	m, cmd := sendCmd(t, m, key("e"))
+	if cmd == nil {
+		t.Fatal("e did not ask for a checkout")
+	}
+	m, cmd = sendCmd(t, m, cmd())
+	if cmd == nil {
+		t.Fatalf("the checkout did not open an editor:\n%s", m.View())
+	}
+	if len(f.checkedOut) != 1 {
+		t.Fatalf("ReviewCheckout called %d times, want 1", len(f.checkedOut))
+	}
+
+	// The ticket's own worktree must not be what gets opened: it is clean, so an editor shows
+	// nothing there.
+	if f.checkoutPath == f.review.Ticket.WorktreePath {
+		t.Fatal("the fixture cannot distinguish the checkout from the worktree")
+	}
+}
+
+// TestEditorReportsAFailedCheckout: a key that silently does nothing is indistinguishable from a
+// broken one.
+func TestEditorReportsAFailedCheckout(t *testing.T) {
+	f := reviewFixture()
+	f.checkoutErr = fmt.Errorf("GR-100 has no branch")
+
+	m := openReview(t, f, 80, 24)
+	m, cmd := sendCmd(t, m, key("e"))
+	if cmd == nil {
+		t.Fatal("e did not ask for a checkout")
+	}
+	m = send(t, m, cmd())
+
+	if view := m.View(); !strings.Contains(view, "has no branch") {
+		t.Errorf("the failure is not shown:\n%s", view)
+	}
+}
+
+// TestEditorRefusesACheckoutElsewhere: the checkout is made on the machine running the daemon,
+// which is not necessarily this one.
+func TestEditorRefusesACheckoutElsewhere(t *testing.T) {
+	f := reviewFixture()
+	f.checkoutPath = "/definitely/not/here"
+	t.Setenv("EDITOR", "true")
+
+	m := openReview(t, f, 80, 24)
+	m, cmd := sendCmd(t, m, key("e"))
+	m, cmd = sendCmd(t, m, cmd())
+	if cmd != nil {
+		t.Fatal("launched an editor on a path that is not on this machine")
+	}
+	if view := m.View(); !strings.Contains(view, "not on this machine") {
+		t.Errorf("no reason given:\n%s", view)
+	}
+}
+
+// TestApproveDiscardsTheCheckout: one review checkout per reviewed ticket, left behind forever,
+// is a directory per ticket that nothing ever cleans up.
+func TestApproveDiscardsTheCheckout(t *testing.T) {
+	f := reviewFixture()
+	f.checkoutPath = t.TempDir()
+	t.Setenv("EDITOR", "true")
+
+	m := openReview(t, f, 80, 24)
+	m, cmd := sendCmd(t, m, key("e"))
+	m, _ = sendCmd(t, m, cmd())
+
+	m, cmd = sendCmd(t, m, key("a"))
+	if cmd == nil {
+		t.Fatal("a did not approve")
+	}
+	send(t, m, cmd())
+
+	if len(f.approved) != 1 {
+		t.Fatalf("approve called %d times", len(f.approved))
+	}
+}
+
+// TestReviewShowsTheTicket: reviewing a diff without the ticket in front of you is checking
+// whether it looks reasonable, not whether it did what was asked.
+func TestReviewShowsTheTicket(t *testing.T) {
+	f := reviewFixture()
+	f.review.Ticket.Body = "Done looks like: an allowlist applied before the changeset."
+
+	m := openReview(t, f, 120, 40)
+	if strings.Contains(m.View(), "Done looks like") {
+		t.Fatal("the ticket body is shown before it is asked for")
+	}
+	if !strings.Contains(m.View(), "t ticket") {
+		t.Errorf("the footer does not offer the ticket:\n%s", m.View())
+	}
+
+	m = send(t, m, key("t"))
+	view := m.View()
+	if !strings.Contains(view, "Done looks like") {
+		t.Errorf("t did not show the ticket:\n%s", view)
+	}
+	if !strings.Contains(view, "t hide ticket") {
+		t.Errorf("the footer does not offer to hide it again:\n%s", view)
+	}
+
+	m = send(t, m, key("t"))
+	if strings.Contains(m.View(), "Done looks like") {
+		t.Error("t did not hide the ticket again")
+	}
+}
+
+// TestReviewScrollsTheDiff is the complaint the 24-line cap created: an ordinary change was cut
+// in half and you were told to leave for an editor to read the rest.
+func TestReviewScrollsTheDiff(t *testing.T) {
+	f := reviewFixture()
+	var big strings.Builder
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&big, "+line %02d\n", i)
+	}
+	f.review.Diff.Files = []git.FileDiff{
+		{Path: "big.go", Status: "modified", Additions: 80, Patch: big.String()},
+	}
+
+	m := openReview(t, f, 100, 24)
+	m = send(t, m, key("enter")) // expand
+
+	if strings.Contains(m.View(), "truncated") {
+		t.Error("an 80-line diff was truncated; the cap is meant for generated files")
+	}
+
+	// The end of the diff is reachable, which it was not before.
+	m = send(t, m, key("G"))
+	if !strings.Contains(m.View(), "line 79") {
+		t.Errorf("the end of the diff is not reachable:\n%s", m.View())
+	}
+	m = send(t, m, key("g"))
+	if !strings.Contains(m.View(), "line 00") {
+		t.Errorf("g did not return to the top:\n%s", m.View())
+	}
+}
+
+// TestReviewTabMovesBetweenFiles keeps j/k free for the diff.
+func TestReviewTabMovesBetweenFiles(t *testing.T) {
+	f := reviewFixture()
+	f.review.Diff.Files = []git.FileDiff{
+		{Path: "one.go", Status: "modified"},
+		{Path: "two.go", Status: "modified"},
+	}
+	m := openReview(t, f, 100, 30)
+
+	scr := func(m Model) *review { return m.screens[SectionReview].(*review) }
+	if scr(m).cursor != 0 {
+		t.Fatalf("cursor starts at %d", scr(m).cursor)
+	}
+	m = send(t, m, key("tab"))
+	if scr(m).cursor != 1 {
+		t.Errorf("tab did not move to the next file: cursor %d", scr(m).cursor)
+	}
+	m = send(t, m, key("tab")) // wraps
+	if scr(m).cursor != 0 {
+		t.Errorf("tab did not wrap: cursor %d", scr(m).cursor)
+	}
+}
+
+// TestReviewFooterTrimsRatherThanOverflowing: losing "tab file" is survivable, losing
+// "a approve" is not.
+func TestReviewFooterTrimsRatherThanOverflowing(t *testing.T) {
+	for _, w := range []int{40, 60, 80, 140} {
+		m := openReview(t, reviewFixture(), w, 24)
+		lines := strings.Split(m.View(), "\n")
+		for i, ln := range lines {
+			if got := lipgloss.Width(ln); got > w {
+				t.Errorf("width %d: line %d is %d cells: %q", w, i, got, ln)
+			}
+		}
+		if !strings.Contains(m.View(), "a approve") {
+			t.Errorf("width %d: the footer dropped the approve key:\n%s", w, m.View())
+		}
+	}
+}
+
+// TestRereviewAsksAgain is the case the key exists for: the advisory pass ran once, inside the
+// run, and failed for a reason since fixed — a misrouted model. Without this the verdict on the
+// card stays broken and the only way to ask again is re-running the whole ticket.
+func TestRereviewAsksAgain(t *testing.T) {
+	f := reviewFixture()
+	m := openReview(t, f, 140, 30)
+
+	if !strings.Contains(m.View(), "v re-review") {
+		t.Errorf("the footer does not offer a re-review:\n%s", m.View())
+	}
+
+	m, cmd := sendCmd(t, m, key("v"))
+	if cmd == nil {
+		t.Fatal("v asked for nothing")
+	}
+	send(t, m, cmd())
+
+	if len(f.rereviewed) != 1 {
+		t.Fatalf("Rereview called %d times, want 1", len(f.rereviewed))
+	}
+	if f.rereviewed[0] != f.review.Ticket.ID {
+		t.Errorf("re-reviewed %q, want the ticket on screen", f.rereviewed[0])
+	}
+}
+
+// TestRereviewReportsItsFailure: the automatic pass swallows errors because it is advisory, but
+// this one was asked for, and silence would read as a key that does nothing.
+func TestRereviewReportsItsFailure(t *testing.T) {
+	f := reviewFixture()
+	f.rereviewErr = fmt.Errorf("no review model is configured")
+
+	m := openReview(t, f, 140, 30)
+	m, cmd := sendCmd(t, m, key("v"))
+	m = send(t, m, cmd())
+
+	if view := m.View(); !strings.Contains(view, "no review model is configured") {
+		t.Errorf("the failure is not shown:\n%s", view)
+	}
+}
+
+// TestVerdictFindingsAreReadableInFull: the screen scrolls, so cutting a reviewer's reasoning at
+// the right-hand edge buys nothing and costs the half of the sentence that says what to do.
+func TestVerdictFindingsAreReadableInFull(t *testing.T) {
+	f := reviewFixture()
+	f.review.Verdict = rev.Verdict{
+		Overall: rev.Concerns,
+		Summary: "The authorization holes are addressed and covered by attacker tests. " +
+			"The required ROADMAP.md status update is missing from the diff.",
+		Findings: []rev.Finding{{
+			Severity: rev.High,
+			File:     "ROADMAP.md",
+			Rationale: "The ticket explicitly requires moving the High finding to fixed status " +
+				"with the commit hash, but this change does not update ROADMAP.md at all.",
+		}},
+	}
+
+	m := openReview(t, f, 90, 40)
+	view := m.View()
+
+	// The end of the summary, which a one-line render would have cut.
+	if !strings.Contains(view, "missing from the diff") {
+		t.Errorf("the summary is truncated:\n%s", view)
+	}
+	// The end of the rationale, likewise.
+	if !strings.Contains(view, "does not update ROADMAP.md") {
+		t.Errorf("the finding's rationale is truncated:\n%s", view)
+	}
+	// Severity as a word, not only a colour.
+	if !strings.Contains(view, "[high]") {
+		t.Errorf("severity is only conveyed by colour:\n%s", view)
+	}
+	if !strings.Contains(view, "ROADMAP.md") {
+		t.Errorf("the finding does not say where:\n%s", view)
+	}
+}
+
+// TestVerdictStillFitsItsTerminal: wrapping must not let a long verdict overflow.
+func TestVerdictStillFitsItsTerminal(t *testing.T) {
+	f := reviewFixture()
+	f.review.Verdict = rev.Verdict{
+		Overall:  rev.Fail,
+		Summary:  strings.Repeat("a long considered summary sentence. ", 12),
+		Findings: []rev.Finding{{Severity: rev.Medium, File: "a.go", Rationale: strings.Repeat("why ", 60)}},
+	}
+	for _, w := range []int{50, 80, 120} {
+		m := openReview(t, f, w, 24)
+		for i, ln := range strings.Split(m.View(), "\n") {
+			if got := lipgloss.Width(ln); got > w {
+				t.Errorf("width %d: line %d is %d cells: %q", w, i, got, ln)
+			}
+		}
+	}
+}
+
+// TestRequestChangesStartsFromTheVerdict: the reviewer has just read the diff and said what is
+// wrong with it. Making the human retype that to send it back is asking them to be a courier
+// between two machines.
+func TestRequestChangesStartsFromTheVerdict(t *testing.T) {
+	f := reviewFixture()
+	f.review.Verdict = rev.Verdict{
+		Overall: rev.Concerns,
+		Summary: "The required ROADMAP.md status update is missing from the diff.",
+		Findings: []rev.Finding{{
+			Severity:  rev.Low,
+			File:      "ROADMAP.md",
+			Rationale: "The ticket requires moving the High finding to fixed with the commit hash.",
+		}},
+	}
+
+	m := openReview(t, f, 110, 30)
+	m = send(t, m, key("r"))
+
+	scr := m.screens[SectionReview].(*review)
+	for _, want := range []string{"ROADMAP.md", "missing from the diff", "[low]"} {
+		if !strings.Contains(scr.feedback, want) {
+			t.Errorf("the seeded feedback omits %q: %q", want, scr.feedback)
+		}
+	}
+
+	// It is a draft: editable, and sendable as-is.
+	m = typeKeys(t, m, " Also bump the version.")
+	m, cmd := sendCmd(t, m, key("enter"))
+	if cmd == nil {
+		t.Fatal("enter sent nothing")
+	}
+	send(t, m, cmd())
+
+	sent := f.changes[f.review.Ticket.ID]
+	if !strings.Contains(sent, "ROADMAP.md") || !strings.Contains(sent, "Also bump the version.") {
+		t.Errorf("what was sent = %q", sent)
+	}
+}
+
+// TestRequestChangesCanBeClearedInOneKey: backspacing a paragraph a machine wrote for you is not
+// a reasonable thing to ask.
+func TestRequestChangesCanBeClearedInOneKey(t *testing.T) {
+	f := reviewFixture()
+	f.review.Verdict = rev.Verdict{
+		Overall:  rev.Concerns,
+		Summary:  "Something long enough to be annoying to delete by hand.",
+		Findings: []rev.Finding{{Severity: rev.Low, File: "a.go", Rationale: "and a rationale too"}},
+	}
+	m := openReview(t, f, 110, 30)
+	m = send(t, m, key("r"))
+	if scr := m.screens[SectionReview].(*review); scr.feedback == "" {
+		t.Fatal("nothing was seeded")
+	}
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if scr := m.screens[SectionReview].(*review); scr.feedback != "" {
+		t.Errorf("ctrl+u left %q", scr.feedback)
+	}
+}
+
+// TestRequestChangesIsEmptyWithoutFindings: a verdict that found nothing must not send the agent
+// a cheerful summary of its own success.
+func TestRequestChangesIsEmptyWithoutFindings(t *testing.T) {
+	f := reviewFixture()
+	f.review.Verdict = rev.Verdict{Overall: rev.Pass, Summary: "Looks good to me."}
+
+	m := openReview(t, f, 110, 30)
+	m = send(t, m, key("r"))
+	if scr := m.screens[SectionReview].(*review); scr.feedback != "" {
+		t.Errorf("seeded %q from a passing verdict", scr.feedback)
 	}
 }
