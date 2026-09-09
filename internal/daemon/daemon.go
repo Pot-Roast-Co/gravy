@@ -12,6 +12,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/api"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/notify"
 )
 
 // LogFileName is where a detached daemon's output goes.
@@ -50,8 +51,21 @@ type Daemon struct {
 	store ReconcileStore
 	newID func() string
 	log   *slog.Logger
+	// notifier is told when a run is found orphaned by a restart. Nil is legitimate.
+	notifier Notifier
 
 	srv *api.Server
+}
+
+// Notifier tells the human that Gravy needs them.
+type Notifier interface {
+	Notify(ctx context.Context, title, body string, urgency notify.Urgency)
+}
+
+// WithNotifier sets who is told when reconciliation parks an orphaned run.
+func (d *Daemon) WithNotifier(n Notifier) *Daemon {
+	d.notifier = n
+	return d
 }
 
 // New returns a daemon for a home directory.
@@ -177,6 +191,13 @@ func (d *Daemon) parkTicket(ctx context.Context, r core.Run, detail string) erro
 		if _, err = d.store.SetTicketState(ctx, t.ID, core.EventValidationExhausted); err != nil {
 			return fmt.Errorf("park ticket %s: %w", t.ID, err)
 		}
+	}
+
+	// The project name is not worth widening ReconcileStore for: reconciliation runs once at
+	// startup and the ticket title already says which work stopped.
+	if d.notifier != nil {
+		title, body, urgency := notify.ForAttention(core.ReasonHostUnavailable, "", t.Title)
+		d.notifier.Notify(ctx, title, body, urgency)
 	}
 
 	return d.store.OpenAttention(ctx, core.Attention{
