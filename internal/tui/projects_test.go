@@ -262,7 +262,7 @@ func TestProjectSettingsLiveWithTheProject(t *testing.T) {
 
 	m = send(t, m, key("c"))
 	view := m.View()
-	for _, want := range []string{"host", "agents", "allowed commands", "validation", "target branch"} {
+	for _, want := range []string{"host", "buckets", "allowed commands", "validation", "target branch"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the project's settings omit %q:\n%s", want, view)
 		}

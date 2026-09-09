@@ -49,8 +49,12 @@ func projectFields(agents []api.AgentOption, hosts []string) []projectField {
 			},
 		},
 		{
-			Label: "agents",
-			Hint:  `overrides the global buckets, as "route=provider/model ..."`,
+			// "buckets", matching Settings. It was "agents", which collides with the Agents
+			// section there — that one is which CLIs exist and what command runs them, and
+			// the same word meaning two things one screen apart is a question waiting to be
+			// asked.
+			Label: "buckets",
+			Hint:  `overrides the global buckets for this project, as "bucket=provider/model ..."`,
 			Get:   func(p core.Project) string { return formatProjectRoutes(p.Routes) },
 			Set: func(p *core.Project, v string) error {
 				routes, err := parseProjectRoutes(v, agents)
