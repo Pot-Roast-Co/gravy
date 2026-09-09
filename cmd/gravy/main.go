@@ -48,6 +48,8 @@ func run(args []string) error {
 		return runApprove(ctx, args[1:])
 	case "continue":
 		return runContinue(ctx, args[1:])
+	case "changes":
+		return runChanges(ctx, args[1:])
 	case "reject":
 		return runReject(ctx, args[1:])
 	case "try":

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -211,5 +212,65 @@ func runReject(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("%s is %s\n", args[0], state)
+	return nil
+}
+
+// runChanges sends work back to the agent with feedback.
+//
+// The review loop had approve and reject but no way to ask for changes outside the TUI, so
+// anything scripted could only accept or discard — and feedback longer than a line was awkward
+// to type into a single-line prompt. Reading it from a file or stdin is how a considered review
+// gets written.
+func runChanges(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy changes", flag.ContinueOnError)
+	file := fs.String("f", "", "read the feedback from a file, or - for stdin")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `usage: gravy changes [-f file] <ticket-id> [feedback...]`)
+		fmt.Fprintln(os.Stderr, "\nSends work back to the agent. Your words become its next prompt.")
+		fmt.Fprintln(os.Stderr, "\nflags:")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fs.Usage()
+		return fmt.Errorf("no ticket given")
+	}
+
+	id := rest[0]
+	feedback := strings.TrimSpace(strings.Join(rest[1:], " "))
+	if *file != "" {
+		var (
+			b   []byte
+			err error
+		)
+		if *file == "-" {
+			b, err = io.ReadAll(os.Stdin)
+		} else {
+			b, err = os.ReadFile(*file)
+		}
+		if err != nil {
+			return fmt.Errorf("read feedback: %w", err)
+		}
+		feedback = strings.TrimSpace(string(b))
+	}
+	// Refused here as well as in the service: an agent asked to try again with no new
+	// information will usually produce the same output, at the price of a whole run.
+	if feedback == "" {
+		return fmt.Errorf("say what needs to change")
+	}
+
+	a, err := newApp(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	if err := a.svc.RequestChanges(ctx, id, feedback); err != nil {
+		return err
+	}
+	fmt.Printf("%s is back in the queue with your feedback\n", id)
 	return nil
 }
