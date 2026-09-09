@@ -81,6 +81,7 @@ func projectAdd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gravy project add", flag.ContinueOnError)
 	target := fs.String("target-branch", "", "branch to merge into (default: the remote's HEAD)")
 	mergeMode := fs.String("merge-mode", "merge", "how work lands: merge | pr")
+	hostID := fs.String("host", "", "machine this project lives on, from config hosts (default: local)")
 	name := fs.String("name", "", "project name (default: the directory name)")
 	parallel := fs.Bool("parallel", false, "allow several tickets in flight at once (you handle conflicts)")
 	maxConc := fs.Int("max-concurrency", 1, "tickets in flight when --parallel is set")
@@ -106,7 +107,7 @@ func projectAdd(ctx context.Context, args []string) error {
 	defer a.Close()
 
 	p, err := a.svc.AddProject(ctx, api.AddProjectReq{
-		Path: paths[0], Name: *name, TargetBranch: *target,
+		Path: paths[0], Name: *name, TargetBranch: *target, Host: *hostID,
 		MergeMode: core.LandMode(*mergeMode), Validation: steps,
 		ParallelMode: *parallel, MaxConcurrency: *maxConc,
 	})
@@ -116,6 +117,9 @@ func projectAdd(ctx context.Context, args []string) error {
 
 	fmt.Printf("registered %s\n", p.Slug)
 	fmt.Printf("  path          %s\n", p.RepoPath)
+	if p.HostID != "" {
+		fmt.Printf("  host          %s\n", p.HostID)
+	}
 	fmt.Printf("  target branch %s\n", p.TargetBranch)
 	fmt.Printf("  merge mode    %s\n", p.MergeMode)
 	fmt.Printf("  mode          %s\n", modeLabel(p))

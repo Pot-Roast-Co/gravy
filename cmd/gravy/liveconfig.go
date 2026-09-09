@@ -56,6 +56,19 @@ func (l *liveConfig) usable(providerID string) bool {
 // at startup — the size of the worker pool, which agent CLIs are registered, the timeouts an
 // orchestrator was built with — and a settings screen that silently accepted them would leave a
 // user believing a change took effect when it had not.
+// sameHosts reports whether two host lists describe the same machines.
+func sameHosts(a, b []config.Host) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func applyConfig(live *liveConfig, sched *scheduler.Scheduler, loaded config.Config) func(config.Config) []string {
 	return func(c config.Config) []string {
 		// Applied live: the router reads the route table on every resolve, and the scheduler
@@ -68,6 +81,12 @@ func applyConfig(live *liveConfig, sched *scheduler.Scheduler, loaded config.Con
 			pending = append(pending, fmt.Sprintf(
 				"concurrency.workers (%d saved, %d running)",
 				c.Concurrency.Workers, loaded.Concurrency.Workers))
+		}
+		// Hosts are bound into the object graph at startup — the pool probes each one's
+		// capabilities and the repository factory indexes them — so a machine added or
+		// removed here does not join or leave a running daemon.
+		if !sameHosts(c.Hosts, loaded.Hosts) {
+			pending = append(pending, "hosts")
 		}
 		for id, p := range c.Providers {
 			was, existed := loaded.Providers[id]

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/api"
+	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/daemon"
 	"github.com/pot-roast-co/gravy/internal/host"
 )
@@ -38,7 +40,7 @@ func runServe(ctx context.Context, args []string) error {
 		}
 	}
 
-	d := daemon.New(a.home, a.svc, a.loop(), a.db, newID, log)
+	d := daemon.New(a.home, a.svc, a.loop(), a.db, newID, log).WithNotifier(a.notifier)
 	return d.Run(ctx)
 }
 
@@ -79,4 +81,48 @@ func connect(ctx context.Context, home string, h host.Host, autostart bool) (*ap
 		}
 	}
 	return nil, fmt.Errorf("the daemon did not come up within 5s — see %s", daemon.LogPath(home))
+}
+
+// runStop shuts the daemon down.
+func runStop(args []string) error {
+	fs := flag.NewFlagSet("gravy stop", flag.ContinueOnError)
+	wait := fs.Duration("wait", 10*time.Second, "how long to wait for the daemon to exit")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy stop [flags]")
+		fmt.Fprintln(os.Stderr, "\nStops the daemon for this Gravy home. Safe to run twice.")
+		fmt.Fprintln(os.Stderr, "\nflags:")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	home, err := config.Home()
+	if err != nil {
+		return err
+	}
+
+	res, err := daemon.Stop(home, *wait)
+	if err != nil {
+		return err
+	}
+
+	// Each outcome gets its own sentence. "stopped" when nothing was running, or when a stale
+	// pidfile was cleared, would be a small lie that costs someone an hour the day a daemon
+	// does not actually go down.
+	switch res.Outcome {
+	case daemon.StoppedNothing:
+		fmt.Println("no gravy daemon is running")
+	case daemon.StoppedStale:
+		fmt.Println("no gravy daemon is running (cleared a stale pidfile)")
+	case daemon.Stopped:
+		fmt.Printf("stopped the gravy daemon (pid %d)\n", res.PID)
+	case daemon.StoppedSlow:
+		fmt.Printf("asked the gravy daemon to stop (pid %d); it has not exited yet\n", res.PID)
+	}
+
+	if res.Outcome == daemon.Stopped || res.Outcome == daemon.StoppedSlow {
+		fmt.Println("agents it started are not killed; running gravy again starts a new daemon")
+	}
+	return nil
 }

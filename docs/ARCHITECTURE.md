@@ -739,10 +739,26 @@ it needs that the API cannot answer is a missing API method, not a reason to rea
 ## 9. TUI
 
 Bubble Tea, with a screen per state and a persistent frame (status bar, project indicator, help
-overlay on `?`). Global keys: `1-7` jump to sections, `p` project switcher, `q` quit, `/` filter.
+overlay on `?`). Global keys: `1-7` jump to sections, `,` Settings, `p` project switcher,
+`P` add a project, `q` quit, `/` filter.
 
-Screens: **Dashboard** (Needs You, Running, Ready — in that order), **Backlog**, **Ready**,
-**Running**, **Review**, **Needs You**, **Done**, **Settings**.
+The number row is the ticket lifecycle in order — **Dashboard, Plan, Backlog, Ready, Running,
+Review, Needs You** — so the numbers mean something. Settings is configuration rather than a
+stage of that lifecycle and sits off the row on `,`, the conventional preferences key. Not `s`:
+that is already save on the Settings screen and a binding on Review, and the frame checks global
+keys before a screen's own, so a global `s` would break saving in the screen it opens.
+
+`P` is global rather than a Settings key because the first-run dashboard is empty: there is no
+project to navigate to yet, and a keyboard-first tool should never have to send someone out to a
+shell to get started. It is shift-`P` so that it shadows neither Review's `a` nor Backlog's `n` —
+the frame checks global bindings before a screen's own keys.
+
+Screens: **Dashboard** (Needs You, Running, Ready — in that order), **Plan**, **Backlog**,
+**Ready**, **Running**, **Review**, **Needs You**, **Done**, **Settings**.
+
+The **Plan** screen is the one view behind `PRODUCT.md` §6.2 and §6.3: a conversation that reads
+the project's own documents, proposes work, is grilled until it is right, and produces tickets
+the human approves into the backlog. It never creates a ticket on its own.
 
 The **Review** screen is progressive disclosure, not a diff engine: a compact card by default
 (summary, validation, verdict, changed-file stats, amber assumption flags), `enter` to expand a

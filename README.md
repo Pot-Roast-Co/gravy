@@ -52,6 +52,12 @@ Idle workers automatically claim eligible Ready tickets. You write tickets and a
   in seconds. Advisory only — it never decides anything.
 - **Review sweep.** One keystroke walks the entire pending review queue in sequence — approve,
   next, approve, next — without returning to a list.
+- **Planning as a conversation.** One screen reads the project's own documents, proposes the next
+  piece of work, is grilled until it is right, and produces tickets you approve into the backlog.
+  It never creates one on its own.
+- **More than one machine.** A project belongs to the machine its clone is on, reached over ssh.
+  An iOS project lives on the Mac and runs there; the scheduler refuses to send work anywhere its
+  code is not, and says so.
 - **Model routing.** Tickets request a route (`cheap`, `standard`, `strong`, `review`), not a
   model. Genuine quota and rate-limit conditions trigger cooldown and fallback; ordinary coding
   failures do not.
@@ -64,7 +70,7 @@ Idle workers automatically claim eligible Ready tickets. You write tickets and a
 
 ```sh
 go install github.com/pot-roast-co/gravy/cmd/gravy@latest
-gravy            # first run walks you through setup
+gravy            # launches the TUI; press P to add your first repository
 ```
 
 Or from a clone, which stamps the version and avoids `GOBIN`:
@@ -77,19 +83,39 @@ make install PREFIX=/usr/local/bin
 `make install` is worth preferring if you manage Go with mise or asdf: their `GOBIN` lives
 inside the toolchain directory, so a `go install`ed binary disappears on the next Go upgrade.
 
-Requires Go 1.24+, `git`, and at least one coding agent CLI (`claude` or `codex`).
+Requires Go 1.24+, `git`, and at least one coding agent CLI (`claude` or `codex`) that you have
+already logged in to. Gravy drives the CLIs; it never handles your credentials.
+
+**Linux and macOS.** Both are used daily. Windows is not supported: process groups, signals and
+the daemon's socket are unix-specific, and pretending otherwise would fail at the first run
+rather than at the install.
+
+> **There is no installer or onboarding wizard yet.** Both are wanted; see the roadmap.
 
 ## Usage
 
 ```sh
 gravy                      # launch the TUI (starts the daemon if needed)
 gravy serve                # run the daemon in the foreground
+gravy stop                 # stop it; safe to run twice
+gravy project add <path>   # register a repository (-host to put it on another machine)
 gravy ticket add           # create a ticket without opening the TUI
 gravy status               # what is running, what needs you
+gravy review [<id>]        # what is awaiting judgement, and its diff
 gravy approve <ticket-id>  # approve and land
 ```
 
 Agents keep working when you close the TUI.
+
+The TUI's number row is the ticket lifecycle, and `,` opens settings:
+
+```
+1 Dashboard  2 Plan  3 Projects  4 Backlog  5 Ready  6 Running  7 Review  8 Needs You
+```
+
+On the Review screen, `t` shows the ticket you are checking against, `e` opens the changes in
+your editor as uncommitted changes so its git panel works, `!` opens a shell in the worktree, and
+`v` asks for a fresh automated opinion.
 
 ## Documentation
 
@@ -128,12 +154,16 @@ A few decisions that are deliberate rather than accidental:
 
 ## Roadmap
 
-**v0.1** — the full loop on one machine: multiple projects, tickets, local workers, `claude-code`
-and `codex`, routing with fallback, validation, automated review, merge and PR modes, merge
-helper, onboarding.
+**Working today** — the full loop across several machines: projects, tickets, local and ssh
+workers, `claude-code` and `codex`, routing with fallback, validation, automated review, planning
+conversations, merge mode, notifications.
 
-**Later** — remote hosts, local model providers, assisted and planned ticket creation,
-dependency graphs, budgets. The architecture keeps these cheap; none of them delay the loop.
+**Next** — an installer and a first-run wizard, so the first ten minutes do not require reading
+this file. Permission escalation when an agent is refused something, rather than it working
+around the refusal. Done and history. Per-ticket spend, and budgets.
+
+**Later** — PR land mode, merge helper, local model providers, dependency graphs. The
+architecture keeps these cheap; none of them delay the loop.
 
 ## Contributing
 

@@ -60,6 +60,8 @@ func run(args []string) error {
 		return runTUI(ctx)
 	case "serve":
 		return runServe(ctx, args[1:])
+	case "stop":
+		return runStop(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q — run `gravy help`", cmd)
 	}
@@ -86,6 +88,7 @@ Nothing merges without "gravy approve". No flag changes that.
 Run gravy with no arguments for the dashboard.
 
   gravy serve                  run the daemon in the foreground
+  gravy stop                   stop the running daemon
 
 The daemon owns the queue. Running gravy starts one if none is running, and it
 outlives the terminal that started it.
