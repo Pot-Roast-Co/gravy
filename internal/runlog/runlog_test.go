@@ -315,3 +315,100 @@ func TestConcurrentWritersAndReaders(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestTailBeforeOpenWaitsForTheRun is the race a client cannot avoid: it asks to follow a run at
+// the same moment it asks for the run to start, and which arrives first is not up to it.
+//
+// Losing that race used to close the follower immediately, so the run looked silent for its
+// whole duration — the exact pause the follower was opened to explain.
+func TestTailBeforeOpenWaitsForTheRun(t *testing.T) {
+	s := New(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, stop, err := s.Tail(ctx, "not-started-yet")
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	defer stop()
+
+	// Nothing should have been delivered, and the channel must still be open.
+	select {
+	case l, ok := <-ch:
+		t.Fatalf("tail produced %v (open=%v) before the run started", l, ok)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	w, err := s.Open("not-started-yet")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := w.WriteAgent("reading CLAUDE.md"); err != nil {
+		t.Fatalf("WriteAgent: %v", err)
+	}
+
+	select {
+	case l, ok := <-ch:
+		if !ok {
+			t.Fatal("the tail closed instead of delivering the line")
+		}
+		if l.Text != "reading CLAUDE.md" {
+			t.Errorf("line = %q, want the written line", l.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the line written after Open never reached the waiting tail")
+	}
+	_ = w.Close()
+}
+
+// TestTailBeforeOpenStopsCleanly: a follower of a run that never starts must not wedge anyone.
+func TestTailBeforeOpenStopsCleanly(t *testing.T) {
+	s := New(t.TempDir())
+	ch, stop, err := s.Tail(context.Background(), "never-starts")
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	stop()
+	stop() // idempotent
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("a stopped tail delivered a line")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the tail did not close after stop")
+	}
+
+	// The run can still start afterwards without blocking on the abandoned waiter.
+	w, err := s.Open("never-starts")
+	if err != nil {
+		t.Fatalf("Open after abandoning the tail: %v", err)
+	}
+	_ = w.Close()
+}
+
+// TestTailOfAFinishedRunStillCloses pins the behaviour the waiting path must not have changed.
+func TestTailOfAFinishedRunStillCloses(t *testing.T) {
+	s := New(t.TempDir())
+	w, err := s.Open("done")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = w.WriteAgent("a line")
+	_ = w.Close()
+
+	ch, stop, err := s.Tail(context.Background(), "done")
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	defer stop()
+
+	var got []Line
+	for l := range ch {
+		got = append(got, l)
+	}
+	if len(got) != 1 || got[0].Text != "a line" {
+		t.Errorf("history = %v, want the one written line", got)
+	}
+}

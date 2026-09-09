@@ -51,6 +51,23 @@ type Store struct {
 
 	mu   sync.Mutex
 	live map[string]*Writer
+	// pending holds waiters for runs that have not started writing yet.
+	//
+	// A client can ask to follow a run at the same moment it asks for it to be started, and
+	// which of the two arrives first is not something the client can control. Without this,
+	// losing that race means the follower closes immediately and the run appears silent for
+	// its whole duration — the exact pause it was opened to explain.
+	pending map[string][]chan pendingSub
+}
+
+// pendingSub is a subscription handed to a follower that arrived before its run started.
+//
+// The subscription is made inside Open, while the new writer's lock is held and before any
+// caller can write to it. Handing over the writer instead would leave a gap between the handover
+// and the follower subscribing, and the run's first lines fall into it.
+type pendingSub struct {
+	lines <-chan Line
+	stop  func()
 }
 
 // New returns a store rooted at dir, normally ~/.gravy/runs.
@@ -85,8 +102,46 @@ func (s *Store) Open(runID string) (*Writer, error) {
 	}
 	s.mu.Lock()
 	s.live[runID] = w
+	waiters := s.pending[runID]
+	delete(s.pending, runID)
 	s.mu.Unlock()
+
+	// Subscribe anyone who asked for this run before it existed, then hand over the
+	// subscription. The channels are buffered, so a waiter that has since given up cannot
+	// block the run from starting.
+	for _, ch := range waiters {
+		w.mu.Lock()
+		sub, unsubscribe := w.subscribeLocked()
+		w.mu.Unlock()
+		ch <- pendingSub{lines: sub, stop: unsubscribe}
+	}
 	return w, nil
+}
+
+// waitForWriter registers interest in a run that has not started.
+func (s *Store) waitForWriter(runID string) (<-chan pendingSub, func()) {
+	ch := make(chan pendingSub, 1)
+
+	s.mu.Lock()
+	if s.pending == nil {
+		s.pending = map[string][]chan pendingSub{}
+	}
+	s.pending[runID] = append(s.pending[runID], ch)
+	s.mu.Unlock()
+
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, c := range s.pending[runID] {
+			if c == ch {
+				s.pending[runID] = append(s.pending[runID][:i], s.pending[runID][i+1:]...)
+				break
+			}
+		}
+		if len(s.pending[runID]) == 0 {
+			delete(s.pending, runID)
+		}
+	}
 }
 
 func openAppend(path string) (*os.File, error) {
@@ -108,8 +163,12 @@ func (s *Store) Tail(ctx context.Context, runID string) (<-chan Line, func(), er
 	s.mu.Unlock()
 
 	if w == nil {
-		// Nothing is writing: the run finished, possibly under a previous daemon. Serve the
-		// files and close.
+		// A directory means the run already happened, possibly under a previous daemon: serve
+		// the files and close. No directory means it has not started, so wait for it rather
+		// than reporting silence.
+		if _, err := os.Stat(s.Dir(runID)); err != nil {
+			return s.tailPending(ctx, runID)
+		}
 		history, err := s.History(runID)
 		if err != nil {
 			return nil, nil, err
@@ -154,6 +213,67 @@ func (s *Store) Tail(ctx context.Context, runID string) (<-chan Line, func(), er
 					return
 				}
 			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out, stop, nil
+}
+
+// tailPending follows a run that has not started writing yet.
+//
+// It delivers nothing until the run opens, and closes on ctx or on the stop function — so a
+// follower of a run that never starts costs one goroutine until its caller gives up, rather
+// than blocking anybody.
+func (s *Store) tailPending(ctx context.Context, runID string) (<-chan Line, func(), error) {
+	writerCh, cancelWait := s.waitForWriter(runID)
+
+	out := make(chan Line, subscriberBuffer)
+	stopped := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(stopped) }) }
+
+	go func() {
+		defer close(out)
+		defer func() {
+			cancelWait()
+			// The run may have opened as this goroutine gave up, leaving a subscription
+			// buffered and nobody to read it. Release it rather than leaking a channel the
+			// writer would go on trying to publish to.
+			select {
+			case ps := <-writerCh:
+				ps.stop()
+			default:
+			}
+		}()
+
+		var ps pendingSub
+		select {
+		case ps = <-writerCh:
+		case <-ctx.Done():
+			return
+		case <-stopped:
+			return
+		}
+		defer ps.stop()
+
+		for {
+			select {
+			case l, ok := <-ps.lines:
+				if !ok {
+					return
+				}
+				select {
+				case out <- l:
+				case <-ctx.Done():
+					return
+				case <-stopped:
+					return
+				}
+			case <-ctx.Done():
+				return
+			case <-stopped:
 				return
 			}
 		}
