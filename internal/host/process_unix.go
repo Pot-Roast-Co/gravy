@@ -61,6 +61,27 @@ func Alive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+// Terminate asks a process to shut down cleanly.
+//
+// SIGTERM, not SIGKILL: the daemon holds a SQLite database and a listening socket, and a signal
+// it can handle lets it flush and unlink both. Killing it outright leaves a stale pidfile and,
+// worse, a database that has to be recovered on the next open.
+//
+// A process that is already gone is not an error — stopping something twice should be safe.
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("terminate: %d is not a pid", pid)
+	}
+	err := syscall.Kill(pid, syscall.SIGTERM)
+	switch {
+	case err == nil, errors.Is(err, syscall.ESRCH):
+		return nil
+	case errors.Is(err, syscall.EPERM):
+		return fmt.Errorf("terminate %d: not permitted — the daemon belongs to another user", pid)
+	}
+	return fmt.Errorf("terminate %d: %w", pid, err)
+}
+
 // Reap kills a process group left behind by a daemon that did not shut down cleanly.
 //
 // It is deliberately the group, not the process: an agent CLI spawns compilers and test runners,

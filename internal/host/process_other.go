@@ -37,6 +37,21 @@ func Alive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
+// Terminate asks a process to shut down cleanly. Off unix this is best-effort.
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("terminate: %d is not a pid", pid)
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return nil // already gone
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("terminate %d: %w", pid, err)
+	}
+	return nil
+}
+
 // Reap kills a process left behind by a daemon that did not shut down cleanly.
 func Reap(pid int) error { return killGroup(pid) }
 
