@@ -435,6 +435,22 @@ func computeOutcome(p *Provider, status host.ExitStatus, result *streamEvent, st
 	// reach Needs You.
 	class := p.Classify(status.Code, stdout, stderr+resultDiagnosis(result))
 
+	// A run the CLI reports as finished successfully is never a provider-side failure.
+	//
+	// Classification matches text against the whole stream, which carries everything the agent
+	// read and wrote — so a file mentioning a quota, a rate limit or an outage can trip a rule
+	// that is looking for the provider's own error. Exit zero and is_error false is the CLI
+	// stating that the request went through; whatever the text resembles, no quota condition
+	// happened. Getting this wrong costs the run, the model's availability, and — because a
+	// cooldown is fleet-wide — every other ticket routed to it.
+	if status.Code == 0 && result != nil && !result.IsError && class.Class.IsQuotaCondition() {
+		class = provider.Classification{
+			Class:    provider.Success,
+			Rule:     "clean exit outranks a quota match in the transcript",
+			Evidence: class.Rule,
+		}
+	}
+
 	// A result object claiming failure overrides a zero exit code. is_error is authoritative;
 	// subtype is not.
 	if class.Class == provider.Success && result != nil && result.IsError {

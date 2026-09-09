@@ -83,22 +83,36 @@ func (p *Provider) ID() string { return ID }
 // It is not a model name and is never sent to the CLI; see Models.
 const DefaultModel = "default"
 
-// Models reports what this provider can be routed to, which is deliberately almost nothing.
+// Models reports what this provider can be routed to.
 //
-// The CLI does not enumerate models, and a ChatGPT-account login rejects explicit ones outright:
-// both `gpt-5-codex` and `gpt-5` were observed returning
+// The list is a suggestion, not a whitelist — see ModelsAreOpen. The CLI does not enumerate
+// models in any scriptable way (its picker is interactive), so these are transcribed from it and
+// will go stale as OpenAI renames things.
+//
+// An earlier version of this comment claimed a ChatGPT-account login rejects explicit model
+// names outright, having watched `gpt-5-codex` and `gpt-5` both return
 //
 //	status 400: The '<name>' model is not supported when using Codex with a ChatGPT account.
 //
-// while the same prompt with no --model succeeded. So the honest answer is one entry meaning
-// "the account's default", rather than a list of names invented from the outside that fail at
-// run time. A user on an API-key login can still name a model in their route; it is passed
-// through untouched.
+// That reading was wrong, and the mistake is worth recording: those names had simply stopped
+// existing. A current one — `gpt-5.6-sol` — was verified working on exactly that login. The 400
+// says a model is unsupported, not that naming models is.
 func (p *Provider) Models(context.Context) ([]provider.Model, error) {
 	return []provider.Model{
 		{ID: DefaultModel, Name: "Codex default (chosen by your Codex login)"},
+		{ID: "gpt-5.6-sol", Name: "Reliable agentic workhorse for everyday tasks"},
+		{ID: "gpt-5.6-terra", Name: "Balanced agentic coding model for everyday work"},
+		{ID: "gpt-5.6-luna", Name: "Fast and affordable agentic coding model"},
+		{ID: "gpt-5.5", Name: "Proven previous-generation model"},
 	}, nil
 }
+
+// ModelsAreOpen reports that the list above is advisory.
+//
+// Refusing a route because a name is missing from a hand-transcribed list would break the day
+// OpenAI ships a model, which is precisely the failure the stale comment above caused. A name
+// that is wrong still fails at run time, with the provider's own message.
+func (p *Provider) ModelsAreOpen() bool { return true }
 
 // Detect reports whether the CLI is installed and authenticated.
 //

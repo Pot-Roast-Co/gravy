@@ -43,17 +43,29 @@ var matcher = provider.NewMatcher(
 		Pattern: regexp.MustCompile(`(?i)"?api_error_status"?:\s*401|API Error:\s*401|api key is invalid|failed to authenticate`),
 	},
 	provider.Rule{
-		// The CLI reports quota state through rate_limit_event while healthy; an exhausted
-		// window surfaces in the result text. Both wordings are matched because the exhausted
-		// state could not be induced during the spike and so is unverified.
+		// Only the CLI's own wording. "quota exceeded" and "out of credits" were matched too,
+		// on the guess that an exhausted window might phrase itself that way — but the pattern
+		// is tested against the whole transcript, which carries every file the agent read and
+		// every word of its ticket. A ticket asking for a throttle, or a document about
+		// billing, would have been read as the account running out.
+		//
+		// A guessed pattern that costs a run and a fleet-wide cooldown is worse than a missed
+		// one: an unmatched quota failure classifies as a task failure, which is retried and
+		// visible. That is the direction ARCHITECTURE.md asks errors to fail in.
 		Name:    "usage limit reached",
 		Class:   provider.QuotaExhausted,
-		Pattern: regexp.MustCompile(`(?i)usage limit reached|quota (has been )?exceeded|out of (credits|usage)`),
+		Pattern: regexp.MustCompile(`(?i)usage limit reached`),
 	},
 	provider.Rule{
+		// Only the API's own error shape. A bare "rate limit" used to be matched too, and the
+		// stream this is tested against contains everything the agent read and wrote: a run
+		// that edited a ROADMAP entry about *rate limiting* was classified as rate limited,
+		// failed after 35 successful turns, and put the model into a cooldown — at 9% of the
+		// five-hour window. The CLI also reports healthy quota telemetry as `rate_limit_event`
+		// with status "allowed", which a loose pattern reads as a failure too.
 		Name:    "http 429 rate limited",
 		Class:   provider.RateLimited,
-		Pattern: regexp.MustCompile(`(?i)"?api_error_status"?:\s*429|API Error:\s*429|rate limit`),
+		Pattern: regexp.MustCompile(`(?i)"?api_error_status"?:\s*429|API Error:\s*429`),
 	},
 	provider.Rule{
 		// 5xx is the provider's side failing, not the agent's work.

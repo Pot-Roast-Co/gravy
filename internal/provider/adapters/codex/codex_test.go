@@ -253,19 +253,44 @@ func TestDefaultModelIsNotSentToTheCLI(t *testing.T) {
 
 // TestModelsReportsOnlyWhatIsVerifiable is GR-013 AC2 stated directly: capabilities the CLI does
 // not have are reported honestly rather than emulated with a plausible-looking list.
-func TestModelsReportsOnlyWhatIsVerifiable(t *testing.T) {
-	models, err := New().Models(t.Context())
+// TestModelsAreSuggestionsNotAWhitelist records a correction.
+//
+// This test used to assert the opposite: that Models returns only the default sentinel, and that
+// listing any "gpt-" name would "send work to a guaranteed failure". That was inferred from
+// watching `gpt-5-codex` and `gpt-5` return 400 on a ChatGPT-account login — but those names had
+// simply stopped existing. `gpt-5.6-sol` was then verified working on exactly such a login, so
+// the rule was never "no model may be named".
+//
+// The list is therefore offered as suggestions, and ModelsAreOpen says so, because a
+// hand-transcribed list goes stale the day its vendor ships a model.
+func TestModelsAreSuggestionsNotAWhitelist(t *testing.T) {
+	p := New()
+	models, err := p.Models(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 1 || models[0].ID != DefaultModel {
-		t.Fatalf("models = %+v, want only the default sentinel", models)
+	if len(models) < 2 {
+		t.Fatalf("models = %+v, want the default sentinel and some real names", models)
 	}
+
+	byID := map[string]bool{}
 	for _, m := range models {
-		// gpt-5 and gpt-5-codex were both observed being rejected; listing them would send
-		// work to a guaranteed failure.
-		if strings.HasPrefix(m.ID, "gpt-") {
-			t.Errorf("model %q is listed but was observed being rejected", m.ID)
+		if m.ID == "" || m.Name == "" {
+			t.Errorf("model %+v is missing an id or a name", m)
 		}
+		byID[m.ID] = true
+	}
+	// The sentinel has to stay: it is the only thing that works on a login that cannot name
+	// models, and it means "do not pass --model".
+	if !byID[DefaultModel] {
+		t.Error("the default sentinel is gone; a login that cannot name models has nothing to use")
+	}
+	// The name that disproved the old assumption.
+	if !byID["gpt-5.6-sol"] {
+		t.Error("gpt-5.6-sol is not listed, though it was verified working on a ChatGPT login")
+	}
+
+	if !p.ModelsAreOpen() {
+		t.Error("the list is hand-transcribed, so it must not be treated as a whitelist")
 	}
 }

@@ -110,7 +110,11 @@ func TestQuotaAndRateLimitPatterns(t *testing.T) {
 		{`{"api_error_status":429}`, provider.RateLimited},
 		{"API Error: 429 Too Many Requests", provider.RateLimited},
 		{"Usage limit reached for the five_hour window", provider.QuotaExhausted},
-		{"quota exceeded", provider.QuotaExhausted},
+		// "quota exceeded" was matched here on a guess about how an exhausted window might
+		// phrase itself. It is not the CLI's wording, and it collides with ordinary prose —
+		// a ticket about billing, or a document about limits — so it now falls through to a
+		// task failure, which is retried and visible rather than cooling the model down.
+		{"quota exceeded", provider.TaskFailure},
 		{`{"api_error_status":529}`, provider.ProviderUnavailable},
 		{"API Error: 503 upstream unavailable", provider.ProviderUnavailable},
 		{`{"type":"error","error":{"type":"overloaded_error"}}`, provider.ProviderUnavailable},
@@ -216,6 +220,57 @@ func TestAllowedToolsStaysNarrow(t *testing.T) {
 		}
 		if !strings.HasPrefix(p, "Bash(go test ./...") {
 			t.Errorf("pattern %q does not start with the declared command", p)
+		}
+	}
+}
+
+// TestQuotaWordsInTheTranscriptAreNotAQuotaFailure is a real incident.
+//
+// A run editing a ROADMAP entry about *rate limiting* was classified as rate limited. It had
+// exited cleanly after 35 turns having done the work, at 9% of the five-hour window. The result
+// was a discarded run, a fleet-wide cooldown on the model, and a ticket parked as
+// "validation_failed" — for a phrase in a file the agent wrote.
+func TestQuotaWordsInTheTranscriptAreNotAQuotaFailure(t *testing.T) {
+	p := New()
+
+	for _, tc := range []struct {
+		name   string
+		stdout string
+	}{
+		{
+			name:   "a file about rate limiting",
+			stdout: `{"type":"assistant","text":"Moved the Rate limit finding to fixed in ROADMAP.md"}`,
+		},
+		{
+			// The CLI reports healthy quota telemetry on every run.
+			name:   "healthy quota telemetry",
+			stdout: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}`,
+		},
+		{
+			name:   "a ticket body quoting a limit",
+			stdout: `{"type":"user","text":"add a per-identifier login throttle; the quota exceeded case must 429"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := p.Classify(0, tc.stdout, "")
+			if got.Class.IsQuotaCondition() {
+				t.Errorf("classified as %v (rule %q) — the provider reported no error",
+					got.Class, got.Rule)
+			}
+		})
+	}
+}
+
+// TestRealRateLimitIsStillCaught, so the guard has not made the rule decorative.
+func TestRealRateLimitIsStillCaught(t *testing.T) {
+	p := New()
+	for _, out := range []string{
+		`{"type":"result","is_error":true,"api_error_status":429}`,
+		`API Error: 429 Too Many Requests`,
+	} {
+		got := p.Classify(1, out, "")
+		if got.Class != provider.RateLimited {
+			t.Errorf("Classify(%q) = %v, want RateLimited", out, got.Class)
 		}
 	}
 }
