@@ -97,6 +97,12 @@ func (e *rpcError) toError() error {
 const (
 	mListProjects     = "ListProjects"
 	mAddProject       = "AddProject"
+	mDeleteProject    = "DeleteProject"
+	mPlan             = "Plan"
+	mRereview         = "Rereview"
+	mReviewCheckout   = "ReviewCheckout"
+	mDiscardCheckout  = "DiscardReviewCheckout"
+	mApprovePlan      = "ApprovePlan"
 	mListTickets      = "ListTickets"
 	mCreateTicket     = "CreateTicket"
 	mMoveTicket       = "MoveTicket"
@@ -159,6 +165,15 @@ type (
 	}
 	addProjectParams struct {
 		Req AddProjectReq `json:"req"`
+	}
+	planParams struct {
+		Req PlanReq `json:"req"`
+	}
+	checkoutParams struct {
+		TicketID string `json:"ticket_id"`
+	}
+	approvePlanParams struct {
+		Req ApprovePlanReq `json:"req"`
 	}
 	updateProjectParams struct {
 		Project core.Project `json:"project"`

@@ -20,6 +20,28 @@ type Settings struct {
 	// worker pool, which agent CLIs are registered — and pretending otherwise would leave a
 	// user believing a change took effect when it did not.
 	PendingRestart []string
+	// Agents is what this build can actually run: each compiled-in provider and the models it
+	// offers. A route naming anything else is knowably wrong before a ticket waits on it —
+	// which is how "codex/sol" reached a run and came back as a 400 from the server.
+	Agents []AgentOption
+}
+
+// AgentOption is one provider and the models it offers.
+type AgentOption struct {
+	ProviderID string
+	// Models are the ids a route may name. Empty means the provider does not enumerate them,
+	// and any model is accepted.
+	Models []string
+	// Open reports that Models is a suggestion rather than a whitelist. A provider whose names
+	// are transcribed by hand says so, because refusing an unlisted one would break the day its
+	// vendor ships a model.
+	Open bool
+}
+
+// WithAgents records what this build can run, for validating routes.
+func (l *Local) WithAgents(a []AgentOption) *Local {
+	l.agents = a
+	return l
 }
 
 // ApplyFunc applies a saved config to the running daemon and reports which settings could not
@@ -43,7 +65,10 @@ func (l *Local) GetSettings(_ context.Context) (Settings, error) {
 	if l.home == "" {
 		return Settings{}, fmt.Errorf("this client cannot read configuration")
 	}
-	return Settings{Config: l.cfg, Path: config.Path(l.home), PendingRestart: l.pendingRestart}, nil
+	return Settings{
+		Config: l.cfg, Path: config.Path(l.home),
+		PendingRestart: l.pendingRestart, Agents: l.agents,
+	}, nil
 }
 
 // UpdateSettings validates, saves and applies a configuration.
@@ -66,7 +91,10 @@ func (l *Local) UpdateSettings(_ context.Context, c config.Config) (Settings, er
 		l.pendingRestart = l.applyCfg(c)
 	}
 	l.events.publish(Event{Kind: EventProjectChanged})
-	return Settings{Config: l.cfg, Path: config.Path(l.home), PendingRestart: l.pendingRestart}, nil
+	return Settings{
+		Config: l.cfg, Path: config.Path(l.home),
+		PendingRestart: l.pendingRestart, Agents: l.agents,
+	}, nil
 }
 
 // UpdateProject saves a project's editable fields.

@@ -135,6 +135,33 @@ func (c *Client) ListTickets(ctx context.Context, f TicketFilter) ([]core.Ticket
 	return out, c.call(ctx, mListTickets, listTicketsParams{Filter: f}, &out)
 }
 
+func (c *Client) Rereview(ctx context.Context, ticketID string) error {
+	return c.call(ctx, mRereview, checkoutParams{TicketID: ticketID}, nil)
+}
+
+func (c *Client) ReviewCheckout(ctx context.Context, ticketID string) (string, error) {
+	var out string
+	return out, c.call(ctx, mReviewCheckout, checkoutParams{TicketID: ticketID}, &out)
+}
+
+func (c *Client) DiscardReviewCheckout(ctx context.Context, ticketID string) error {
+	return c.call(ctx, mDiscardCheckout, checkoutParams{TicketID: ticketID}, nil)
+}
+
+func (c *Client) DeleteProject(ctx context.Context, id string) error {
+	return c.call(ctx, mDeleteProject, checkoutParams{TicketID: id}, nil)
+}
+
+func (c *Client) Plan(ctx context.Context, req PlanReq) (PlanReply, error) {
+	var out PlanReply
+	return out, c.call(ctx, mPlan, planParams{Req: req}, &out)
+}
+
+func (c *Client) ApprovePlan(ctx context.Context, req ApprovePlanReq) ([]core.Ticket, error) {
+	var out []core.Ticket
+	return out, c.call(ctx, mApprovePlan, approvePlanParams{Req: req}, &out)
+}
+
 func (c *Client) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Ticket, error) {
 	var out core.Ticket
 	return out, c.call(ctx, mCreateTicket, createTicketParams{Req: req}, &out)

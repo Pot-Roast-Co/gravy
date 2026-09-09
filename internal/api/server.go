@@ -274,6 +274,48 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.AddProject(ctx, p.Req)
 
+	case mRereview:
+		var p checkoutParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.Rereview(ctx, p.TicketID)
+
+	case mReviewCheckout:
+		var p checkoutParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ReviewCheckout(ctx, p.TicketID)
+
+	case mDiscardCheckout:
+		var p checkoutParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.DiscardReviewCheckout(ctx, p.TicketID)
+
+	case mDeleteProject:
+		var p checkoutParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.DeleteProject(ctx, p.TicketID)
+
+	case mPlan:
+		var p planParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.Plan(ctx, p.Req)
+
+	case mApprovePlan:
+		var p approvePlanParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ApprovePlan(ctx, p.Req)
+
 	case mUpdateProject:
 		var p updateProjectParams
 		if err := unmarshalParams(raw, &p); err != nil {

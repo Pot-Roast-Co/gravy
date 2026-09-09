@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,6 +35,14 @@ type Local struct {
 	logs *runlog.Store
 	// killer is nil on a client that may not stop work.
 	killer Killer
+	// planner is nil on a client that may not plan.
+	planner Planner
+	// checkouts is nil on a client that may not create review checkouts.
+	checkouts Checkouts
+	// agents is what this build can run, for validating a route before it is saved.
+	agents []AgentOption
+	// rereviewer is nil on a client that may not run reviews.
+	rereviewer Rereviewer
 
 	// Configuration, empty on a client that cannot be configured.
 	home           string
@@ -78,6 +85,13 @@ func (l *Local) KillRun(ctx context.Context, runID string) error {
 	return nil
 }
 
+// WithPlanner gives the service a planning engine. A service without one can do everything
+// except plan, which is why Plan checks it rather than assuming.
+func (l *Local) WithPlanner(p Planner) *Local {
+	l.planner = p
+	return l
+}
+
 // WithLander gives the service the merge gate. A service without one can read and queue work
 // but cannot land it.
 func (l *Local) WithLander(ld Lander) *Local {
@@ -101,21 +115,34 @@ func (l *Local) ListProjects(ctx context.Context) ([]core.Project, error) {
 // at the first run instead, which is a far worse place to discover it — the ticket is already
 // claimed, a worker is held, and the error surfaces as a mysterious run failure.
 func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project, error) {
-	path, err := filepath.Abs(req.Path)
+	// A pinned project's repository is on that machine, so every check has to happen there.
+	// Resolving the path locally would turn a Mac path into a Linux one, and stat would then
+	// report a repository that exists as missing.
+	h, err := l.hostFor(req.Host)
 	if err != nil {
-		return core.Project{}, fmt.Errorf("resolve %q: %w", req.Path, err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return core.Project{}, fmt.Errorf("%s: %w", path, err)
-	}
-	if !info.IsDir() {
-		return core.Project{}, fmt.Errorf("%s is not a directory", path)
+		return core.Project{}, err
 	}
 
-	h := l.aHost()
-	if h == nil {
-		return core.Project{}, fmt.Errorf("no host available to inspect %s", path)
+	// A project with no path is a project with no repository: somewhere to put goals and notes
+	// while the shape of the thing is still being decided. Nothing runs in one, and the
+	// scheduler says so rather than failing a ticket that lands in it.
+	if strings.TrimSpace(req.Path) == "" {
+		return l.addProjectWithoutRepo(ctx, req)
+	}
+
+	path := req.Path
+	if req.Host == "" {
+		if path, err = filepath.Abs(path); err != nil {
+			return core.Project{}, fmt.Errorf("resolve %q: %w", req.Path, err)
+		}
+	} else if !filepath.IsAbs(path) {
+		// There is no working directory to resolve against on the far end.
+		return core.Project{}, fmt.Errorf(
+			"a path on %s must be absolute: %q", req.Host, req.Path)
+	}
+
+	if !h.FS().Exists(path) {
+		return core.Project{}, fmt.Errorf("%s: no such directory on host %s", path, hostName(req.Host))
 	}
 	if err := checkGitRepo(ctx, h, path); err != nil {
 		return core.Project{}, err
@@ -154,8 +181,21 @@ func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project
 		maxConcurrency = 1
 	}
 
+	// Stamped, never left empty: the path was just validated on this host, so this is where
+	// the clone is. An unstamped project is one the scheduler is free to run anywhere, which
+	// means running an agent on a machine that does not have the code.
+	hostID := req.Host
+	if hostID == "" {
+		hostID = h.ID()
+	}
+
 	p := core.Project{
-		ID:             l.newID(),
+		ID:     l.newID(),
+		HostID: hostID,
+		Notes:  req.Notes,
+		// Detected rather than left empty. An empty allowlist refuses every command an agent
+		// runs, silently, and the cost shows up as runs that take three times as many turns.
+		Allowlist:      seedAllowlist(ctx, h, path),
 		Slug:           slug,
 		Name:           name,
 		RepoPath:       path,
@@ -477,6 +517,85 @@ func (l *Local) aHost() host.Host {
 		return nil
 	}
 	return l.hosts[0]
+}
+
+// addProjectWithoutRepo registers a project that has no working tree yet.
+func (l *Local) addProjectWithoutRepo(ctx context.Context, req AddProjectReq) (core.Project, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return core.Project{}, fmt.Errorf("a project with no repository needs a name")
+	}
+	slug := slugify(name)
+	if slug == "" {
+		return core.Project{}, fmt.Errorf("cannot derive a project name from %q", req.Name)
+	}
+	if _, err := l.db.GetProjectBySlug(ctx, slug); err == nil {
+		return core.Project{}, fmt.Errorf("a project named %q is already registered", slug)
+	}
+
+	hostID := req.Host
+	if hostID == "" {
+		if h := l.aHost(); h != nil {
+			hostID = h.ID()
+		}
+	}
+
+	p := core.Project{
+		ID: l.newID(), Slug: slug, Name: name, HostID: hostID,
+		Notes: req.Notes, MergeMode: core.LandMerge, MaxConcurrency: 1,
+		CreatedAt: l.now(),
+	}
+	if err := l.db.CreateProject(ctx, p); err != nil {
+		return core.Project{}, err
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: p.ID})
+	return p, nil
+}
+
+// DeleteProject removes a project and everything belonging to it.
+//
+// Through the store, so the foreign-key cascade takes its tickets, runs and attention rows with
+// it. Deleting the row by hand leaves orphans, and an orphaned ticket is not inert: the
+// scheduler reads it every tick, fails to find its project, and stops scheduling for every
+// project until somebody notices.
+func (l *Local) DeleteProject(ctx context.Context, id string) error {
+	p, err := l.db.GetProject(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := l.db.DeleteProject(ctx, id); err != nil {
+		return fmt.Errorf("delete project %s: %w", p.Slug, err)
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: id})
+	l.events.publish(Event{Kind: EventTicketChanged, ProjectID: id})
+	l.events.publish(Event{Kind: EventAttentionChanged})
+	return nil
+}
+
+// hostFor returns the host a project lives on, or an error naming what is registered.
+func (l *Local) hostFor(id string) (host.Host, error) {
+	if id == "" {
+		if h := l.aHost(); h != nil {
+			return h, nil
+		}
+		return nil, fmt.Errorf("no host available")
+	}
+	names := make([]string, 0, len(l.hosts))
+	for _, h := range l.hosts {
+		if h.ID() == id {
+			return h, nil
+		}
+		names = append(names, h.ID())
+	}
+	return nil, fmt.Errorf("no host called %q — configured: %s", id, strings.Join(names, ", "))
+}
+
+// hostName renders a host id for a message, naming the local machine when there is no id.
+func hostName(id string) string {
+	if id == "" {
+		return "local"
+	}
+	return id
 }
 
 // checkGitRepo verifies the path is a git working tree.

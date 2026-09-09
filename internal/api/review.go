@@ -110,6 +110,10 @@ func (l *Local) Approve(ctx context.Context, ticketID string) error {
 	if err := l.lander.Approve(ctx, ticketID); err != nil {
 		return err
 	}
+	// The review checkout is a view of work that is now decided, so it goes. Left behind, one
+	// accumulates per reviewed ticket and never gets cleaned up by anything.
+	_ = l.DiscardReviewCheckout(ctx, ticketID)
+
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
 	return nil
@@ -178,6 +182,9 @@ func (l *Local) Reject(ctx context.Context, ticketID string) error {
 		return err
 	}
 
+	// Its review checkout goes with it, for the same reason.
+	_ = l.DiscardReviewCheckout(ctx, ticketID)
+
 	// A rejected ticket's worktree is dead weight on disk. Failing to remove it must not fail
 	// the rejection, which has already been recorded — report it and move on.
 	if t.WorktreePath != "" {
@@ -196,4 +203,67 @@ func (l *Local) Reject(ctx context.Context, ticketID string) error {
 		return fmt.Errorf("ticket %s was rejected, but its worktree could not be removed: %w", ticketID, err)
 	}
 	return nil
+}
+
+// Rereviewer runs the advisory pass again on work already awaiting judgement.
+type Rereviewer interface {
+	Rereview(ctx context.Context, ticketID string) error
+}
+
+// WithRereviewer lets the service re-run the advisory review.
+func (l *Local) WithRereviewer(r Rereviewer) *Local {
+	l.rereviewer = r
+	return l
+}
+
+// Rereview asks for a fresh advisory verdict.
+//
+// Unlike the pass that runs inside a run, this reports its failures: it was asked for, so
+// silence would read as a key that does nothing.
+func (l *Local) Rereview(ctx context.Context, ticketID string) error {
+	if l.rereviewer == nil {
+		return fmt.Errorf("this client cannot run reviews")
+	}
+	if err := l.rereviewer.Rereview(ctx, ticketID); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventRunChanged, TicketID: ticketID})
+	return nil
+}
+
+// Checkouts makes a ticket's work readable in an editor.
+//
+// A capability rather than a method on the service, for the same reason landing is one: a client
+// that may only read the queue has no business creating checkouts on the machine running the
+// daemon.
+type Checkouts interface {
+	// ReviewCheckout returns a path showing the ticket's work as uncommitted changes.
+	ReviewCheckout(ctx context.Context, ticketID string) (string, error)
+	// DiscardReviewCheckout throws one away. Discarding one that is not there is not an error.
+	DiscardReviewCheckout(ctx context.Context, ticketID string) error
+}
+
+// WithCheckouts gives the service the ability to open work in an editor.
+func (l *Local) WithCheckouts(c Checkouts) *Local {
+	l.checkouts = c
+	return l
+}
+
+// ReviewCheckout prepares a ticket's work for reading in an editor, and returns where it is.
+//
+// The path is on the machine running the daemon. That is the same machine for a local host, and
+// the caller is expected to check before launching an editor at it.
+func (l *Local) ReviewCheckout(ctx context.Context, ticketID string) (string, error) {
+	if l.checkouts == nil {
+		return "", fmt.Errorf("this client cannot open work in an editor")
+	}
+	return l.checkouts.ReviewCheckout(ctx, ticketID)
+}
+
+// DiscardReviewCheckout throws away a ticket's review checkout.
+func (l *Local) DiscardReviewCheckout(ctx context.Context, ticketID string) error {
+	if l.checkouts == nil {
+		return nil
+	}
+	return l.checkouts.DiscardReviewCheckout(ctx, ticketID)
 }

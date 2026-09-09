@@ -22,6 +22,20 @@ type Service interface {
 	ListProjects(ctx context.Context) ([]core.Project, error)
 	AddProject(ctx context.Context, req AddProjectReq) (core.Project, error)
 	UpdateProject(ctx context.Context, p core.Project) error
+	// DeleteProject removes a project and, by cascade, its tickets, runs and attention rows.
+	DeleteProject(ctx context.Context, id string) error
+
+	// Rereview runs the advisory review again, for work whose verdict failed for a reason
+	// since fixed.
+	Rereview(ctx context.Context, ticketID string) error
+
+	// review checkouts: a ticket's work as uncommitted changes, for reading in an editor
+	ReviewCheckout(ctx context.Context, ticketID string) (string, error)
+	DiscardReviewCheckout(ctx context.Context, ticketID string) error
+
+	// planning
+	Plan(ctx context.Context, req PlanReq) (PlanReply, error)
+	ApprovePlan(ctx context.Context, req ApprovePlanReq) ([]core.Ticket, error)
 
 	// settings
 	GetSettings(ctx context.Context) (Settings, error)
@@ -66,8 +80,14 @@ type Service interface {
 
 // AddProjectReq registers a repository.
 type AddProjectReq struct {
+	// Path is the working tree. Empty registers a project with no repository: a place for
+	// goals and notes while the shape of the thing is still being decided.
 	Path string
 	Name string
+	// Host pins the project to a machine. Empty means the local one.
+	Host string
+	// Notes are what the project is for. Optional.
+	Notes string
 	// TargetBranch is resolved from the remote's HEAD when empty.
 	TargetBranch string
 	MergeMode    core.LandMode
