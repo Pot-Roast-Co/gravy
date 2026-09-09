@@ -648,8 +648,7 @@ Approval starts landing; it does not guarantee it:
 fetch → rebase worktree onto target
   ├─ conflict ──────────────────► NeedsYou (merge_conflict), worktree PRESERVED
   └─ clean
-       ├─ rebase was a no-op (already on top of target)   → skip re-validation
-       └─ rebase replayed commits (target moved)          → re-run validation
+       └─ rebase succeeds (including a no-op)            → re-run validation
              └─ red ────────────► NeedsYou (validation_failed)
        → merge_mode
             ├─ merge: squash-merge into target, push
@@ -659,10 +658,8 @@ fetch → rebase worktree onto target
 
 Two deliberate simplifications:
 
-**Re-validation is conditional.** If the rebase replayed commits, the target moved underneath this
-work and green-against-yesterday is not evidence about today — so validation re-runs. If the
-branch was already on top of target, which is the common case under the conservative
-per-repository default, there is nothing to re-validate and Gravy does not pretend otherwise.
+**Validation runs on every landing attempt.** A no-op rebase can follow failed validation or
+a human conflict resolution; it does not establish that the current tree is green.
 
 **Conflicts are handed to the human, not solved.** On conflict Gravy aborts the rebase, preserves
 the worktree, records the conflicting paths, and raises `merge_conflict`. The human resolves it in

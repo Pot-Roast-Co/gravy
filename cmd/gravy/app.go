@@ -332,11 +332,12 @@ func newID() string {
 //
 // The fall back to the implementation bucket is what resolving at startup used to do: a review
 // bucket nobody configured should still produce a review, since an advisory opinion on the
-// working model beats no opinion at all.
+// working model beats no opinion at all. An explicit project review bucket must
+// never fall back outside its configured choices, even while those choices are unavailable.
 func reviewResolver(rtr *router.Router) agentrun.RouteResolver {
 	return func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
 		choice, err := rtr.Resolve(ctx, route, c)
-		if err == nil || route == core.RouteImplementation {
+		if err == nil || route == core.RouteImplementation || len(c.Routes[route]) > 0 {
 			return choice, err
 		}
 		if fallback, ferr := rtr.Resolve(ctx, core.RouteImplementation, c); ferr == nil {

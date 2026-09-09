@@ -30,7 +30,7 @@ type LandResult struct {
 	// MergeCommit is the squash commit on the target branch.
 	MergeCommit string
 	Pushed      bool
-	// Revalidated reports whether the rebase replayed commits and validation was re-run.
+	// Revalidated reports whether configured validation was run before merging.
 	Revalidated bool
 	// ConflictFiles is populated when the rebase could not be replayed.
 	ConflictFiles []string
@@ -106,7 +106,7 @@ func (l *Lander) Continue(ctx context.Context, ticketID string) (LandResult, err
 	return l.Approve(ctx, ticketID)
 }
 
-// land performs fetch, rebase, conditional re-validation, squash-merge and cleanup.
+// land performs fetch, rebase, validation, squash-merge and cleanup.
 func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, project core.Project, repo Repo, wt git.Worktree, h host.Host) (core.State, error) {
 	o := l.orch
 
@@ -169,11 +169,9 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return l.park(ctx, ticket, core.ReasonMergeConflict, payload)
 	}
 
-	// Re-validation is conditional. If the rebase replayed commits the target moved underneath
-	// this work, and green-against-yesterday is not evidence about today. If the branch was
-	// already on top of target — the common case under the serial default — there is nothing
-	// to re-validate and Gravy does not pretend otherwise.
-	if rebase.Replayed && len(project.Validation) > 0 {
+	// Validate every landing attempt. A no-op rebase can follow a failed validation
+	// or a human resolution, so it is not evidence that this tree is green.
+	if len(project.Validation) > 0 {
 		res.Revalidated = true
 		results, err := o.newValidator(o.newID()).Run(ctx, h, wt.Path, project.Validation)
 		res.Validation = results
@@ -182,7 +180,7 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		}
 		if !results.Green() {
 			return l.park(ctx, ticket, core.ReasonValidationFailed, map[string]any{
-				"stage":   "re-validation after the target moved",
+				"stage":   "validation before landing",
 				"summary": results.Summary(),
 			})
 		}

@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -889,5 +890,139 @@ func TestDirtyFilesSeesUntracked(t *testing.T) {
 	}
 	if len(dirt) != 1 || dirt[0] != "erl_crash.dump" {
 		t.Errorf("dirty = %v, want the untracked file", dirt)
+	}
+}
+
+func TestSquashMergePreservesDirtyMainCheckout(t *testing.T) {
+	for _, staged := range []bool{false, true} {
+		t.Run(fmt.Sprint(staged), func(t *testing.T) {
+			r, main := testRepo(t)
+			ctx := context.Background()
+			wt, err := r.CreateWorktree(ctx, "ticket", "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, wt.Path, "feature.txt", "ticket work\n")
+			if _, err := r.CommitAll(ctx, wt, "work"); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, main, "README.md", "personal work\n")
+			if staged {
+				git(t, main, "add", "README.md")
+			}
+			before := git(t, main, "rev-parse", "HEAD")
+			status := git(t, main, "status", "--porcelain")
+			if _, err := r.SquashMerge(ctx, wt, "main", "land"); err == nil {
+				t.Fatal("merged dirty checkout")
+			}
+			if git(t, main, "rev-parse", "HEAD") != before || git(t, main, "status", "--porcelain") != status {
+				t.Fatal("main checkout changed")
+			}
+			if readFile(t, main, "README.md") != "personal work\n" {
+				t.Fatal("personal work lost")
+			}
+		})
+	}
+}
+
+// TestSquashMergeIgnoresUntrackedInMainCheckout is the other half of the guard above: an
+// untracked file cannot reach a squash commit, so a build artefact or a crash dump sitting in
+// the main clone must not block every ticket from landing.
+func TestSquashMergeIgnoresUntrackedInMainCheckout(t *testing.T) {
+	r, main := testRepo(t)
+	ctx := context.Background()
+	wt, err := r.CreateWorktree(ctx, "ticket", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "feature.txt", "ticket work\n")
+	if _, err := r.CommitAll(ctx, wt, "work"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, main, "erl_crash.dump", "junk\n")
+
+	res, err := r.SquashMerge(ctx, wt, "main", "land")
+	if err != nil {
+		t.Fatalf("SquashMerge: %v", err)
+	}
+	if res.MergeCommit == "" {
+		t.Error("nothing was merged")
+	}
+	// The artefact is still where the human left it, and not in the commit.
+	if readFile(t, main, "erl_crash.dump") != "junk\n" {
+		t.Error("the untracked file was disturbed")
+	}
+	if files := git(t, main, "show", "--name-only", "--format=", "HEAD"); strings.Contains(files, "erl_crash.dump") {
+		t.Errorf("the untracked file was committed:\n%s", files)
+	}
+}
+
+func TestDiffIncludesRenamedPatch(t *testing.T) {
+	for _, name := range []string{"new.txt", "dir/new name.txt", "new\tname.txt", "new\nname.txt"} {
+		t.Run(name, func(t *testing.T) {
+			r, main := testRepo(t)
+			ctx := context.Background()
+			writeFile(t, main, "old.txt", strings.Repeat("unchanged line\n", 100))
+			git(t, main, "add", ".")
+			git(t, main, "commit", "-m", "base")
+			wt, err := r.CreateWorktree(ctx, "ticket", "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(wt.Path, name)), 0755); err != nil {
+				t.Fatal(err)
+			}
+			git(t, wt.Path, "mv", "old.txt", name)
+			writeFile(t, wt.Path, name, strings.Repeat("unchanged line\n", 100)+"new change\n")
+			if _, err := r.CommitAll(ctx, wt, "rename"); err != nil {
+				t.Fatal(err)
+			}
+			diff, err := r.Diff(ctx, wt, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(diff.Files) != 1 {
+				t.Fatalf("files: %+v", diff.Files)
+			}
+			f := diff.Files[0]
+			if f.Path != name || f.Status != "renamed" || f.Additions != 1 || f.Deletions != 0 || !strings.Contains(f.Patch, "+new change") || !strings.Contains(f.Patch, "rename from") {
+				t.Fatalf("incorrect rename: %+v", f)
+			}
+		})
+	}
+}
+
+func TestReviewCheckoutRefreshesAndIncludesAllCommits(t *testing.T) {
+	r, main := testRepo(t)
+	ctx := context.Background()
+	wt, err := r.CreateWorktree(ctx, "ticket", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "README.md", "first attempt\n")
+	if _, err := r.CommitAll(ctx, wt, "first"); err != nil {
+		t.Fatal(err)
+	}
+	co, err := r.ReviewCheckout(ctx, "T", "ticket", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, wt.Path, "main.go", "second attempt\n")
+	if _, err := r.CommitAll(ctx, wt, "second"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, main, "unrelated.txt", "target change\n")
+	git(t, main, "add", ".")
+	git(t, main, "commit", "-m", "target moved")
+	next, err := r.ReviewCheckout(ctx, "T", "ticket", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Path != co.Path || readFile(t, next.Path, "main.go") != "second attempt\n" {
+		t.Fatal("stale checkout")
+	}
+	status := git(t, next.Path, "status", "--porcelain")
+	if !strings.Contains(status, "README.md") || !strings.Contains(status, "main.go") || strings.Contains(status, "unrelated.txt") {
+		t.Fatalf("wrong review changes: %s", status)
 	}
 }

@@ -49,9 +49,8 @@ func (c *Checkouts) ReviewCheckout(ctx context.Context, ticketID string) (string
 		return "", fmt.Errorf("review checkout: %s has no branch", ticketID)
 	}
 
-	// The commit under review and the state it was built on. The agent's work is exactly one
-	// commit, which is the diff the review card shows too.
-	wt, err := co.ReviewCheckout(ctx, ticketID, ticket.Branch, ticket.Branch+"~1")
+	// Compare the complete ticket branch with the target, as the review card does.
+	wt, err := co.ReviewCheckout(ctx, ticketID, ticket.Branch, project.TargetBranch)
 	if err != nil {
 		return "", err
 	}

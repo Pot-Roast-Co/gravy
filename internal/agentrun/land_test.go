@@ -28,7 +28,7 @@ func landReady(t *testing.T, h *harness, file, body string) agentrun.Result {
 }
 
 // TestLandCleanCase is AC1 and AC2: a squash commit on target, pushed, ticket Done, worktree
-// gone — and no re-validation, because the branch was already on top of target.
+// gone, with validation checked again before merging.
 func TestLandCleanCase(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
@@ -48,9 +48,9 @@ func TestLandCleanCase(t *testing.T) {
 	if !land.Pushed {
 		t.Error("the work was not pushed to the remote")
 	}
-	// AC2: nothing to re-validate when the target has not moved.
-	if land.Revalidated {
-		t.Error("re-validation ran although the branch was already on top of target")
+	// Even an unchanged target does not prove the current worktree is green.
+	if !land.Revalidated {
+		t.Error("landing skipped validation")
 	}
 
 	// The squash commit is on target, in the main copy and upstream.
@@ -127,6 +127,20 @@ func TestReplayedRebaseRevalidates(t *testing.T) {
 	if len(open) != 1 || open[0].Reason != core.ReasonValidationFailed {
 		t.Fatalf("attention = %+v, want validation_failed", open)
 	}
+	// Repeating approval must not turn the same failing tree into a successful merge.
+	for i := 0; i < 2; i++ {
+		again, err := h.orch.Land().Continue(context.Background(), "GR-100")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.State != core.StateNeedsYou || !again.Revalidated {
+			t.Fatalf("retry bypassed validation: %+v", again)
+		}
+	}
+	if files := h.targetLog("--name-only", "-1", "main"); strings.Contains(files, "feature.txt") {
+		t.Fatal("failing work reached the remote")
+	}
+
 }
 
 // TestReplayedRebaseThatStaysGreenMerges: re-validation is a gate, not an obstacle.

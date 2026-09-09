@@ -33,8 +33,7 @@ type RebaseResult struct {
 	// Detail is git's own explanation, kept because it is invariably more useful than any
 	// summary of it. Empty when git said nothing.
 	Detail string
-	// Replayed reports whether any commits were actually moved. When false the branch was
-	// already on top of the target and there is nothing to re-validate.
+	// Replayed reports whether any commits were actually moved.
 	Replayed bool
 }
 

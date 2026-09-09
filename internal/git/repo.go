@@ -358,42 +358,56 @@ func (r *LocalRepo) conflictFiles(ctx context.Context, w Worktree) ([]string, er
 func (r *LocalRepo) Diff(ctx context.Context, w Worktree, base string) (Diff, error) {
 	spec := base + "..."
 
-	numstat, err := r.runner.mustRun(ctx, w.Path, "diff", "--numstat", spec)
+	numstat, err := r.runner.mustRun(ctx, w.Path, "diff", "--numstat", "-z", "--find-renames", spec)
 	if err != nil {
 		return Diff{}, err
 	}
-	status, err := r.runner.mustRun(ctx, w.Path, "diff", "--name-status", spec)
+	status, err := r.runner.mustRun(ctx, w.Path, "diff", "--name-status", "-z", "--find-renames", spec)
 	if err != nil {
 		return Diff{}, err
 	}
-
 	statuses := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		fields := strings.Split(strings.TrimSpace(line), "\t")
-		if len(fields) < 2 {
-			continue
+	fields := strings.Split(status, "\x00")
+	for i := 0; i+1 < len(fields); {
+		code, path := fields[i], fields[i+1]
+		i += 2
+		if strings.HasPrefix(code, "R") || strings.HasPrefix(code, "C") {
+			if i >= len(fields) {
+				return Diff{}, fmt.Errorf("malformed git rename status")
+			}
+			path = fields[i]
+			i++
 		}
-		// A rename is "R100\told\tnew"; the new path is what the diff is about.
-		path := fields[len(fields)-1]
-		statuses[path] = statusName(fields[0])
+		statuses[path] = statusName(code)
 	}
 
 	var out Diff
-	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
-		fields := strings.Split(strings.TrimSpace(line), "\t")
-		if len(fields) < 3 {
-			continue
+	entries := strings.Split(numstat, "\x00")
+	for i := 0; i < len(entries) && entries[i] != ""; i++ {
+		counts := strings.SplitN(entries[i], "\t", 3)
+		if len(counts) != 3 {
+			return Diff{}, fmt.Errorf("malformed git numstat")
 		}
-		path := fields[len(fields)-1]
-		f := FileDiff{Path: path, Status: statuses[path]}
+		path := counts[2]
+		paths := []string{path}
+		// With -z, a rename has an empty path followed by separate old and new names.
+		if path == "" {
+			if i+2 >= len(entries) {
+				return Diff{}, fmt.Errorf("malformed git rename numstat")
+			}
+			paths = []string{entries[i+1], entries[i+2]}
+			path = entries[i+2]
+			i += 2
+		}
+		f := FileDiff{Path: path, Status: statuses[path], Additions: atoiOrZero(counts[0]), Deletions: atoiOrZero(counts[1])}
 		if f.Status == "" {
+			// The two commands are run with the same flags and should agree, but a file with
+			// no status renders as a gap in the review card, and "modified" is what a numstat
+			// entry means when nothing says otherwise.
 			f.Status = "modified"
 		}
-		// A binary file reports "-" rather than a count.
-		f.Additions = atoiOrZero(fields[0])
-		f.Deletions = atoiOrZero(fields[1])
-
-		patch, err := r.runner.mustRun(ctx, w.Path, "diff", spec, "--", path)
+		args := append([]string{"--literal-pathspecs", "diff", "--find-renames", spec, "--"}, paths...)
+		patch, err := r.runner.mustRun(ctx, w.Path, args...)
 		if err != nil {
 			return Diff{}, err
 		}
@@ -444,6 +458,16 @@ type LandResult struct {
 // checked out elsewhere.
 func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message string) (LandResult, error) {
 	var out LandResult
+
+	// Git can carry unrelated staged changes into a squash commit. Refuse before
+	// switching branches or moving the target, preserving the user's checkout.
+	dirty, err := r.trackedChanges(ctx, r.repoPath)
+	if err != nil {
+		return out, err
+	}
+	if len(dirty) != 0 {
+		return out, fmt.Errorf("land: main checkout has uncommitted changes: %s", strings.Join(dirty, ", "))
+	}
 
 	// The main copy must be on the target branch to merge into it. Its state is left as found:
 	// Gravy never leaves a user's checkout somewhere they did not put it.
@@ -585,12 +609,30 @@ func (r *LocalRepo) ReviewCheckout(ctx context.Context, ticketID, commit, base s
 		return Worktree{}, fmt.Errorf("review checkout %s: need both a commit and its base", ticketID)
 	}
 
+	// Freeze both refs and use their merge base, so every ticket commit is visible.
+	head, err := r.runner.mustRun(ctx, r.repoPath, "rev-parse", "--verify", commit+"^{commit}")
+	if err != nil {
+		return Worktree{}, err
+	}
+	commit = strings.TrimSpace(head)
+	ancestor, err := r.runner.mustRun(ctx, r.repoPath, "merge-base", commit, base)
+	if err != nil {
+		return Worktree{}, err
+	}
+	base = strings.TrimSpace(ancestor)
 	dir := filepath.Join(r.worktreeRoot, ReviewCheckoutDirName(ticketID))
 
-	// Reopening an existing checkout is the common case: pressing the key twice should show
-	// the same thing rather than failing on a directory that is already there.
 	if _, err := os.Stat(dir); err == nil {
-		return Worktree{Path: dir, Base: base}, nil
+		// Mixed reset records the original commit in ORIG_HEAD and leaves HEAD at
+		// the base. Reuse only a view of these exact revisions.
+		previous, perr := r.runner.mustRun(ctx, dir, "rev-parse", "ORIG_HEAD")
+		previousBase, berr := r.runner.mustRun(ctx, dir, "rev-parse", "HEAD")
+		if perr == nil && berr == nil && strings.TrimSpace(previous) == commit && strings.TrimSpace(previousBase) == base {
+			return Worktree{Path: dir, Base: base}, nil
+		}
+		if err := r.RemoveWorktree(ctx, Worktree{Path: dir}); err != nil {
+			return Worktree{}, err
+		}
 	}
 
 	// Detached: this checkout is a view of a commit, and giving it a branch would put a second
@@ -626,9 +668,29 @@ func (r *LocalRepo) DiscardReviewCheckout(ctx context.Context, ticketID string) 
 // from the rebase means discovering it as a failure with a misleading name — the caller can say
 // which files instead, which is the only thing the human needs to know.
 func (r *LocalRepo) DirtyFiles(ctx context.Context, w Worktree) ([]string, error) {
-	out, err := r.runner.mustRun(ctx, w.Path, "status", "--porcelain")
+	return r.statusFiles(ctx, w.Path, true)
+}
+
+// trackedChanges lists modified or staged tracked files, ignoring untracked ones.
+//
+// Landing's guard on the main checkout uses this rather than DirtyFiles. A squash-merge stages
+// through that checkout's index, so a tracked edit sitting there can ride into the commit — but
+// an untracked file cannot, and refusing to land because a build artefact or a crash dump is
+// lying around would block every ticket over a file git is never going to touch. The rare case
+// where an untracked file is genuinely in the merge's way is git's own to refuse, which it does
+// before changing anything.
+func (r *LocalRepo) trackedChanges(ctx context.Context, path string) ([]string, error) {
+	return r.statusFiles(ctx, path, false)
+}
+
+func (r *LocalRepo) statusFiles(ctx context.Context, path string, untracked bool) ([]string, error) {
+	args := []string{"status", "--porcelain"}
+	if !untracked {
+		args = append(args, "--untracked-files=no")
+	}
+	out, err := r.runner.mustRun(ctx, path, args...)
 	if err != nil {
-		return nil, fmt.Errorf("status in %q: %w", w.Path, err)
+		return nil, fmt.Errorf("status in %q: %w", path, err)
 	}
 	var files []string
 	// Split before trimming: the status is two columns and the first is often a space, so
