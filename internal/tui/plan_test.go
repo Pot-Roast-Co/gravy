@@ -879,3 +879,23 @@ func TestPlanNoticeDoesNotSquatOnTheFooter(t *testing.T) {
 		t.Errorf("the footer and body hints did not come back:\n%s", view)
 	}
 }
+
+// TestTypingIsVisibleOnAFreshPlanScreen is a bug hit in real use: pressing i on an empty
+// conversation started an edit whose text was never drawn, because the intro branch of the view
+// returned before reaching the prompt. The footer said "enter to send" while the screen showed
+// nothing of what had been typed.
+func TestTypingIsVisibleOnAFreshPlanScreen(t *testing.T) {
+	m := openPlan(t, newFake())
+	if strings.Contains(m.View(), "describe something") == false {
+		t.Fatal("the fresh plan screen is not showing its intro")
+	}
+
+	m = send(t, m, key("i"))
+	for _, r := range "nuns with guns" {
+		m = send(t, m, key(string(r)))
+	}
+
+	if !strings.Contains(m.View(), "nuns with guns") {
+		t.Errorf("typed text is not on screen:\n%s", m.View())
+	}
+}

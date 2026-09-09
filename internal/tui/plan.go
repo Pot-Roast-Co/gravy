@@ -496,6 +496,12 @@ func (p *plan) View(ctx ViewContext) string {
 			th.Key.Render("  n")+th.Muted.Render("  ask what I should work on next"),
 			th.Key.Render("  i")+th.Muted.Render("  describe something in your own words"),
 		)
+		// The prompt belongs on this branch too. Without it, i on a fresh screen started an
+		// edit whose text was drawn nowhere: the footer said "enter to send" while you typed
+		// into what looked like a dead screen.
+		if p.editing {
+			lines = append(lines, "", p.promptLine(th))
+		}
 		return p.scrolled(lines, ctx, th)
 	}
 
@@ -549,7 +555,7 @@ func (p *plan) View(ctx ViewContext) string {
 
 	switch {
 	case p.editing:
-		lines = append(lines, "", th.Muted.Render("  > ")+th.Accent.Render(p.input)+th.Muted.Render("▏"))
+		lines = append(lines, "", p.promptLine(th))
 	case len(p.entries) > 0 && !p.busy:
 		// A visible place to answer. Without it the screen reads as a menu of commands rather
 		// than a conversation waiting on you.
@@ -591,6 +597,15 @@ func (p *plan) scrolled(lines []string, ctx ViewContext, th Theme) string {
 		out = append(out, th.Muted.Render(fmt.Sprintf("  ↑ %d · ↓ %d · g top · G bottom", above, below)))
 	}
 	return strings.Join(append(out, "", footer), "\n")
+}
+
+// promptLine is the line you type on.
+//
+// It is a method rather than three inline calls because it has to appear on every branch of the
+// view: the one that returns early for an empty conversation is exactly where a first message is
+// typed.
+func (p *plan) promptLine(th Theme) string {
+	return th.Muted.Render("  > ") + th.Accent.Render(p.input) + th.Muted.Render("▏")
 }
 
 func (p *plan) footer(ctx ViewContext) string {
