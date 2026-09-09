@@ -50,14 +50,21 @@ func (r *Router) WithClock(now func() time.Time) *Router {
 //
 // Every skip is recorded in Why. A queue that quietly moved to a different model is a queue
 // whose output you cannot account for later, so the reason travels with the assignment.
-func (r *Router) Resolve(ctx context.Context, route core.Route, _ string) (core.Choice, error) {
-	choices := r.choices(route)
+func (r *Router) Resolve(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
+	choices, overridden := projectChoices(c, route)
+	if !overridden {
+		choices = r.choices(route)
+	}
 	if len(choices) == 0 {
 		return core.Choice{}, fmt.Errorf("bucket %q has no agents configured", route)
 	}
 
 	var why []string
 	var cooling []string
+	if overridden {
+		why = append(why, fmt.Sprintf("bucket %q is set on the project, so its %d choice(s) replace the global table",
+			route, len(choices)))
+	}
 
 	for i, c := range choices {
 		label := c.ProviderID + "/" + c.Model
@@ -97,4 +104,18 @@ func (r *Router) Resolve(ctx context.Context, route core.Route, _ string) (core.
 			route, strings.Join(cooling, ", "))
 	}
 	return core.Choice{}, fmt.Errorf("no agent for %q is available in this build", route)
+}
+
+// projectChoices returns a project's own preferences for a bucket.
+//
+// An override replaces the global list rather than extending it: a project that pins "review" to
+// a local model does not want the global cloud model as its fallback, which is the whole reason
+// for pinning it. An entry with no choices is treated as absent — the TUI refuses to store one,
+// and falling through beats parking every ticket on that bucket.
+func projectChoices(c core.Constraints, route core.Route) ([]core.Choice, bool) {
+	got, ok := c.Routes[route]
+	if !ok || len(got) == 0 {
+		return nil, false
+	}
+	return got, true
 }

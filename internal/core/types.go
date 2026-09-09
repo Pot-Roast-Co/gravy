@@ -82,6 +82,21 @@ type Choice struct {
 	Why []string
 }
 
+// Constraints narrow a route resolution to the context it is happening in.
+//
+// ARCHITECTURE.md names this type with a HostID and an Exclude list; Exclude belongs to the
+// retry path and is not built yet. Routes is here because a project's own bucket table has to
+// reach the router somehow, and the alternative — handing the router a store and a project id —
+// would make it read the database on a path the scheduler has already read it on.
+type Constraints struct {
+	// HostID is the machine the work was placed on.
+	HostID string
+	// Routes is the project's bucket table. A bucket it names replaces the global entry for
+	// that bucket outright — the project's list is the whole preference order, not a prefix of
+	// the global one. A bucket it does not name falls through to the global table.
+	Routes map[Route][]Choice
+}
+
 // Ticket is a unit of work.
 type Ticket struct {
 	ID        string

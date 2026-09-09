@@ -985,7 +985,7 @@ func TestReviewEntersNeedsYouQueue(t *testing.T) {
 // advisory verdict were ever load-bearing.
 type failingReviewModel struct{ calls int }
 
-func (m *failingReviewModel) Complete(context.Context, string) (string, error) {
+func (m *failingReviewModel) Complete(context.Context, core.Project, string) (string, error) {
 	m.calls++
 	return `{"overall":"fail","summary":"this change is wrong",
 	         "findings":[{"severity":"high","file":"hello.txt","line":1,"rationale":"no"}]}`, nil
@@ -994,7 +994,7 @@ func (m *failingReviewModel) Complete(context.Context, string) (string, error) {
 // brokenReviewModel never answers.
 type brokenReviewModel struct{}
 
-func (brokenReviewModel) Complete(context.Context, string) (string, error) {
+func (brokenReviewModel) Complete(context.Context, core.Project, string) (string, error) {
 	return "", fmt.Errorf("the reviewer is down")
 }
 

@@ -21,9 +21,13 @@ func (o *Orchestrator) WithReviewer(r *review.Reviewer) *Orchestrator {
 	return o
 }
 
-// WithReview enables the review pass using a registered provider and model.
-func (o *Orchestrator) WithReview(providerID, model string, budget int) *Orchestrator {
-	return o.WithReviewer(review.New(providerModel{orch: o, providerID: providerID, model: model}, budget))
+// WithReview enables the review pass, resolving the review bucket for each review.
+//
+// Per review rather than once at startup: a project can pin its own review bucket, and a model
+// chosen when the daemon booted would ignore that — silently, since the verdict it records looks
+// the same whichever model produced it.
+func (o *Orchestrator) WithReview(resolve RouteResolver, budget int) *Orchestrator {
+	return o.WithReviewer(review.New(providerModel{orch: o, resolve: resolve}, budget))
 }
 
 // runReview records an advisory verdict on the run.
@@ -72,15 +76,22 @@ func (o *Orchestrator) recordVerdict(ctx context.Context, runID string, v review
 // its prompt and has no business touching the tree the work is in — and a read-only reviewer
 // that cannot reach the repository cannot accidentally become a second author.
 type providerModel struct {
-	orch       *Orchestrator
-	providerID string
-	model      string
+	orch    *Orchestrator
+	resolve RouteResolver
 }
 
-func (m providerModel) Complete(ctx context.Context, prompt string) (string, error) {
-	p, ok := m.orch.providers[m.providerID]
+func (m providerModel) Complete(ctx context.Context, project core.Project, prompt string) (string, error) {
+	if m.resolve == nil {
+		return "", fmt.Errorf("no review model is configured")
+	}
+	// The project's own bucket table wins here exactly as it does for the run being reviewed.
+	choice, err := m.resolve(ctx, core.RouteReview, core.Constraints{Routes: project.Routes})
+	if err != nil {
+		return "", fmt.Errorf("resolve the review bucket: %w", err)
+	}
+	p, ok := m.orch.providers[choice.ProviderID]
 	if !ok {
-		return "", fmt.Errorf("provider %q is not registered", m.providerID)
+		return "", fmt.Errorf("provider %q is not registered", choice.ProviderID)
 	}
 	h := m.orch.anyHost()
 	if h == nil {
@@ -98,7 +109,7 @@ func (m providerModel) Complete(ctx context.Context, prompt string) (string, err
 		RunID:        runID,
 		WorktreePath: dir,
 		Prompt:       prompt,
-		Model:        m.model,
+		Model:        choice.Model,
 		Timeout:      reviewTimeout,
 		// One turn: the reviewer answers from the prompt. A reviewer that goes looking is a
 		// reviewer that costs more than the review saves.

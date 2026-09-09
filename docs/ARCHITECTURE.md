@@ -284,7 +284,8 @@ type Router interface {
 
 type Constraints struct {
     HostID  string
-    Exclude []Choice   // choices already tried and failed in this run
+    Routes  map[Route][]Choice  // the project's own bucket table, if it has one
+    Exclude []Choice            // choices already tried and failed in this run
 }
 
 type Choice struct {
@@ -298,6 +299,13 @@ type Choice struct {
 `RouteLocal` resolves to nothing in v0.1 and falls through to the next configured choice. When a
 route exhausts every choice, the ticket goes to Needs You with the full `Why` trace rather than
 failing silently.
+
+A project's `Routes` **replace** the global table for any bucket they name — the project's list is
+the whole preference order, not a prefix of the global one, because a project that pins `review` to
+a local model does not want the fleet's cloud model waiting behind it. Buckets the project does not
+name fall through to the global table. Every caller passes the project's table: the scheduler when
+it places a ticket, planning when it starts a conversation, and the advisory review pass, which
+resolves the `review` bucket per review rather than once at startup for that reason.
 
 ### 4.5 Scheduler
 

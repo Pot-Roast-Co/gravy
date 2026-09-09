@@ -58,7 +58,7 @@ type Store interface {
 // GR-016 supplies the real implementation with fallbacks and cooldowns. M0 runs a single
 // hardcoded route (see FixedRoute), which is why this is an interface rather than a dependency.
 type Router interface {
-	Resolve(ctx context.Context, route core.Route, hostID string) (core.Choice, error)
+	Resolve(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error)
 }
 
 // FixedRoute is the M0 router: one provider and model for everything.
@@ -71,7 +71,7 @@ type FixedRoute struct {
 }
 
 // Resolve returns the fixed choice, recording that no real routing happened.
-func (f FixedRoute) Resolve(_ context.Context, route core.Route, _ string) (core.Choice, error) {
+func (f FixedRoute) Resolve(_ context.Context, route core.Route, _ core.Constraints) (core.Choice, error) {
 	if f.ProviderID == "" {
 		return core.Choice{}, fmt.Errorf("no provider configured for route %q", route)
 	}
@@ -322,7 +322,9 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 	if route == "" {
 		route = core.RouteImplementation
 	}
-	choice, err := s.router.Resolve(ctx, route, chosen.id)
+	// The project's own bucket table wins over the global one, which is what makes "this repo
+	// is reviewed by a local model" a project setting rather than a fleet-wide one.
+	choice, err := s.router.Resolve(ctx, route, core.Constraints{HostID: chosen.id, Routes: project.Routes})
 	if err != nil {
 		// A route that resolves to nothing leaves the ticket Ready with the reason recorded,
 		// rather than failing it: the models may be available again in a minute.

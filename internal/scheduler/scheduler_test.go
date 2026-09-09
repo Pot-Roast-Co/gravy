@@ -786,3 +786,43 @@ func TestUncappedRoutesAreUnchanged(t *testing.T) {
 		t.Errorf("assigned %d, want all 3: an uncapped route is limited only by the pool", len(got))
 	}
 }
+
+// recordingRouter answers like the real router and remembers what it was asked.
+type recordingRouter struct{ got core.Constraints }
+
+func (r *recordingRouter) Resolve(_ context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
+	r.got = c
+	if choices, ok := c.Routes[route]; ok && len(choices) > 0 {
+		return choices[0], nil
+	}
+	return core.Choice{ProviderID: "claude-code", Model: "sonnet"}, nil
+}
+
+// TestProjectRoutesReachTheRouter: a project's bucket table was stored and shown in the TUI and
+// then never passed to resolution, so every ticket ran on the global agent regardless.
+func TestProjectRoutesReachTheRouter(t *testing.T) {
+	p := project("p1", "repo")
+	p.Routes = map[core.Route][]core.Choice{
+		core.RouteImplementation: {{ProviderID: "codex", Model: "gpt-5"}},
+	}
+	st := newStore().addProject(p)
+	st.addTicket(ticket("t1", "p1", core.StateReady, 1))
+
+	rr := &recordingRouter{}
+	got, err := New(st, newPool(mac("m1", 2)), rr).Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("assignments = %d, want 1", len(got))
+	}
+	if got[0].ProviderID != "codex" || got[0].Model != "gpt-5" {
+		t.Errorf("assigned %s/%s, want the project's codex/gpt-5", got[0].ProviderID, got[0].Model)
+	}
+	if len(rr.got.Routes) == 0 {
+		t.Error("the router was asked without the project's bucket table")
+	}
+	if rr.got.HostID != "m1" {
+		t.Errorf("HostID = %q, want the chosen host m1", rr.got.HostID)
+	}
+}

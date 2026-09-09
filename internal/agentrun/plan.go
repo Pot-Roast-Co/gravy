@@ -18,7 +18,7 @@ import (
 //
 // Injected rather than held, because routing lives with the scheduler and planning is
 // deliberately outside it — see Planner.
-type RouteResolver func(ctx context.Context, route core.Route) (core.Choice, error)
+type RouteResolver func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error)
 
 // Planner runs planning conversations.
 //
@@ -96,7 +96,9 @@ func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult
 		providerID = held
 		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg)
 	} else {
-		choice, rerr := p.resolve(ctx, core.RoutePlanning)
+		// A project that pins its planning bucket means it for planning too, not only for the
+		// tickets planning produces.
+		choice, rerr := p.resolve(ctx, core.RoutePlanning, core.Constraints{Routes: turn.Project.Routes})
 		if rerr != nil {
 			return core.PlanResult{}, fmt.Errorf("plan: %w", rerr)
 		}

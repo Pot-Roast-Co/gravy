@@ -18,7 +18,7 @@ type stubModel struct {
 	prompts []string
 }
 
-func (m *stubModel) Complete(_ context.Context, prompt string) (string, error) {
+func (m *stubModel) Complete(_ context.Context, _ core.Project, prompt string) (string, error) {
 	m.prompts = append(m.prompts, prompt)
 	if m.err != nil {
 		return "", m.err

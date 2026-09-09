@@ -41,7 +41,7 @@ func TestFirstChoiceWins(t *testing.T) {
 	r := New(&fakeStore{down: map[string]bool{}},
 		choices("claude-code/fable", "claude-code/opus"), always)
 
-	got, err := r.Resolve(context.Background(), "astra", "local")
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestFallsThroughACooldown(t *testing.T) {
 	r := New(&fakeStore{down: map[string]bool{"claude-code/fable": true}},
 		choices("claude-code/fable", "claude-code/opus"), always)
 
-	got, err := r.Resolve(context.Background(), "astra", "local")
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEverythingCoolingDownIsAPauseNotAFailure(t *testing.T) {
 		"claude-code/fable": true, "claude-code/opus": true,
 	}}, choices("claude-code/fable", "claude-code/opus"), always)
 
-	_, err := r.Resolve(context.Background(), "astra", "local")
+	_, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"})
 	if err == nil {
 		t.Fatal("resolving with everything cooling down succeeded")
 	}
@@ -106,7 +106,7 @@ func TestUnusableProvidersAreSkipped(t *testing.T) {
 		choices("nonesuch/model", "claude-code/opus"),
 		func(id string) bool { return id == "claude-code" })
 
-	got, err := r.Resolve(context.Background(), "astra", "local")
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestUnusableProvidersAreSkipped(t *testing.T) {
 func TestEmptyBucketSaysSo(t *testing.T) {
 	r := New(&fakeStore{}, func(core.Route) []core.Choice { return nil }, always)
 
-	_, err := r.Resolve(context.Background(), "astra", "local")
+	_, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"})
 	if err == nil || !strings.Contains(err.Error(), "no agents configured") {
 		t.Errorf("err = %v, want it to say the bucket is empty", err)
 	}
@@ -134,7 +134,7 @@ func TestStoreFailureIsReported(t *testing.T) {
 	r := New(&fakeStore{err: errors.New("database is locked")},
 		choices("claude-code/opus"), always)
 
-	if _, err := r.Resolve(context.Background(), "astra", "local"); err == nil {
+	if _, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"}); err == nil {
 		t.Fatal("a failed cooldown lookup resolved anyway")
 	}
 }
@@ -147,7 +147,7 @@ func TestCooldownExpiryIsTimeBased(t *testing.T) {
 	r := New(clockStore{store, &asked}, choices("claude-code/opus"), always).
 		WithClock(func() time.Time { return time.Unix(1700000000, 0) })
 
-	if _, err := r.Resolve(context.Background(), "astra", "local"); err != nil {
+	if _, err := r.Resolve(context.Background(), "astra", core.Constraints{HostID: "local"}); err != nil {
 		t.Fatal(err)
 	}
 	if !asked.Equal(time.Unix(1700000000, 0)) {
@@ -163,4 +163,82 @@ type clockStore struct {
 func (c clockStore) IsUnavailable(ctx context.Context, p, m string, now time.Time) (bool, error) {
 	*c.asked = now
 	return c.inner.IsUnavailable(ctx, p, m, now)
+}
+
+// TestProjectOverrideReplacesTheGlobalBucket is the bug this exists for: a project's bucket table
+// was stored and displayed and then ignored, so every ticket ran on the global agent.
+func TestProjectOverrideReplacesTheGlobalBucket(t *testing.T) {
+	r := New(&fakeStore{down: map[string]bool{}},
+		choices("claude-code/opus", "claude-code/fable"), always)
+
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{
+		HostID: "local",
+		Routes: map[core.Route][]core.Choice{"astra": {{ProviderID: "codex", Model: "gpt-5"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProviderID != "codex" || got.Model != "gpt-5" {
+		t.Fatalf("choice = %s/%s, want the project's codex/gpt-5", got.ProviderID, got.Model)
+	}
+
+	// Replaces, not prepends: the global choices must not be waiting behind it as fallback. A
+	// project that pins a bucket has said what it wants run, and quietly reaching past that to
+	// the fleet default is the failure mode the override exists to prevent.
+	if len(got.Why) == 0 || !strings.Contains(got.Why[0], "replace the global table") {
+		t.Errorf("why = %v, want it to record that the project's table replaced the global one", got.Why)
+	}
+}
+
+// TestProjectOverrideDoesNotLeakToOtherBuckets: overriding one bucket leaves the rest global.
+func TestProjectOverrideDoesNotLeakToOtherBuckets(t *testing.T) {
+	r := New(&fakeStore{down: map[string]bool{}}, choices("claude-code/opus"), always)
+
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{
+		HostID: "local",
+		Routes: map[core.Route][]core.Choice{"review": {{ProviderID: "codex", Model: "gpt-5"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProviderID != "claude-code" || got.Model != "opus" {
+		t.Fatalf("choice = %s/%s, want the global claude-code/opus", got.ProviderID, got.Model)
+	}
+}
+
+// TestProjectOverrideFallsThroughCooldowns: an override is a preference order like any other, and
+// it must not be exempt from the cooldown walk.
+func TestProjectOverrideFallsThroughCooldowns(t *testing.T) {
+	r := New(&fakeStore{down: map[string]bool{"codex/gpt-5": true}}, choices("claude-code/opus"), always)
+
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{
+		HostID: "local",
+		Routes: map[core.Route][]core.Choice{"astra": {
+			{ProviderID: "codex", Model: "gpt-5"},
+			{ProviderID: "codex", Model: "gpt-5-mini"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-5-mini" {
+		t.Fatalf("model = %q, want the override's own fallback gpt-5-mini", got.Model)
+	}
+}
+
+// TestEmptyProjectOverrideFallsBackToGlobal: an entry with no agents is treated as absent rather
+// than parking every ticket on that bucket.
+func TestEmptyProjectOverrideFallsBackToGlobal(t *testing.T) {
+	r := New(&fakeStore{down: map[string]bool{}}, choices("claude-code/opus"), always)
+
+	got, err := r.Resolve(context.Background(), "astra", core.Constraints{
+		HostID: "local",
+		Routes: map[core.Route][]core.Choice{"astra": {}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "opus" {
+		t.Fatalf("model = %q, want the global opus", got.Model)
+	}
 }

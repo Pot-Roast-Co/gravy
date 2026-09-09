@@ -151,11 +151,10 @@ func newApp(ctx context.Context) (*app, error) {
 		orch.RegisterProvider(p)
 	}
 
-	// The advisory review pass. It runs on the review route, which is deliberately a cheaper
-	// model than the implementation route: its job is triage a human can skim, not a second
+	// The advisory review pass. It runs on the review bucket, which is deliberately a cheaper
+	// model than the implementation bucket: its job is triage a human can skim, not a second
 	// opinion worth paying for twice.
-	reviewRoute := reviewChoice(cfg)
-	orch = orch.WithReview(reviewRoute.ProviderID, reviewRoute.Model, cfg.Context.TokenBudget*4)
+	orch = orch.WithReview(reviewResolver(rtr), cfg.Context.TokenBudget*4)
 
 	// Notifications go out on stderr for the bell and through the host for the OS call, so
 	// that internal/notify never learns how a process is started (ARCHITECTURE.md §1.1).
@@ -167,8 +166,8 @@ func newApp(ctx context.Context) (*app, error) {
 		WithLander(lander{orch}).WithLogs(logs).WithKiller(orch).
 		WithCheckouts(orch.Checkouts()).WithRereviewer(orch).
 		WithPlanner(orch.Plan(
-			func(ctx context.Context, route core.Route) (core.Choice, error) {
-				return rtr.Resolve(ctx, route, "")
+			func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
+				return rtr.Resolve(ctx, route, c)
 			},
 			// Planning reads the project's documents, so it gets the same budget a run's
 			// context does rather than a number of its own to drift out of step.
@@ -297,38 +296,6 @@ func (l lander) Continue(ctx context.Context, ticketID string) error {
 // loop builds the scheduler loop.
 func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log) }
 
-// configRouter resolves each route to its first usable choice from the config.
-//
-// It is the interim router: real fallback, cooldowns and quota handling are GR-016. What it adds
-// over a single hardcoded choice is that routes resolve independently, so different tickets can
-// run different agents — and therefore run different agents concurrently.
-type configRouter struct{ cfg config.Config }
-
-// Resolve picks the first choice for a route whose provider this build can actually run.
-//
-// A route naming a provider with no adapter is skipped rather than becoming the queue's default,
-// because the config file can only select among what is compiled in.
-func (r configRouter) Resolve(_ context.Context, route core.Route, _ string) (core.Choice, error) {
-	choices, err := r.cfg.RouteChoices(route)
-	if err == nil {
-		for _, c := range choices {
-			if _, ok := registeredProviders[c.ProviderID]; ok && enabled(r.cfg, c.ProviderID) {
-				return c, nil
-			}
-		}
-	}
-
-	// An empty or unusable route falls back to the implementation route, then to claude-code:
-	// a ticket must still run, and refusing to schedule it would be a worse answer than
-	// running it on the default agent.
-	if route != core.RouteImplementation {
-		if c, ferr := r.Resolve(context.Background(), core.RouteImplementation, ""); ferr == nil {
-			return c, nil
-		}
-	}
-	return core.Choice{ProviderID: claudecode.ID, Model: "sonnet"}, nil
-}
-
 // registeredProviders is what this build can actually run. Adding an adapter means adding a
 // package and an entry here, and nothing else.
 var registeredProviders = map[string]string{
@@ -358,11 +325,25 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// reviewChoice resolves the review bucket for the advisory review pass.
+// reviewResolver resolves the review bucket each time the advisory pass runs.
 //
-// It resolves once at startup rather than per run: the review model is baked into the
-// orchestrator, and changing it is one of the settings that reports as needing a restart.
-func reviewChoice(cfg config.Config) core.Choice {
-	c, _ := configRouter{cfg: cfg}.Resolve(context.Background(), core.RouteReview, "")
-	return c
+// Resolving per review rather than at startup is what lets a project pin its own reviewer, and
+// it means an edit in Settings takes effect on the next review rather than the next restart.
+//
+// The fall back to the implementation bucket is what resolving at startup used to do: a review
+// bucket nobody configured should still produce a review, since an advisory opinion on the
+// working model beats no opinion at all.
+func reviewResolver(rtr *router.Router) agentrun.RouteResolver {
+	return func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
+		choice, err := rtr.Resolve(ctx, route, c)
+		if err == nil || route == core.RouteImplementation {
+			return choice, err
+		}
+		if fallback, ferr := rtr.Resolve(ctx, core.RouteImplementation, c); ferr == nil {
+			fallback.Why = append(fallback.Why,
+				fmt.Sprintf("bucket %q resolved to nothing (%v), so the review ran on the implementation bucket", route, err))
+			return fallback, nil
+		}
+		return core.Choice{}, err
+	}
 }

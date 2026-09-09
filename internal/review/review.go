@@ -68,8 +68,12 @@ func (v Verdict) Available() bool { return v.Unavailable == "" && v.Overall.Vali
 //
 // An interface so the reviewer is testable without a provider, and so a local model later is a
 // different implementation rather than a rewrite.
+//
+// The project travels with the prompt because which model reviews is a project setting: a repo
+// can pin its own review bucket, and an implementation that picked its model once could not
+// honour that.
 type Model interface {
-	Complete(ctx context.Context, prompt string) (string, error)
+	Complete(ctx context.Context, project core.Project, prompt string) (string, error)
 }
 
 // Request is everything the reviewer looks at.
@@ -113,7 +117,7 @@ func (r *Reviewer) Review(ctx context.Context, req Request) Verdict {
 		return Verdict{Unavailable: "there is no diff to review"}
 	}
 
-	out, err := r.model.Complete(ctx, BuildPrompt(req, r.budget))
+	out, err := r.model.Complete(ctx, req.Project, BuildPrompt(req, r.budget))
 	if err != nil {
 		return Verdict{Unavailable: "the review model did not answer: " + err.Error()}
 	}
