@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/pot-roast-co/gravy/internal/config"
 	"github.com/pot-roast-co/gravy/internal/core"
@@ -21,12 +20,18 @@ import (
 type Client struct {
 	path string
 
-	// mu serialises calls over the single request connection: one request, one reply, in
-	// order. Concurrency, when it is wanted, is a second Client.
+	// Each call gets its own connection, as Events and StreamLogs already do.
+	//
+	// Calls used to share one, serialised by mu. That made every slow method a freeze of
+	// everything else: a planning turn runs an agent — minutes, and bounded only by the run
+	// timeout — and the TUI's next refresh sat behind it holding a lock, so the whole screen
+	// stopped until the planner answered. A unix socket connect costs microseconds; head-of-
+	// line blocking on a UI's only transport costs the UI.
+	//
+	// mu now guards nothing but the liveness connection Dial opened and Close closes.
 	mu     sync.Mutex
 	conn   net.Conn
-	dec    *json.Decoder
-	w      *bufio.Writer
+	closed bool
 	nextID int64
 }
 
@@ -36,12 +41,9 @@ func Dial(path string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to the gravy daemon at %s: %w", path, err)
 	}
-	return &Client{
-		path: path,
-		conn: conn,
-		dec:  json.NewDecoder(bufio.NewReaderSize(conn, 64*1024)),
-		w:    bufio.NewWriter(conn),
-	}, nil
+	// The connection is kept so that Dial means what its callers read it as — the daemon is
+	// up and answering — and so Close has something to close.
+	return &Client{path: path, conn: conn}, nil
 }
 
 // Close hangs up.
@@ -52,7 +54,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	err := c.conn.Close()
-	c.conn = nil
+	c.conn, c.closed = nil, true
 	return err
 }
 
@@ -65,33 +67,40 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
+	closed := c.closed
+	id := c.nextID + 1
+	c.nextID = id
+	c.mu.Unlock()
+	if closed {
 		return fmt.Errorf("%s: the connection is closed", method)
 	}
 
+	conn, err := net.Dial("unix", c.path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
+	defer conn.Close()
+
 	// A cancelled context must not leave the caller blocked on a daemon that is not answering.
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.conn.SetDeadline(deadline)
-		defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
+		_ = conn.SetDeadline(deadline)
 	}
 
-	c.nextID++
-	id := c.nextID
+	w := bufio.NewWriter(conn)
 	req := rpcRequest{JSONRPC: rpcVersion, ID: &id, Method: method, Params: raw}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
-	if _, err := c.w.Write(append(b, '\n')); err != nil {
+	if _, err := w.Write(append(b, '\n')); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
-	if err := c.w.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
 
 	var resp rpcResponse
-	if err := c.dec.Decode(&resp); err != nil {
+	if err := json.NewDecoder(bufio.NewReaderSize(conn, 64*1024)).Decode(&resp); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
 	if resp.Error != nil {

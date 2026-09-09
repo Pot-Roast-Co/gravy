@@ -124,7 +124,13 @@ func remoteCommand(spec ExecSpec) string {
 	}
 	// exec so the shell is replaced: one fewer process between ssh and the agent, and signals
 	// reach what they are aimed at.
-	return "exec $SHELL -lic " + shellQuote(b.String())
+	//
+	// $SHELL is quoted because it is a path like any other. On macOS and Linux it never
+	// contains a space and the quotes cost nothing; under Git Bash on Windows it is
+	// "/c/program files/git/bin/bash.exe", and unquoted it word-splits into a command called
+	// /c/program — which is every command on that host failing for a reason that reads like
+	// the machine is broken.
+	return `exec "$SHELL" -lic ` + shellQuote(b.String())
 }
 
 // shellQuote makes a string safe as one argument to a POSIX shell.
