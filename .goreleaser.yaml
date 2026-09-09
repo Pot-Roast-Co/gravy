@@ -1,0 +1,96 @@
+# goreleaser configuration for tagged releases.
+#
+# Run locally with:
+#   goreleaser check
+#   goreleaser build --snapshot --clean
+#
+# Releases themselves are cut by .github/workflows/release.yml on a v* tag.
+#
+# No Windows targets: process groups, signals and the daemon socket are unix-specific, so a
+# Windows binary would fail at first run rather than at install. See README.
+
+version: 2
+
+project_name: gravy
+
+builds:
+  - id: gravy
+    main: ./cmd/gravy
+    binary: gravy
+    env:
+      # Nothing in gravy needs cgo, and static binaries are what makes a tarball install work
+      # across distros without matching a libc.
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # The same stamp as the Makefile's LDFLAGS, so `gravy version` reports the tag instead of
+    # "dev". The Makefile's VERSION comes from `git describe --tags`, which keeps the leading
+    # v, while goreleaser's .Version strips it — hence the explicit prefix, so a release binary
+    # and a `make build` of the same commit report the same string.
+    ldflags:
+      - -X main.version=v{{ .Version }}
+    # Reproducible archives: without this the binary mtime is the build time.
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: gravy
+    ids:
+      - gravy
+    formats:
+      - tar.gz
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}'
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+# The tap ships a cask, not a formula: goreleaser deprecated `brews` in favour of
+# `homebrew_casks`, and `goreleaser check` fails on the old key.
+#
+# Casks are macOS-only — Homebrew on Linux refuses to install them — so `brew install
+# pot-roast-co/tap/gravy` serves macOS only. Linux users take the tarball from the releases
+# page or `go install`; the README says exactly that rather than promising brew on both.
+homebrew_casks:
+  - name: gravy
+    ids:
+      - gravy
+    repository:
+      owner: pot-roast-co
+      name: homebrew-tap
+      branch: main
+      # GITHUB_TOKEN is scoped to this repository and cannot push to the tap, so the release
+      # workflow passes a PAT with contents:write on pot-roast-co/homebrew-tap.
+      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
+    directory: Casks
+    homepage: https://github.com/pot-roast-co/gravy
+    description: A keyboard-first CLI/TUI engineering manager for agentic software development
+    # Pre-releases should not become the cask everyone gets from `brew install`.
+    skip_upload: auto
+    hooks:
+      post:
+        # The archives are unsigned and unnotarised (out of scope for this ticket), so Gatekeeper
+        # quarantines anything Homebrew downloads and the first `gravy` run is refused. Stripping
+        # the quarantine attribute at install time is the documented workaround.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gravy"]
+          end

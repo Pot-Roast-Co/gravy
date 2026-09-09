@@ -68,9 +68,30 @@ Idle workers automatically claim eligible Ready tickets. You write tickets and a
 
 ## Install
 
+On macOS, Homebrew:
+
+```sh
+brew install pot-roast-co/tap/gravy
+gravy            # launches the TUI; press P to add your first repository
+```
+
+The tap ships a cask, and Homebrew only installs casks on macOS — on Linux, download the
+`.tar.gz` for your architecture from the
+[releases page](https://github.com/pot-roast-co/gravy/releases) and put `gravy` on your `PATH`:
+
+```sh
+tar -xzf gravy_<version>_linux_amd64.tar.gz
+install -m 0755 gravy ~/.local/bin/gravy
+gravy
+```
+
+The same tarballs are published for macOS. The binaries are static; there is nothing else to
+install, and Go is not required for either route.
+
+If you already have Go:
+
 ```sh
 go install github.com/pot-roast-co/gravy/cmd/gravy@latest
-gravy            # launches the TUI; press P to add your first repository
 ```
 
 Or from a clone, which stamps the version and avoids `GOBIN`:
@@ -80,11 +101,13 @@ make install                    # -> ~/.local/bin/gravy
 make install PREFIX=/usr/local/bin
 ```
 
-`make install` is worth preferring if you manage Go with mise or asdf: their `GOBIN` lives
-inside the toolchain directory, so a `go install`ed binary disappears on the next Go upgrade.
+`make install` is worth preferring over `go install` if you manage Go with mise or asdf: their
+`GOBIN` lives inside the toolchain directory, so a `go install`ed binary disappears on the next
+Go upgrade.
 
-Requires Go 1.24+, `git`, and at least one coding agent CLI (`claude` or `codex`) that you have
-already logged in to. Gravy drives the CLIs; it never handles your credentials.
+Requires `git` and at least one coding agent CLI (`claude` or `codex`) that you have already
+logged in to. Gravy drives the CLIs; it never handles your credentials. Go 1.24+ is needed only
+for the `go install` and `make install` routes.
 
 **Linux and macOS.** Both are used daily. Windows is not supported: process groups, signals and
 the daemon's socket are unix-specific, and pretending otherwise would fail at the first run

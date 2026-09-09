@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # goreleaser needs the full history and all tags to work out the version and changelog.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      # Same pin as ci.yml: v7 is the first release that supports golangci-lint v2, which
+      # .golangci.yml is written against.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+
+      # A release built from a red tree is worse than no release, so the gate runs first and
+      # a failure here stops the tag from ever producing artifacts.
+      - name: make check
+        run: make check
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          # Creates the GitHub release and uploads the archives and checksums.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the cask to pot-roast-co/homebrew-tap, which GITHUB_TOKEN cannot reach.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
