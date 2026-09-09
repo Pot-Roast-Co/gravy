@@ -133,6 +133,8 @@ type Model struct {
 	attention int
 	// bell is off when the human has turned notifications off entirely.
 	bell bool
+	// agents is what the daemon found when asked, for the first-run screen.
+	agents []api.AgentStatus
 
 	showHelp bool
 	// adding is the global P prompt. It sits on the frame, not on a screen, so that it is
@@ -215,10 +217,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// items in it is not three things happening now.
 		m.attention = len(msg.status.Attention)
 		m.events, m.stopEvents = msg.events, msg.stop
-		return m, tea.Batch(waitForEvent(msg.events), loadBellSetting(m.svc))
+		cmds := []tea.Cmd{waitForEvent(msg.events), loadBellSetting(m.svc)}
+		// Only on a fresh install: probing spawns processes, and paying for that on every
+		// launch to answer a question that stops mattering after the first project would be
+		// a tax on everybody else.
+		if len(msg.status.Projects) == 0 {
+			cmds = append(cmds, detectAgents(m.svc))
+		}
+		return m, tea.Batch(cmds...)
 
 	case bellSettingMsg:
 		m.bell = msg.enabled
+		return m, nil
+
+	case agentsDetectedMsg:
+		m.agents = msg.agents
 		return m, nil
 
 	case connectErrMsg:
@@ -457,6 +470,12 @@ func (m Model) bodyView(height int) string {
 
 	var body string
 	switch {
+	// A fresh install gets told what Gravy is and what to do, rather than an empty dashboard.
+	// The Dashboard only: pressing 2 should show Plan, even on a first run — a setup screen
+	// that swallows every section is a wall, not a welcome.
+	case m.active == SectionDashboard && m.conn == connReady &&
+		len(m.status.Projects) == 0 && !m.adding.open && !m.showHelp:
+		body = setupView(m.agents, m.theme, m.width)
 	case m.adding.open:
 		body = m.adding.view(m.theme, m.width)
 	case m.showHelp:

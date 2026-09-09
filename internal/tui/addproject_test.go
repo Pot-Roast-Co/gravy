@@ -263,12 +263,15 @@ func TestAddProjectIsDiscoverable(t *testing.T) {
 	svc.status.Projects = nil
 	m := boot(t, svc, 80, 24)
 
+	m = send(t, m, agentsDetectedMsg{agents: []api.AgentStatus{
+		{ProviderID: "claude-code", Installed: true, Authenticated: true},
+	}})
 	view := m.View()
 	if strings.Contains(view, "gravy project add") {
-		t.Error("the empty dashboard still sends the user to the CLI")
+		t.Error("the first-run screen still sends the user to the CLI")
 	}
-	if !strings.Contains(view, "adds a project") {
-		t.Errorf("the empty dashboard does not offer the key:\n%s", view)
+	if !strings.Contains(view, "add one") {
+		t.Errorf("the first-run screen does not offer the key:\n%s", view)
 	}
 
 	// And it is in the generated help, which is the same struct Update dispatches on.

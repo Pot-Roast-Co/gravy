@@ -43,6 +43,8 @@ type Local struct {
 	agents []AgentOption
 	// rereviewer is nil on a client that may not run reviews.
 	rereviewer Rereviewer
+	// detector probes the agent CLIs, for onboarding. Nil on a client that cannot.
+	detector Detector
 
 	// Configuration, empty on a client that cannot be configured.
 	home           string

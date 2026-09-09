@@ -302,6 +302,9 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.DeleteProject(ctx, p.TicketID)
 
+	case mDetectAgents:
+		return s.svc.DetectAgents(ctx), nil
+
 	case mPlan:
 		var p planParams
 		if err := unmarshalParams(raw, &p); err != nil {

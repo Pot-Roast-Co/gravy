@@ -175,7 +175,8 @@ func newApp(ctx context.Context) (*app, error) {
 			cfg.Context.TokenBudget,
 		)).
 		WithSettings(home, cfg, applyConfig(live, sched, cfg)).
-		WithAgents(agentOptions(ctx, providers))
+		WithAgents(agentOptions(ctx, providers)).
+		WithDetector(detector{providers: providers, host: h, cfg: cfg})
 
 	// Now that the service exists, the daemon's own writes can reach its subscribers.
 	events.SetPublisher(svc)
@@ -218,6 +219,35 @@ func agentOptions(ctx context.Context, providers []provider.Provider) []api.Agen
 			opt.Open = open.ModelsAreOpen()
 		}
 		out = append(out, opt)
+	}
+	return out
+}
+
+// detector probes the agent CLIs on demand, for onboarding.
+//
+// On demand rather than at startup: a login expires, and a status cached when the daemon started
+// would confidently report an agent that stopped working an hour ago.
+type detector struct {
+	providers []provider.Provider
+	host      host.Host
+	cfg       config.Config
+}
+
+func (d detector) DetectAgents(ctx context.Context) []api.AgentStatus {
+	out := make([]api.AgentStatus, 0, len(d.providers))
+	for _, p := range d.providers {
+		st := api.AgentStatus{
+			ProviderID: p.ID(),
+			Command:    providerCommand(d.cfg, p.ID(), ""),
+		}
+		av, err := p.Detect(ctx, d.host)
+		if err != nil {
+			st.Detail = err.Error()
+			out = append(out, st)
+			continue
+		}
+		st.Installed, st.Authenticated, st.Detail = av.Installed, av.Authenticated, av.Detail
+		out = append(out, st)
 	}
 	return out
 }

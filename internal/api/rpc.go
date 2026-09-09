@@ -98,6 +98,7 @@ const (
 	mListProjects     = "ListProjects"
 	mAddProject       = "AddProject"
 	mDeleteProject    = "DeleteProject"
+	mDetectAgents     = "DetectAgents"
 	mPlan             = "Plan"
 	mRereview         = "Rereview"
 	mReviewCheckout   = "ReviewCheckout"

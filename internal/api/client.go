@@ -152,6 +152,14 @@ func (c *Client) DeleteProject(ctx context.Context, id string) error {
 	return c.call(ctx, mDeleteProject, checkoutParams{TicketID: id}, nil)
 }
 
+func (c *Client) DetectAgents(ctx context.Context) []AgentStatus {
+	var out []AgentStatus
+	// Probing is slow enough to fail on a busy daemon, and a failure here is "we could not
+	// tell" rather than an error onboarding should stop for.
+	_ = c.call(ctx, mDetectAgents, struct{}{}, &out)
+	return out
+}
+
 func (c *Client) Plan(ctx context.Context, req PlanReq) (PlanReply, error) {
 	var out PlanReply
 	return out, c.call(ctx, mPlan, planParams{Req: req}, &out)

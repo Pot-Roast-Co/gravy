@@ -153,10 +153,17 @@ func TestNoProjectsTellsYouHowToStart(t *testing.T) {
 	f := newFake()
 	f.status.Projects = nil
 	m := boot(t, f, 100, 30)
-	// It names the key, not a shell command: the whole point of the global P is that a fresh
-	// install never has to leave the TUI to register its first repository.
-	if !strings.Contains(m.View(), "adds a project") {
-		t.Errorf("a fresh install is not told how to start:\n%s", m.View())
+	m = send(t, m, agentsDetectedMsg{agents: []api.AgentStatus{
+		{ProviderID: "claude-code", Installed: true, Authenticated: true},
+	}})
+	view := m.View()
+
+	// A fresh install gets told what Gravy is and what to press, rather than an empty
+	// dashboard with nothing on it.
+	for _, want := range []string{"engineering manager", "P", "Review", "without your approval"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("a fresh install is not told how to start — missing %q:\n%s", want, view)
+		}
 	}
 }
 

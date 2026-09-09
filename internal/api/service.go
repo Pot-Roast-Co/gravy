@@ -33,6 +33,9 @@ type Service interface {
 	ReviewCheckout(ctx context.Context, ticketID string) (string, error)
 	DiscardReviewCheckout(ctx context.Context, ticketID string) error
 
+	// DetectAgents reports which agent CLIs are installed and logged in, for onboarding.
+	DetectAgents(ctx context.Context) []AgentStatus
+
 	// planning
 	Plan(ctx context.Context, req PlanReq) (PlanReply, error)
 	ApprovePlan(ctx context.Context, req ApprovePlanReq) ([]core.Ticket, error)

@@ -46,6 +46,7 @@ type fakeService struct {
 	projects        []core.Project
 	savedProjects   []core.Project
 	deletedProjects []string
+	agentStatus     []api.AgentStatus
 	allTickets      []core.Ticket
 	queue           []api.TicketDetail
 	added           []api.AddProjectReq
@@ -166,6 +167,8 @@ func (f *fakeService) AddProject(_ context.Context, req api.AddProjectReq) (core
 	f.added = append(f.added, req)
 	return core.Project{ID: "proj-new", Name: filepath.Base(req.Path)}, nil
 }
+func (f *fakeService) DetectAgents(context.Context) []api.AgentStatus { return f.agentStatus }
+
 func (f *fakeService) Rereview(_ context.Context, ticketID string) error {
 	f.rereviewed = append(f.rereviewed, ticketID)
 	return f.rereviewErr
