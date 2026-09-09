@@ -154,7 +154,12 @@ func linux(id string, slots int) hostSpec {
 }
 
 func project(id, slug string) core.Project {
-	return core.Project{ID: id, Slug: slug, TargetBranch: "main", MergeMode: core.LandMerge, MaxConcurrency: 1}
+	// RepoPath is set because a project without one cannot be scheduled at all: it is a place
+	// for goals and notes, not somewhere work runs.
+	return core.Project{
+		ID: id, Slug: slug, RepoPath: "/repos/" + slug,
+		TargetBranch: "main", MergeMode: core.LandMerge, MaxConcurrency: 1,
+	}
 }
 
 func ticket(id, projectID string, state core.State, position float64) core.Ticket {

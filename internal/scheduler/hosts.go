@@ -56,17 +56,31 @@ func (s *hostSnapshot) claim(id string) {
 	}
 }
 
-// eligible filters hosts against project and ticket requirements, returning the survivors and a
-// note for each rejection.
+// eligibleOn filters hosts against a project's host pin and both sets of requirements, returning
+// the survivors and a note for each rejection.
 //
 // Ticket requirements add to the project's rather than replacing them: a ticket that needs an
 // extra tool still needs everything the project needs.
-func (s *hostSnapshot) eligible(project, ticket core.Requirements) ([]*hostState, []string) {
+//
+// A project cannot run anywhere but its own machine: its clone is there and its RepoPath is
+// meaningless on any other. The rejection says so, because "nothing is happening" with no reason
+// is the failure the explainability rule exists to prevent.
+//
+// An empty hostID pins nothing, which is now only reachable by a row written before projects
+// were stamped with their host. It used to be the default, and it meant a local project's agent
+// could be sent to a remote machine while its worktree was created here — the run and the code
+// on different computers.
+func (s *hostSnapshot) eligibleOn(hostID string, project, ticket core.Requirements) ([]*hostState, []string) {
 	var (
 		out        []*hostState
 		rejections []string
 	)
 	for _, h := range s.hosts {
+		if hostID != "" && h.id != hostID {
+			rejections = append(rejections, fmt.Sprintf(
+				"host %s excluded: the project is on %s", h.id, hostID))
+			continue
+		}
 		if reason, ok := satisfies(h, project); !ok {
 			rejections = append(rejections, fmt.Sprintf("host %s excluded: %s (project requirement)", h.id, reason))
 			continue
@@ -126,20 +140,36 @@ func leastBusy(hosts []*hostState) *hostState {
 type StaticPool struct {
 	hosts []host.Host
 	caps  map[string]core.Caps
+	// probeErr remembers hosts that could not be reached, so a ticket pinned to one is told
+	// why rather than waiting on a host that silently does not exist.
+	probeErr map[string]error
 }
 
 // NewStaticPool probes each host once and caches the result.
 func NewStaticPool(ctx context.Context, hosts ...host.Host) (*StaticPool, error) {
-	p := &StaticPool{hosts: hosts, caps: map[string]core.Caps{}}
+	p := &StaticPool{hosts: hosts, caps: map[string]core.Caps{}, probeErr: map[string]error{}}
 	for _, h := range hosts {
 		caps, err := h.Capabilities(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("scheduler: capabilities of host %q: %w", h.ID(), err)
+			// A machine that is asleep, off, or not reachable right now must not stop Gravy
+			// starting: the local work has nothing to do with it. The failure is remembered so
+			// that a ticket pinned to that host is told why nothing is happening, rather than
+			// the host quietly not existing.
+			p.probeErr[h.ID()] = err
+			continue
 		}
 		p.caps[h.ID()] = caps
 	}
+	// Every host failing is different: it means the local machine could not be probed either,
+	// which is a real problem rather than a sleeping laptop.
+	if len(p.caps) == 0 && len(hosts) > 0 {
+		return nil, fmt.Errorf("scheduler: no host could be probed: %w", p.probeErr[hosts[0].ID()])
+	}
 	return p, nil
 }
+
+// ProbeErrors reports the hosts that could not be probed at startup, and why.
+func (p *StaticPool) ProbeErrors() map[string]error { return p.probeErr }
 
 // Hosts returns the pool's hosts.
 func (p *StaticPool) Hosts() []host.Host { return p.hosts }
@@ -148,6 +178,9 @@ func (p *StaticPool) Hosts() []host.Host { return p.hosts }
 func (p *StaticPool) Caps(_ context.Context, h host.Host) (core.Caps, error) {
 	caps, ok := p.caps[h.ID()]
 	if !ok {
+		if err := p.probeErr[h.ID()]; err != nil {
+			return core.Caps{}, fmt.Errorf("host %q could not be reached: %w", h.ID(), err)
+		}
 		return core.Caps{}, fmt.Errorf("scheduler: no cached capabilities for host %q", h.ID())
 	}
 	return caps, nil

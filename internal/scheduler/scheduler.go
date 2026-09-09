@@ -227,10 +227,22 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 
 	project, err := s.store.GetProject(ctx, t.ProjectID)
 	if err != nil {
-		return decision{}, fmt.Errorf("scheduler: ticket %q: %w", t.ID, err)
+		// One unreadable ticket must not stop the tick. Returning an error here meant a single
+		// row whose project had gone — orphaned by a delete that bypassed the cascade — failed
+		// scheduling for every project, every two seconds, with the queue screen reporting
+		// only that it could not load.
+		return decision{
+			why:       []string{fmt.Sprintf("ticket %s: %v", t.ID, err)},
+			blockedBy: fmt.Sprintf("its project is missing: %v", err),
+		}, nil
 	}
 	why = append(why, fmt.Sprintf("ticket %s in project %s, priority %d, position %.0f",
 		t.ID, project.Slug, t.Priority, t.Position))
+
+	// 0. A project with no repository has nowhere to work.
+	if strings.TrimSpace(project.RepoPath) == "" {
+		return blocked(fmt.Sprintf("project %s has no repository yet", project.Slug)), nil
+	}
 
 	// 1. Dependencies must be Done, not merely approved. A dependent ticket branching from
 	//    target before its dependency merged would not contain the work it depends on.
@@ -266,7 +278,7 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 	why = append(why, reason)
 
 	// 3-5. Host filtering: project requirements, then ticket requirements, then free slots.
-	eligible, rejections := pool.eligible(project.Requirements, t.Requirements)
+	eligible, rejections := pool.eligibleOn(project.HostID, project.Requirements, t.Requirements)
 	why = append(why, rejections...)
 	if len(eligible) == 0 {
 		return blocked("no host satisfies the project's requirements"), nil
@@ -317,6 +329,18 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 		return blocked(fmt.Sprintf("no provider available for route %q: %v", route, err)), nil
 	}
 	why = append(why, choice.Why...)
+
+	// 9. The chosen host must actually have that agent installed.
+	//
+	// Capabilities record which CLIs each machine has, and nothing consulted them: a ticket
+	// routed to claude-code on a machine with only codex was assigned anyway and died at
+	// "cli not found" — a burnt run, a consumed slot, and a failure that reads like a provider
+	// outage rather than a machine missing a program.
+	if len(chosen.caps.Providers) > 0 && !chosen.caps.Providers[choice.ProviderID] {
+		return blocked(fmt.Sprintf("host %s does not have %s installed (route %q resolved to %s/%s)",
+			chosen.id, choice.ProviderID, route, choice.ProviderID, choice.Model)), nil
+	}
+	why = append(why, fmt.Sprintf("host %s has %s installed", chosen.id, choice.ProviderID))
 
 	return decision{
 		assignment: &Assignment{
