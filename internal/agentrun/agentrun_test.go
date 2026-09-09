@@ -15,6 +15,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/git"
 	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/notify"
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/provider/fake"
 	"github.com/pot-roast-co/gravy/internal/review"
@@ -236,7 +237,7 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 
 	orch := agentrun.New(
 		dbStore{db},
-		agentrun.LocalRepos{Host: h, Home: home},
+		agentrun.LocalRepos{Default: h, Home: home},
 		slots,
 		func(runID string) validate.Runner {
 			return validate.NewRunner(filepath.Join(home, "runs", runID, "validation"))
@@ -1174,5 +1175,104 @@ func TestAFailedStartParksTheTicket(t *testing.T) {
 	// The reason has to carry the cause, or the human is told only that something went wrong.
 	if d, _ := open[0].Payload["detail"].(string); !strings.Contains(d, "no-such-provider") {
 		t.Errorf("payload does not name the cause: %+v", open[0].Payload)
+	}
+}
+
+// recordingNotifier captures what would have been sent.
+type recordingNotifier struct {
+	mu   sync.Mutex
+	sent []sentNotification
+}
+
+type sentNotification struct {
+	title, body string
+	urgency     notify.Urgency
+}
+
+func (r *recordingNotifier) Notify(_ context.Context, title, body string, u notify.Urgency) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, sentNotification{title: title, body: body, urgency: u})
+}
+
+func (r *recordingNotifier) all() []sentNotification {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]sentNotification{}, r.sent...)
+}
+
+// TestReviewNotifiesTheHuman is the point of GR-005 under the serial default: a ticket sitting
+// in Review holds its whole repository until it is approved, so being told the moment it lands
+// is worth more here than in most tools.
+func TestReviewNotifiesTheHuman(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	n := &recordingNotifier{}
+	h.orch.WithNotifier(n)
+
+	if _, err := runWithAgentWork(t, h, "hello.txt", "hello\n"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	sent := n.all()
+	if len(sent) != 1 {
+		t.Fatalf("got %d notifications, want 1: %+v", len(sent), sent)
+	}
+	if !strings.Contains(strings.ToLower(sent[0].title), "review") {
+		t.Errorf("title = %q, want it to say the work is ready for review", sent[0].title)
+	}
+	// Naming the ticket is what saves opening the TUI to find out which one stopped.
+	if !strings.Contains(sent[0].body, "GR-100") && sent[0].body == "" {
+		t.Errorf("body = %q, want it to identify the work", sent[0].body)
+	}
+}
+
+// TestNoNotifierIsNotAFailure: the item is in the Needs You queue whether or not a ping goes out,
+// so a service without a notifier must still run work to completion.
+func TestNoNotifierIsNotAFailure(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
+		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
+	})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+
+	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")
+	if err != nil {
+		t.Fatalf("Run with no notifier: %v", err)
+	}
+	if res.FinalState != core.StateReview {
+		t.Errorf("final state = %q, want review", res.FinalState)
+	}
+	open, err := h.db.ListOpenAttention(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 {
+		t.Errorf("got %d attention items, want 1", len(open))
+	}
+}
+
+// TestAgentThatNeverStartedCommitsNothing is the 650,000-line diff this prevents.
+//
+// A run misrouted to a machine that did not have the code started nothing — zero turns, no
+// denials, no session — and then committed whatever was lying in the worktree: Erlang crash
+// dumps a human had left there running the test suite. The real diff was buried under them, and
+// the review card showed the junk.
+func TestAgentThatNeverStartedCommitsNothing(t *testing.T) {
+	h := newHarness(t, []fake.Script{{
+		Outcome: provider.Outcome{
+			Class: provider.TaskFailure,
+			Note:  "task_failure (no rule matched; defaulted)",
+		},
+	}}, agentrun.Config{SelfCorrectionBudget: 0, RunTimeout: time.Minute, MaxTurns: 10})
+	h.seed(nil)
+
+	// Junk in the worktree, as a human running tests would leave behind.
+	if _, err := runWithAgentWork(t, h, "erl_crash.dump", strings.Repeat("junk\n", 100)); err == nil {
+		t.Fatal("a run that never started was allowed to proceed")
+	} else if !strings.Contains(err.Error(), "never started") {
+		t.Errorf("error = %v, want it to say the agent never started", err)
 	}
 }

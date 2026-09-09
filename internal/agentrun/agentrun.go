@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/git"
 	"github.com/pot-roast-co/gravy/internal/host"
+	"github.com/pot-roast-co/gravy/internal/notify"
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/review"
 	"github.com/pot-roast-co/gravy/internal/runlog"
@@ -25,6 +27,9 @@ type Store interface {
 	SetTicketState(ctx context.Context, id string, ev core.Event) (core.State, error)
 	GetProject(ctx context.Context, id string) (core.Project, error)
 	GetRun(ctx context.Context, id string) (core.Run, error)
+	// ListRunsForTicket returns a ticket's runs, newest first. Re-running the advisory review
+	// needs the run its verdict is recorded on.
+	ListRunsForTicket(ctx context.Context, ticketID string) ([]core.Run, error)
 	CreateRun(ctx context.Context, r core.Run) error
 	UpdateRun(ctx context.Context, r core.Run) error
 	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
@@ -112,6 +117,9 @@ type Orchestrator struct {
 	logs *runlog.Store
 	// reviewer produces the advisory verdict. Nil disables the pass entirely.
 	reviewer *review.Reviewer
+	// notifier tells the human when a ticket lands in the Needs You queue. Nil is legitimate:
+	// the item is in the queue whether or not a ping goes out.
+	notifier Notifier
 
 	mu   sync.Mutex
 	live map[string]*liveRun
@@ -368,7 +376,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 	// A ticket in Review is waiting on a human, so it belongs in the Needs You queue. Review is
 	// the most common reason Gravy needs you, and omitting it makes "if it is not there, Gravy
 	// does not need you" false in the ordinary case rather than an edge one.
-	if err := o.store.OpenAttention(ctx, core.Attention{
+	if err := o.raiseAttention(ctx, core.Attention{
 		ID:        o.newID(),
 		ProjectID: ticket.ProjectID,
 		TicketID:  ticket.ID,
@@ -380,7 +388,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 			"summary":  loop.validation.Summary(),
 		},
 		CreatedAt: time.Now(),
-	}); err != nil {
+	}, ticket.Title); err != nil {
 		return res, fmt.Errorf("agentrun: open review attention: %w", err)
 	}
 
@@ -443,6 +451,22 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 
 		// Commit whatever the agent produced, so the diff is durable even if the next step
 		// fails. An agent that changed nothing returns an empty hash, which is not an error.
+		//
+		// Except when the agent never started. A failed run with no turns, no denials and no
+		// session did nothing at all, so it has nothing to commit — and committing anyway
+		// sweeps up whatever else is in the worktree.
+		//
+		// Observed: a run misrouted to another machine started nothing, then committed 650,000
+		// lines of Erlang crash dumps left behind by a human who had run the test suite in
+		// that worktree, burying the real diff beneath them. A denied run is deliberately not
+		// covered here: being refused one tool is not the same as never running, and such a
+		// run often produced the work anyway.
+		if outcome.Class != provider.Success && outcome.Turns == 0 &&
+			len(outcome.Denials) == 0 && outcome.Session.ID == "" {
+			res.lastNote = outcome.Note
+			return res, fmt.Errorf("agentrun: the agent never started: %s", outcome.Note)
+		}
+
 		c, err := repo.CommitAll(ctx, wt, "gravy: "+ticket.ID+" attempt "+fmt.Sprint(attempt))
 		if err != nil {
 			return res, fmt.Errorf("agentrun: %w", err)
@@ -611,8 +635,25 @@ func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, project c
 // The self-correction budget is deliberately untouched: it exists for the agent failing at the
 // work, and a quota limit says nothing about whether the agent could fix its own build error.
 // Spending a retry here would silently shorten the budget for the attempt that actually matters.
+// hostLocalFailure reports a failure that says something about the machine rather than the
+// model.
+//
+// "cli not found" is the case: the agent CLI is missing on that host, which is nothing to do
+// with the model and everything to do with the machine. Cooling the model down for it takes a
+// working model out of the fleet — observed: a Mac without claude installed put claude-code/haiku
+// into a fleet-wide cooldown, so work that would have run perfectly well on Linux stopped too.
+func hostLocalFailure(o provider.Outcome) bool {
+	return o.Class == provider.ProviderUnavailable &&
+		strings.Contains(strings.ToLower(o.Note), "cli not found")
+}
+
 func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ticket, a Assignment, outcome provider.Outcome) error {
 	cooldown := o.cooldownFor(outcome.Class)
+	if hostLocalFailure(outcome) {
+		// The model is fine; this machine is not equipped. Recording a cooldown would punish
+		// every host for one host's missing program.
+		cooldown = 0
+	}
 	if cooldown > 0 {
 		if err := o.store.SetProviderUnavailable(ctx, core.ProviderAvailability{
 			ProviderID: a.ProviderID,
@@ -696,7 +737,7 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 		}
 	}
 
-	if err := o.store.OpenAttention(ctx, core.Attention{
+	if err := o.raiseAttention(ctx, core.Attention{
 		ID:        o.newID(),
 		ProjectID: ticket.ProjectID,
 		TicketID:  ticket.ID,
@@ -704,10 +745,50 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 		Reason:    reason,
 		Payload:   payload,
 		CreatedAt: time.Now(),
-	}); err != nil {
+	}, ticket.Title); err != nil {
 		return state, fmt.Errorf("agentrun: open attention: %w", err)
 	}
 	return state, nil
+}
+
+// Notifier tells the human that Gravy needs them.
+//
+// An interface rather than the concrete notifier so a test can assert what would have been sent
+// without a terminal to ring or a desktop to post to.
+type Notifier interface {
+	Notify(ctx context.Context, title, body string, urgency notify.Urgency)
+}
+
+// WithNotifier sets who is told when a ticket needs a human.
+func (o *Orchestrator) WithNotifier(n Notifier) *Orchestrator {
+	o.notifier = n
+	return o
+}
+
+// raiseAttention records that a ticket needs a human, and says so out loud.
+//
+// Every route into the Needs You queue goes through here. Notifying at each call site instead
+// would mean the next reason added is silent until somebody remembers — and a queue you are not
+// told about is just a list you have to keep checking.
+func (o *Orchestrator) raiseAttention(ctx context.Context, a core.Attention, ticketTitle string) error {
+	if err := o.store.OpenAttention(ctx, a); err != nil {
+		return err
+	}
+	o.announce(ctx, a, ticketTitle)
+	return nil
+}
+
+// announce sends the notification for an attention item, if anyone is listening.
+func (o *Orchestrator) announce(ctx context.Context, a core.Attention, ticketTitle string) {
+	if o.notifier == nil {
+		return
+	}
+	project := a.ProjectID
+	if p, err := o.store.GetProject(ctx, a.ProjectID); err == nil {
+		project = p.Name
+	}
+	title, body, urgency := notify.ForAttention(a.Reason, project, ticketTitle)
+	o.notifier.Notify(ctx, title, body, urgency)
 }
 
 // WithLogs records run output through the given store.

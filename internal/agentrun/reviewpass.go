@@ -111,14 +111,23 @@ func (m providerModel) Complete(ctx context.Context, prompt string) (string, err
 	}
 
 	// The answer arrives on the event stream; Outcome carries no text.
-	var b strings.Builder
+	//
+	// Messages only. Collecting every event's text swept provider errors into the answer, so a
+	// refused request came back as prose the parser then rejected — the human was told "the
+	// review model's answer could not be read" when what actually happened was a 400 saying
+	// the configured model does not exist.
+	var b, problems strings.Builder
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for ev := range handle.Events() {
-			if ev.Text != "" {
+			switch {
+			case ev.Kind == provider.EventMessage && ev.Text != "":
 				b.WriteString(ev.Text)
 				b.WriteString("\n")
+			case ev.Kind == provider.EventError && ev.Text != "":
+				problems.WriteString(strings.TrimSpace(ev.Text))
+				problems.WriteString("; ")
 			}
 		}
 	}()
@@ -131,7 +140,12 @@ func (m providerModel) Complete(ctx context.Context, prompt string) (string, err
 	if waitErr != nil {
 		return "", waitErr
 	}
-	if outcome.Class != provider.Success && b.Len() == 0 {
+	if b.Len() == 0 {
+		// Report what the provider said rather than the classification, which for a rejected
+		// request is a generic task failure that explains nothing.
+		if detail := strings.TrimSuffix(strings.TrimSpace(problems.String()), ";"); detail != "" {
+			return "", fmt.Errorf("the reviewer failed: %s", detail)
+		}
 		return "", fmt.Errorf("the reviewer failed: %s", outcome.Note)
 	}
 	return b.String(), nil
@@ -140,3 +154,59 @@ func (m providerModel) Complete(ctx context.Context, prompt string) (string, err
 // reviewTimeout bounds the advisory pass. It is short on purpose: a review that takes as long as
 // the work delays the human it was meant to help.
 const reviewTimeout = 3 * time.Minute
+
+// Rereview runs the advisory pass again for a ticket already awaiting judgement.
+//
+// The pass normally runs once, inside the run that produced the work. That is right for the
+// ordinary case and useless for the one where it failed for a reason since fixed — a misrouted
+// model, a provider that was cooling down — because the verdict on the card stays broken with no
+// way to ask again short of re-running the whole ticket.
+//
+// Unlike the automatic pass this reports its errors. It was asked for, so silence would read as
+// a key that does nothing.
+func (o *Orchestrator) Rereview(ctx context.Context, ticketID string) error {
+	if o.reviewer == nil {
+		return fmt.Errorf("no review model is configured")
+	}
+
+	ticket, err := o.store.GetTicket(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	project, err := o.store.GetProject(ctx, ticket.ProjectID)
+	if err != nil {
+		return err
+	}
+	repo, err := o.repos.For(project)
+	if err != nil {
+		return err
+	}
+
+	runs, err := o.store.ListRunsForTicket(ctx, ticketID)
+	if err != nil {
+		return err
+	}
+	if len(runs) == 0 {
+		return fmt.Errorf("%s has no run to review", ticketID)
+	}
+
+	wt, ok, err := repo.OpenWorktree(ctx, ticket.Branch)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%s has no worktree to read", ticketID)
+	}
+
+	diff, err := repo.Diff(ctx, wt, project.TargetBranch)
+	if err != nil {
+		return fmt.Errorf("the diff could not be read: %w", err)
+	}
+
+	v := o.reviewer.Review(ctx, review.Request{Ticket: ticket, Project: project, Diff: diff})
+	o.recordVerdict(ctx, runs[0].ID, v)
+	if v.Unavailable != "" {
+		return fmt.Errorf("%s", v.Unavailable)
+	}
+	return nil
+}

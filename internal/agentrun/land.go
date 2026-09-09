@@ -121,6 +121,21 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		})
 	}
 
+	// Nothing lands out of a dirty worktree. Git will not rebase one, so without this the
+	// approval fails several steps later wearing the wrong name — and the human is sent
+	// looking for a merge conflict on a branch that has none.
+	//
+	// It is a real case rather than a theoretical one: the review screen opens a shell in this
+	// worktree on purpose, so running the test suite there is expected, and a build that
+	// writes a tracked file leaves exactly this state behind.
+	if dirt, derr := lander.DirtyFiles(ctx, wt); derr == nil && len(dirt) > 0 {
+		return l.park(ctx, ticket, core.ReasonValidationFailed, map[string]any{
+			"reason":   "the worktree has uncommitted changes, so nothing can be rebased",
+			"files":    dirt,
+			"worktree": wt.Path,
+		})
+	}
+
 	target, err := repo.TargetRef(ctx, project.TargetBranch)
 	if err != nil {
 		return "", fmt.Errorf("land: %w", err)
@@ -135,11 +150,23 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		// cleverness: the worktree is preserved exactly as the human needs to find it, and
 		// the conflicting paths are recorded so they do not have to go looking.
 		res.ConflictFiles = rebase.ConflictFiles
-		return l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
+
+		payload := map[string]any{
 			"files":    rebase.ConflictFiles,
 			"worktree": wt.Path,
 			"target":   target,
-		})
+		}
+		if rebase.Detail != "" {
+			payload["detail"] = rebase.Detail
+		}
+		// A refusal is not a conflict, and calling it one sends the human looking for
+		// overlapping edits that do not exist. What it usually means is something left in the
+		// worktree — commonly by whoever last opened a shell there to run the tests.
+		if rebase.Refused {
+			payload["reason"] = "git would not start the rebase"
+			return l.park(ctx, ticket, core.ReasonValidationFailed, payload)
+		}
+		return l.park(ctx, ticket, core.ReasonMergeConflict, payload)
 	}
 
 	// Re-validation is conditional. If the rebase replayed commits the target moved underneath
@@ -204,14 +231,14 @@ func (l *Lander) park(ctx context.Context, ticket core.Ticket, reason core.Atten
 	if err != nil {
 		return "", fmt.Errorf("land: park %s: %w", ticket.ID, err)
 	}
-	if err := o.store.OpenAttention(ctx, core.Attention{
+	if err := o.raiseAttention(ctx, core.Attention{
 		ID:        o.newID(),
 		ProjectID: ticket.ProjectID,
 		TicketID:  ticket.ID,
 		Reason:    reason,
 		Payload:   payload,
 		CreatedAt: time.Now(),
-	}); err != nil {
+	}, ticket.Title); err != nil {
 		return state, fmt.Errorf("land: open attention: %w", err)
 	}
 	return state, nil
@@ -220,6 +247,8 @@ func (l *Lander) park(ctx context.Context, ticket core.Ticket, reason core.Atten
 // landRepo is the extra git surface landing needs beyond Repo.
 type landRepo interface {
 	Rebase(ctx context.Context, w git.Worktree, onto string) (git.RebaseResult, error)
+	// DirtyFiles lists uncommitted changes, checked before a rebase that would refuse them.
+	DirtyFiles(ctx context.Context, w git.Worktree) ([]string, error)
 	SquashMerge(ctx context.Context, w git.Worktree, target, message string) (git.LandResult, error)
 	DeleteBranch(ctx context.Context, branch string) error
 }
