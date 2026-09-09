@@ -71,6 +71,10 @@ type projects struct {
 	// draft is the project being edited, saved on leaving the config.
 	draft core.Project
 	dirty bool
+	// buckets are the configured route names, for completing the buckets field.
+	buckets []core.Route
+	// matches is what the last tab found, shown under the field being edited.
+	matches []string
 }
 
 func newProjects() *projects {
@@ -127,6 +131,7 @@ func (p *projects) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			return p, nil
 		}
 		p.projects, p.agents, p.hosts = msg.projects, msg.agents, msg.hosts
+		p.buckets = ctx.Status.Buckets
 		sort.Slice(p.projects, func(i, j int) bool { return p.projects[i].Name < p.projects[j].Name })
 		p.counts = map[string]map[core.State]int{}
 		for _, t := range msg.tickets {
@@ -184,14 +189,24 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 				return p, nil
 			}
 			p.mode, p.input, p.notice, p.dirty = projectConfig, "", "", true
+		case key == "tab":
+			// The daemon knows every bucket, host and model. Reciting them from memory is
+			// how the syntax gets learned by getting it wrong.
+			completed, matches := completeField(
+				p.fields[p.field].Label, p.input, p.agents, p.hosts, p.buckets)
+			p.input, p.matches = completed, matches
+			if len(matches) == 0 {
+				p.notice = "nothing matches"
+			}
 		case key == "ctrl+u":
-			p.input = ""
+			p.input, p.matches = "", nil
 		case key == "backspace":
 			if r := []rune(p.input); len(r) > 0 {
 				p.input = string(r[:len(r)-1])
 			}
 		case len(msg.Runes) > 0:
 			p.input += string(msg.Runes)
+			p.matches = nil
 		}
 		return p, nil
 	}
@@ -429,6 +444,9 @@ func (p *projects) configLines(ctx ViewContext, th Theme) []string {
 		if p.mode == projectEditingField && i == p.field {
 			out = append(out, style.Render(fmt.Sprintf("  %s%-18s", marker, f.Label))+
 				th.Accent.Render(p.input)+th.Muted.Render("▏"))
+			if len(p.matches) > 1 {
+				out = append(out, th.Muted.Render("      "+matchList(p.matches, max(20, ctx.Width-10))))
+			}
 			out = append(out, th.Muted.Render("      "+f.Hint))
 			continue
 		}
@@ -549,7 +567,7 @@ func (p *projects) footer(th Theme) string {
 	case projectConfig:
 		return th.Muted.Render("  enter to edit · j/k move · esc saves and closes")
 	case projectEditingField:
-		return th.Muted.Render("  enter to accept · ctrl+u clear · esc to cancel")
+		return th.Muted.Render("  tab completes · enter to accept · ctrl+u clear · esc to cancel")
 	}
 	return th.Muted.Render(
 		"  c settings · e notes · n new · D delete · enter its tickets · P add · j/k move")

@@ -133,6 +133,15 @@ func (a *addProject) complete() {
 // the user typed survives: rewriting it to /home/... mid-edit is a jarring thing for a text
 // field to do to you.
 func completePath(typed string) (string, []string) {
+	// A bare word is a repository name, not a path. Nobody thinks of their project as
+	// "~/Projects/mission-mojo"; they think of it as mission-mojo, and typing the first half
+	// of a path you already know the end of is work the machine should be doing.
+	if name := strings.TrimSpace(typed); name != "" && !strings.ContainsAny(typed, "/~") {
+		if completed, matches := completeByName(name); len(matches) > 0 {
+			return completed, matches
+		}
+	}
+
 	dir, base := filepath.Split(typed)
 
 	root := dir
@@ -181,6 +190,59 @@ func completePath(typed string) (string, []string) {
 		completed += string(filepath.Separator)
 	}
 	return completed, names
+}
+
+// searchRoots are where repositories usually live, for completing a bare name.
+//
+// A fixed list rather than a scan of the home directory: the point is to find a project in one
+// keystroke, and walking every directory under $HOME to do it would be slower than typing the
+// path.
+var searchRoots = []string{".", "~/Projects", "~/projects", "~/src", "~/code", "~/dev", "~/work", "~/repos"}
+
+// completeByName finds directories whose name contains what was typed.
+//
+// Contains rather than begins with: "blooms" should find pocket-blooms-ios, and a repository
+// named for the thing it does rarely starts with the word you remember it by.
+func completeByName(name string) (string, []string) {
+	lower := strings.ToLower(name)
+
+	var matches []string
+	seen := map[string]bool{}
+	for _, root := range searchRoots {
+		dir, err := expandHome(root)
+		if err != nil {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if strings.HasPrefix(n, ".") || !strings.Contains(strings.ToLower(n), lower) {
+				continue
+			}
+			full := filepath.Join(dir, n)
+			if seen[full] || !isDir(full) {
+				continue
+			}
+			seen[full] = true
+			matches = append(matches, full)
+		}
+	}
+	sort.Strings(matches)
+
+	switch len(matches) {
+	case 0:
+		return name, nil
+	case 1:
+		// Unambiguous, so land inside it and let the next tab list its contents.
+		return matches[0] + string(filepath.Separator), matches
+	default:
+		// Ambiguous: the candidates are shown, and what was typed is left alone rather than
+		// replaced by an arbitrary one of them.
+		return name, matches
+	}
 }
 
 // isDir reports whether path is a directory, following symlinks.

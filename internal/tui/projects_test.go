@@ -357,3 +357,61 @@ func TestParseAllowedCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestCompleteBucketsField(t *testing.T) {
+	agents := []api.AgentOption{
+		{ProviderID: "claude-code", Models: []string{"opus", "sonnet", "haiku"}},
+		{ProviderID: "codex", Models: []string{"default", "gpt-5.6-sol"}, Open: true},
+	}
+	buckets := []core.Route{"cheap", "implementation", "planning", "review"}
+
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		// The separator is not the interesting part, and forgetting it is the commonest way
+		// to get this field wrong.
+		{"a bucket name gets its = for free", "imp", "implementation="},
+		{"unambiguous prefix", "r", "review="},
+		{"a provider", "implementation=cl", "implementation=claude-code/"},
+		{"a model", "implementation=claude-code/s", "implementation=claude-code/sonnet"},
+		// splitLast keeps the separator; adding another produced a double space on every
+		// fallback typed.
+		{"a fallback keeps one space", "implementation=codex/gpt-5.6-sol cl", "implementation=codex/gpt-5.6-sol claude-code/"},
+		{"a second bucket after a comma", "implementation=codex/default, rev", "implementation=codex/default, review="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, matches := completeField("buckets", tc.in, agents, nil, buckets)
+			if got != tc.want {
+				t.Errorf("completeField(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if len(matches) == 0 {
+				t.Errorf("completeField(%q) offered no candidates", tc.in)
+			}
+		})
+	}
+
+	// And what it completes must parse, or completion is teaching a syntax the parser rejects.
+	completed, _ := completeField("buckets", "implementation=claude-code/s", agents, nil, buckets)
+	if _, err := parseProjectRoutes(completed, agents); err != nil {
+		t.Errorf("completion produced %q, which the field itself refuses: %v", completed, err)
+	}
+}
+
+func TestCompleteHostAndChoiceFields(t *testing.T) {
+	hosts := []string{"local", "air"}
+	if got, _ := completeField("host", "a", nil, hosts, nil); got != "air" {
+		t.Errorf("host completion = %q, want air", got)
+	}
+	if got, _ := completeField("merge mode", "p", nil, hosts, nil); got != "pr" {
+		t.Errorf("merge mode completion = %q, want pr", got)
+	}
+	if got, _ := completeField("parallel", "t", nil, hosts, nil); got != "true" {
+		t.Errorf("parallel completion = %q, want true", got)
+	}
+	// A field with nothing to offer leaves what was typed alone.
+	if got, _ := completeField("validation", "mix", nil, hosts, nil); got != "mix" {
+		t.Errorf("validation completion changed %q", got)
+	}
+}

@@ -661,3 +661,43 @@ func TestBellIsSilentWhenNotificationsAreOff(t *testing.T) {
 		t.Error("rang with notifications switched off")
 	}
 }
+
+// TestCompleteABareRepositoryName: nobody thinks of their project as "~/Projects/mission-mojo".
+// They think of it as mission-mojo, and typing the first half of a path you already know the end
+// of is work the machine should be doing.
+func TestCompleteABareRepositoryName(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"mission-mojo", "pocket-blooms-ios", "unrelated"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Point the search at the fixture rather than the real home directory.
+	old := searchRoots
+	searchRoots = []string{root}
+	t.Cleanup(func() { searchRoots = old })
+
+	// A name in the middle, because a repository rarely starts with the word you remember it by.
+	got, matches := completePath("blooms")
+	want := filepath.Join(root, "pocket-blooms-ios") + string(filepath.Separator)
+	if got != want {
+		t.Errorf("completePath(\"blooms\") = %q, want %q", got, want)
+	}
+	if len(matches) != 1 {
+		t.Errorf("matches = %v, want one", matches)
+	}
+
+	// Ambiguity leaves what was typed alone rather than picking one.
+	got, matches = completePath("o")
+	if got != "o" {
+		t.Errorf("an ambiguous name was replaced with %q", got)
+	}
+	if len(matches) < 2 {
+		t.Errorf("matches = %v, want the candidates", matches)
+	}
+
+	// A path is still a path: anything with a separator uses the directory walk.
+	if got, _ := completePath(root + "/mission"); got != filepath.Join(root, "mission-mojo")+string(filepath.Separator) {
+		t.Errorf("a typed path stopped completing: %q", got)
+	}
+}

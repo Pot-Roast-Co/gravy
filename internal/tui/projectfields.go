@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -220,3 +221,91 @@ func parseSteps(v string) ([]core.Step, error) {
 }
 
 var _ = config.Host{} // config is used by the settings screen's host section
+
+// completeField extends a partly-typed field value.
+//
+// The buckets field is the one that needs it most: it asks for a bucket name, a provider and a
+// model, all of which the daemon already knows and none of which a human should be reciting from
+// memory — the syntax was learned by getting it wrong.
+func completeField(label, input string, agents []api.AgentOption, hosts []string, buckets []core.Route) (string, []string) {
+	switch label {
+	case "host":
+		return completeToken(input, "", hosts)
+	case "merge mode":
+		return completeToken(input, "", []string{"merge", "pr"})
+	case "parallel":
+		return completeToken(input, "", []string{"true", "false"})
+	case "buckets":
+		return completeBuckets(input, agents, buckets)
+	}
+	return input, nil
+}
+
+// completeBuckets completes whichever part of "bucket=provider/model" is being typed.
+func completeBuckets(input string, agents []api.AgentOption, buckets []core.Route) (string, []string) {
+	// Only the last entry is being edited; everything before the final comma is settled.
+	head, tail := splitLast(input, ",")
+	tail = strings.TrimLeft(tail, " ")
+
+	name, choices, isChoice := strings.Cut(tail, "=")
+	if !isChoice {
+		// A bucket name, which gets its "=" for free: the separator is not the interesting
+		// part and forgetting it is the commonest way to get this wrong.
+		names := make([]string, 0, len(buckets))
+		for _, b := range buckets {
+			names = append(names, string(b)+"=")
+		}
+		completed, matches := completeToken(name, "", names)
+		return rejoin(head, completed, matches)
+	}
+
+	// Within the choice list, only the last provider/model is being typed.
+	before, last := splitLast(choices, " ")
+	var options []string
+	for _, a := range agents {
+		if len(a.Models) == 0 {
+			options = append(options, a.ProviderID+"/")
+			continue
+		}
+		for _, m := range a.Models {
+			options = append(options, a.ProviderID+"/"+m)
+		}
+	}
+	completed, matches := completeToken(last, "", options)
+
+	// before already carries its trailing space: splitLast keeps the separator, and adding
+	// another produced "codex/gpt-5.6-sol  claude-code/..." on every fallback.
+	prefix := name + "=" + before
+	return rejoin(head, prefix+completed, matches)
+}
+
+// completeToken extends one token to the longest common prefix of what it matches.
+func completeToken(token, _ string, options []string) (string, []string) {
+	var matches []string
+	for _, o := range options {
+		if strings.HasPrefix(strings.ToLower(o), strings.ToLower(token)) {
+			matches = append(matches, o)
+		}
+	}
+	sort.Strings(matches)
+	if len(matches) == 0 {
+		return token, nil
+	}
+	return longestCommonPrefix(matches), matches
+}
+
+// splitLast splits on the final separator, returning everything before it and the remainder.
+func splitLast(s, sep string) (before, last string) {
+	if i := strings.LastIndex(s, sep); i >= 0 {
+		return s[:i+len(sep)], s[i+len(sep):]
+	}
+	return "", s
+}
+
+// rejoin puts a completed tail back after the settled part of the line.
+func rejoin(head, completed string, matches []string) (string, []string) {
+	if head == "" {
+		return completed, matches
+	}
+	return head + " " + completed, matches
+}
