@@ -362,3 +362,17 @@ func TestEnabledProviders(t *testing.T) {
 		t.Errorf("EnabledProviders() = %v, want %v", got, want)
 	}
 }
+
+func TestReadMissingKeepsDefaultsInMemory(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(Path(dir)); !os.IsNotExist(err) {
+		t.Fatal("read wrote config before approval")
+	}
+}

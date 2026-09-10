@@ -62,7 +62,7 @@ func TestSetupWithAnAgentOffersTheNextStep(t *testing.T) {
 	})
 	view := m.View()
 
-	for _, want := range []string{"ready", "add one", "Review", "without your approval"} {
+	for _, want := range []string{"ready", "open setup", "Review", "without your approval"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the first run omits %q:\n%s", want, view)
 		}

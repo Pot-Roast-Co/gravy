@@ -267,6 +267,20 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 	case mListProjects:
 		return s.svc.ListProjects(ctx)
 
+	case "SetupInfo":
+		return s.svc.SetupInfo(ctx)
+	case "PreviewSetup":
+		var req AddProjectReq
+		if err := unmarshalParams(raw, &req); err != nil {
+			return nil, err
+		}
+		return s.svc.PreviewSetup(ctx, req)
+	case "ApplySetup":
+		var req SetupRequest
+		if err := unmarshalParams(raw, &req); err != nil {
+			return nil, err
+		}
+		return s.svc.ApplySetup(ctx, req)
 	case mAddProject:
 		var p addProjectParams
 		if err := unmarshalParams(raw, &p); err != nil {

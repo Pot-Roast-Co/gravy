@@ -100,7 +100,7 @@ func projectAdd(ctx context.Context, args []string) error {
 		return fmt.Errorf("expected exactly one repository path")
 	}
 
-	a, err := newApp(ctx)
+	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func modeLabel(p core.Project) string {
 }
 
 func projectList(ctx context.Context) error {
-	a, err := newApp(ctx)
+	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -215,13 +215,13 @@ func ticketAdd(ctx context.Context, args []string) error {
 		return fmt.Errorf("a ticket needs a title")
 	}
 
-	a, err := newApp(ctx)
+	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
 
-	project, err := resolveProject(ctx, a, *projectSlug)
+	project, err := resolveProject(ctx, a.svc, *projectSlug)
 	if err != nil {
 		return err
 	}
@@ -254,8 +254,10 @@ func ticketAdd(ctx context.Context, args []string) error {
 }
 
 // resolveProject picks the named project, or the only one when there is exactly one.
-func resolveProject(ctx context.Context, a *app, slug string) (core.Project, error) {
-	projects, err := a.svc.ListProjects(ctx)
+// resolveProject takes the service rather than an app so both the client commands and the
+// in-process ones can use it.
+func resolveProject(ctx context.Context, svc api.Service, slug string) (core.Project, error) {
+	projects, err := svc.ListProjects(ctx)
 	if err != nil {
 		return core.Project{}, err
 	}
@@ -289,7 +291,7 @@ func ticketList(ctx context.Context, args []string) error {
 		return err
 	}
 
-	a, err := newApp(ctx)
+	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -297,7 +299,7 @@ func ticketList(ctx context.Context, args []string) error {
 
 	filter := api.TicketFilter{State: core.State(*state)}
 	if *projectSlug != "" {
-		p, err := resolveProject(ctx, a, *projectSlug)
+		p, err := resolveProject(ctx, a.svc, *projectSlug)
 		if err != nil {
 			return err
 		}
@@ -420,7 +422,7 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	a, err := newApp(ctx)
+	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}

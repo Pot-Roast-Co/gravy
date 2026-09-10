@@ -21,21 +21,25 @@ var toolchains = []struct {
 	marker   string
 	commands []string
 	note     string
+	checks   []string
+	os       string
+	tools    []string
 }{
-	{"mix.exs", []string{"mix", "elixir", "iex"}, "an Elixir project"},
-	{"go.mod", []string{"go", "gofmt"}, "a Go module"},
-	{"package.json", []string{"npm", "npx", "node", "yarn", "pnpm"}, "a Node project"},
-	{"Cargo.toml", []string{"cargo", "rustc"}, "a Rust crate"},
-	{"pyproject.toml", []string{"python3", "pip", "pytest", "uv"}, "a Python project"},
-	{"requirements.txt", []string{"python3", "pip", "pytest"}, "a Python project"},
-	{"Package.swift", []string{"swift", "xcodebuild"}, "a Swift package"},
-	{"Gemfile", []string{"bundle", "ruby", "rake"}, "a Ruby project"},
+	{"mix.exs", []string{"mix", "elixir", "iex"}, "an Elixir project", []string{"mix compile", "mix test"}, "", []string{"elixir"}},
+	{"go.mod", []string{"go", "gofmt"}, "a Go module", []string{"go build ./...", "go test ./...", "go vet ./..."}, "", []string{"go"}},
+	{"package.json", []string{"npm", "npx", "node", "yarn", "pnpm"}, "a Node project", []string{}, "", []string{"node"}},
+	{"Cargo.toml", []string{"cargo", "rustc"}, "a Rust crate", []string{"cargo build", "cargo test"}, "", []string{"cargo"}},
+	{"pyproject.toml", []string{"python3", "pip", "pytest", "uv"}, "a Python project", []string{"pytest"}, "", []string{"python3"}},
+	{"requirements.txt", []string{"python3", "pip", "pytest"}, "a Python project", []string{"pytest"}, "", []string{"python3"}},
+	{"project.pbxproj", []string{"xcodebuild", "xcrun"}, "an Xcode project", []string{"xcodebuild test"}, "darwin", []string{"xcodebuild"}},
+	{"Package.swift", []string{"swift", "xcodebuild"}, "a Swift package", []string{"swift build", "swift test"}, "", []string{"swift"}},
+	{"Gemfile", []string{"bundle", "ruby", "rake"}, "a Ruby project", []string{}, "", []string{"ruby"}},
 	// A Makefile is usually the front door to the others: a project whose gate is `make check`
 	// hands its agent a command it is not allowed to run, and the agent then reinvents the
 	// gate one tool at a time.
-	{"Makefile", []string{"make"}, "a Makefile"},
-	{"justfile", []string{"just"}, "a justfile"},
-	{"Taskfile.yml", []string{"task"}, "a Taskfile"},
+	{"Makefile", []string{"make"}, "a Makefile", []string{}, "", []string{"make"}},
+	{"justfile", []string{"just"}, "a justfile", []string{}, "", []string{"just"}},
+	{"Taskfile.yml", []string{"task"}, "a Taskfile", []string{}, "", []string{"task"}},
 }
 
 // seedAllowlist detects a project's toolchain and returns the commands it needs.

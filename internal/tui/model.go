@@ -11,6 +11,7 @@ import (
 
 	"github.com/pot-roast-co/gravy/internal/api"
 	"github.com/pot-roast-co/gravy/internal/config"
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // connState is how the frame is currently getting its data.
@@ -109,9 +110,13 @@ func Goto(s Section, focus string) tea.Cmd {
 
 // Model is the frame: header, body, status bar, global keys and the event subscription.
 type Model struct {
-	svc   api.Service
-	theme Theme
-	keys  KeyMap
+	wizard        *wizard
+	wizardSeq     int
+	initialTicket string
+	daemonSound   bool
+	svc           api.Service
+	theme         Theme
+	keys          KeyMap
 
 	screens map[Section]Screen
 	active  Section
@@ -162,6 +167,44 @@ func New(svc api.Service) Model {
 	}
 }
 
+type openTicketMsg struct{ id string }
+type ticketDestinationMsg struct {
+	id     string
+	status api.SystemStatus
+	err    error
+}
+
+// OpenTicket asks a running TUI to navigate to the ticket using fresh state.
+func OpenTicket(id string) tea.Msg { return openTicketMsg{id: id} }
+
+// WithDaemonSound suppresses duplicate terminal bells when desktop audio owns alerts.
+func (m Model) WithDaemonSound() Model { m.daemonSound = true; return m }
+
+// WithTicket opens the destination using its current state once connected.
+func (m Model) WithTicket(id string) Model { m.initialTicket = id; return m }
+
+func notificationDestination(st api.SystemStatus, id string) Section {
+	for _, a := range st.Attention {
+		if a.Attention.TicketID == id {
+			if a.Ticket.State == core.StateReview {
+				return SectionReview
+			}
+			return SectionNeedsYou
+		}
+	}
+	for _, r := range st.Running {
+		if r.Ticket.ID == id {
+			return SectionRunning
+		}
+	}
+	for _, r := range st.Ready {
+		if r.Ticket.ID == id {
+			return SectionReady
+		}
+	}
+	return SectionReview
+}
+
 // Init connects and subscribes. Nothing polls: the first render comes from this, and every
 // subsequent one from an event.
 func (m Model) Init() tea.Cmd { return connect(m.svc) }
@@ -206,6 +249,68 @@ func refreshStatus(svc api.Service) tea.Cmd {
 // Update handles global concerns and delegates the rest to the active screen.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case startWizardMsg:
+		cmd := m.startWizard()
+		return m, cmd
+	case wizardInfoMsg:
+		if m.wizard == nil || m.wizard.token != msg.token {
+			return m, nil
+		}
+		w := m.wizard
+		w.busy = false
+		if msg.err != nil {
+			w.notice = msg.err.Error()
+			return m, nil
+		}
+		w.info = cloneSetup(msg.info)
+		w.edit.cfg = cloneSetup(msg.info).Settings.Config
+		w.edit.agents = msg.info.Settings.Agents
+		w.edit.loadedOK = true
+		w.nextStep(0)
+		return m, nil
+	case wizardPreviewMsg:
+		if m.wizard == nil || m.wizard.token != msg.token {
+			return m, nil
+		}
+		w := m.wizard
+		w.busy = false
+		if msg.err != nil {
+			w.notice = msg.err.Error()
+			return m, nil
+		}
+		w.project = &msg.preview.Project
+		w.evidence = msg.preview.Evidence
+		w.nextStep(3)
+		return m, nil
+	case wizardSavedMsg:
+		if m.wizard == nil || m.wizard.token != msg.token {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.wizard.busy = false
+			m.wizard.notice = msg.err.Error()
+			return m, nil
+		}
+		m.wizard = nil
+		m.active = SectionSettings
+		return m, tea.Batch(refreshStatus(m.svc), entered(""))
+
+	case openTicketMsg:
+		if msg.id == "" {
+			return m, Goto(SectionDashboard, "")
+		}
+		return m, func() tea.Msg {
+			st, err := m.svc.Status(context.Background())
+			return ticketDestinationMsg{id: msg.id, status: st, err: err}
+		}
+	case ticketDestinationMsg:
+		if msg.err != nil {
+			m.connErr = msg.err
+			return m, nil
+		}
+		m.status = msg.status
+		return m, Goto(notificationDestination(msg.status, msg.id), msg.id)
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
@@ -218,16 +323,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attention = len(msg.status.Attention)
 		m.events, m.stopEvents = msg.events, msg.stop
 		cmds := []tea.Cmd{waitForEvent(msg.events), loadBellSetting(m.svc)}
+		if m.initialTicket != "" {
+			cmds = append(cmds, Goto(notificationDestination(msg.status, m.initialTicket), m.initialTicket))
+			m.initialTicket = ""
+		}
 		// Only on a fresh install: probing spawns processes, and paying for that on every
 		// launch to answer a question that stops mattering after the first project would be
 		// a tax on everybody else.
 		if len(msg.status.Projects) == 0 {
-			cmds = append(cmds, detectAgents(m.svc))
+			cmds = append(cmds, func() tea.Msg { return startWizardMsg{} })
 		}
 		return m, tea.Batch(cmds...)
 
 	case bellSettingMsg:
-		m.bell = msg.enabled
+		m.bell = msg.enabled && !m.daemonSound
 		return m, nil
 
 	case agentsDetectedMsg:
@@ -318,6 +427,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.stopEvents()
 		}
 		return m, tea.Quit
+	}
+
+	if m.wizard != nil {
+		close, cmd := m.wizard.key(msg, m.svc)
+		if close {
+			m.wizard = nil
+		}
+		return m, cmd
+	}
+	if (m.active == SectionSettings && key == "W" && !capturing(m.screens[m.active])) || (m.active == SectionDashboard && len(m.status.Projects) == 0 && key == "P") {
+		if s, ok := m.screens[SectionSettings].(*settings); ok && s.dirty {
+			s.notice = "save or reload your settings edits before opening setup"
+			return m, nil
+		}
+		cmd := m.startWizard()
+		return m, cmd
 	}
 
 	// The prompt is modal: while it is open it takes every key before anything else, or a
@@ -473,6 +598,10 @@ func (m Model) bodyView(height int) string {
 	// A fresh install gets told what Gravy is and what to do, rather than an empty dashboard.
 	// The Dashboard only: pressing 2 should show Plan, even on a first run — a setup screen
 	// that swallows every section is a wall, not a welcome.
+	case m.wizard != nil:
+		ctx := m.viewContext()
+		ctx.Height = height
+		body = m.wizard.view(ctx)
 	case m.active == SectionDashboard && m.conn == connReady &&
 		len(m.status.Projects) == 0 && !m.adding.open && !m.showHelp:
 		body = setupView(m.agents, m.theme, m.width)

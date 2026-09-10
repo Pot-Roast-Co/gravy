@@ -398,3 +398,21 @@ func (c *Client) StreamLogs(ctx context.Context, runID string) (<-chan LogLine, 
 
 	return out, stop, nil
 }
+
+// SetupInfo reads the setup draft's starting state.
+func (c *Client) SetupInfo(ctx context.Context) (SetupInfo, error) {
+	var out SetupInfo
+	return out, c.call(ctx, "SetupInfo", nil, &out)
+}
+
+// PreviewSetup inspects a repository without saving it.
+func (c *Client) PreviewSetup(ctx context.Context, req AddProjectReq) (SetupPreview, error) {
+	var out SetupPreview
+	return out, c.call(ctx, "PreviewSetup", req, &out)
+}
+
+// ApplySetup saves an explicitly approved setup draft.
+func (c *Client) ApplySetup(ctx context.Context, req SetupRequest) (Settings, error) {
+	var out Settings
+	return out, c.call(ctx, "ApplySetup", req, &out)
+}

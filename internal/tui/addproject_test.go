@@ -270,7 +270,7 @@ func TestAddProjectIsDiscoverable(t *testing.T) {
 	if strings.Contains(view, "gravy project add") {
 		t.Error("the first-run screen still sends the user to the CLI")
 	}
-	if !strings.Contains(view, "add one") {
+	if !strings.Contains(view, "open setup") {
 		t.Errorf("the first-run screen does not offer the key:\n%s", view)
 	}
 

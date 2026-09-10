@@ -18,6 +18,11 @@ import (
 // the features that require them — StreamLogs with GR-011, GetReview with GR-020, Approve with
 // GR-022 — rather than as stubs that lie about what works.
 type Service interface {
+	// Setup previews are read-only. ApplySetup is called only after explicit approval.
+	SetupInfo(ctx context.Context) (SetupInfo, error)
+	PreviewSetup(ctx context.Context, req AddProjectReq) (SetupPreview, error)
+	ApplySetup(ctx context.Context, req SetupRequest) (Settings, error)
+
 	// projects
 	ListProjects(ctx context.Context) ([]core.Project, error)
 	AddProject(ctx context.Context, req AddProjectReq) (core.Project, error)
@@ -83,6 +88,11 @@ type Service interface {
 
 // AddProjectReq registers a repository.
 type AddProjectReq struct {
+	// Non-nil means these are the human-approved permissions, including an empty list.
+	Allowlist    *core.Allowlist
+	Requirements core.Requirements
+	Routes       map[core.Route][]core.Choice
+
 	// Path is the working tree. Empty registers a project with no repository: a place for
 	// goals and notes while the shape of the thing is still being decided.
 	Path string

@@ -60,6 +60,15 @@ func run(args []string) error {
 		return nil
 	case "":
 		return runTUI(ctx)
+	case "activate":
+		return runActivate(ctx, args[1:])
+	case "open":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: gravy open <ticket-id>")
+		}
+		return runTUI(ctx, args[1])
+	case "notify-test":
+		return runNotifyTest(ctx, args[1:])
 	case "serve":
 		return runServe(ctx, args[1:])
 	case "stop":
@@ -90,6 +99,8 @@ Nothing merges without "gravy approve". No flag changes that.
 Run gravy with no arguments for the dashboard.
 
   gravy serve                  run the daemon in the foreground
+  gravy open <ticket-id>       open the ticket in the TUI
+  gravy notify-test [ticket-id] preview the notification chime and click action
   gravy stop                   stop the running daemon
 
 The daemon owns the queue. Running gravy starts one if none is running, and it

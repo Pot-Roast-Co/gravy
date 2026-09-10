@@ -150,11 +150,14 @@ func TestGetReviewWithoutAWorktreeStillAnswers(t *testing.T) {
 	}
 }
 
-// TestReadyIsRefusedWhileADependencyIsUnlanded is GR-026's AC3, enforced where the single writer
-// is. A ticket queued behind unlanded work would otherwise sit in Ready looking eligible while
-// the scheduler silently passed over it — the difference between "not yet" and "why is nothing
-// happening".
-func TestReadyIsRefusedWhileADependencyIsUnlanded(t *testing.T) {
+// TestReadyIsAllowedWhileADependencyIsUnlanded, with the reason still on the record.
+//
+// GR-026 AC3 refused this. The reasoning was that such a ticket would look eligible while the
+// scheduler passed over it — but the scheduler holds a dependent until its dependency is Done
+// and says so, and the queue screens draw the "waiting on ..." line from ListQueue. Refusing
+// only meant that a plan arriving as a chain of four tickets had to be queued one at a time, as
+// each predecessor landed.
+func TestReadyIsAllowedWhileADependencyIsUnlanded(t *testing.T) {
 	svc, db := atReview(t)
 	ctx := context.Background()
 
@@ -171,29 +174,33 @@ func TestReadyIsRefusedWhileADependencyIsUnlanded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := svc.MoveTicket(ctx, "GR-2", core.EventMarkReady)
-	if err == nil {
-		t.Fatal("a ticket was queued while its dependency was unlanded")
-	}
-	if !strings.Contains(err.Error(), "DEP-1") {
-		t.Errorf("error = %v, want it to name the dependency", err)
+	if _, err := svc.MoveTicket(ctx, "GR-2", core.EventMarkReady); err != nil {
+		t.Fatalf("MoveTicket: %v", err)
 	}
 	got, _ := db.GetTicket(ctx, "GR-2")
-	if got.State != core.StateBacklog {
-		t.Errorf("state = %q, want the ticket left in the backlog", got.State)
+	if got.State != core.StateReady {
+		t.Fatalf("state = %q, want the ticket queued", got.State)
 	}
 
-	// Once the dependency lands, the same move succeeds.
-	for _, ev := range []core.Event{
-		core.EventMarkReady, core.EventAssign, core.EventStart, core.EventAgentFinished,
-		core.EventValidationPassed, core.EventReviewed, core.EventApprove, core.EventLanded,
-	} {
-		if _, err := db.SetTicketState(ctx, "DEP-1", ev); err != nil {
-			t.Fatalf("landing the dependency with %s: %v", ev, err)
+	// Queued is not the same as startable, and the screens have to be able to say which. A
+	// Ready ticket with an unlanded dependency that reported nothing would be the failure the
+	// old refusal was guarding against.
+	details, err := svc.ListQueue(ctx, TicketFilter{State: core.StateReady})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, d := range details {
+		if d.Ticket.ID != "GR-2" {
+			continue
+		}
+		found = true
+		if !strings.Contains(d.Blocked, "DEP-1") {
+			t.Errorf("blocked = %q, want it to name the dependency", d.Blocked)
 		}
 	}
-	if _, err := svc.MoveTicket(ctx, "GR-2", core.EventMarkReady); err != nil {
-		t.Errorf("MoveTicket after the dependency landed: %v", err)
+	if !found {
+		t.Error("the queued ticket is not in the Ready queue")
 	}
 }
 

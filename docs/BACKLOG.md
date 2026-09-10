@@ -855,7 +855,12 @@ a ticket is Ready-blocked by an unlanded dependency.
 1. `n` → type → save lands a ticket in Backlog with no blocking network call. Creation never
    waits on the critique.
 2. Reorder updates exactly one row; order survives restart.
-3. A ticket cannot be moved to Ready when a dependency is unlanded; the reason is displayed.
+3. **Revised.** A ticket with an unlanded dependency *can* be queued; the reason it is waiting is
+   displayed, and the scheduler holds it until the dependency is Done. Originally this move was
+   refused, on the grounds that a queued-but-blocked ticket would look eligible while the
+   scheduler passed over it. It does not: the scheduler records the dependency as the reason and
+   every queue screen draws it. The refusal only meant a plan arriving as a chain had to be
+   queued one ticket at a time, as each predecessor landed.
 4. Bulk move works over a multi-selection.
 5. Delete confirms first.
 6. Filter matches title and body.

@@ -139,9 +139,10 @@ func (s *settings) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 			s.fields = buildFields(s)
 		case key == "backspace":
 			if s.buf != "" {
-				s.buf = s.buf[:len(s.buf)-1]
+				runes := []rune(s.buf)
+				s.buf = string(runes[:len(runes)-1])
 			}
-		case len(msg.Runes) == 1:
+		case len(msg.Runes) > 0:
 			s.buf += string(msg.Runes)
 			s.notice = ""
 		}
@@ -500,7 +501,7 @@ func (s *settings) View(ctx ViewContext) string {
 	}
 
 	lines := []string{
-		th.Header.Render("Settings"),
+		th.Header.Render("Settings · W setup wizard"),
 		th.Muted.Render("  " + s.loaded.Path),
 	}
 

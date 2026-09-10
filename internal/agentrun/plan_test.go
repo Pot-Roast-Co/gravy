@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/host"
@@ -301,5 +302,49 @@ func TestDecodeSessionRefusesToGuess(t *testing.T) {
 		if p, id := decodeSession(in); p != "" || id != "" {
 			t.Errorf("decodeSession(%q) = %q, %q, want both empty", in, p, id)
 		}
+	}
+}
+
+// TestPlanRunsOnTheProjectsHost is a real failure with two machines configured.
+//
+// Planning took whatever host came out of the map and ran the agent in the project's RepoPath.
+// For a project pinned to another machine that path does not exist locally, and the error names
+// the agent binary — "fork/exec .../claude: no such file or directory" — because that is what
+// fork/exec reports when the working directory is missing. Hours of looking at the wrong thing.
+func TestPlanRunsOnTheProjectsHost(t *testing.T) {
+	o := New(nil, nil, nil, nil, nil, Config{RunTimeout: time.Minute, RunsDir: t.TempDir()},
+		func() string { return "run-1" })
+	o.RegisterHost(host.NewLocal("local", 1))
+	o.RegisterHost(host.NewLocal("yeet", 1))
+
+	for _, tc := range []struct {
+		name    string
+		project core.Project
+		want    string
+		wantErr string
+	}{
+		{name: "pinned", project: core.Project{Slug: "nunswithguns", HostID: "yeet"}, want: "yeet"},
+		{name: "unpinned plans anywhere", project: core.Project{Slug: "gravy"}},
+		{
+			name:    "a host this daemon does not have is an error, not another machine",
+			project: core.Project{Slug: "orphan", HostID: "gone"},
+			wantErr: "does not have configured",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := o.planHost(tc.project)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("planHost() error = %v, want it to mention %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want != "" && h.ID() != tc.want {
+				t.Errorf("planHost() = %q, want the project's host %q", h.ID(), tc.want)
+			}
+		})
 	}
 }

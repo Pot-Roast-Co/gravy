@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,13 +49,15 @@ type Runner interface {
 // It is safe for concurrent use: attention items are raised from the scheduler, from finishing
 // runs, and from validation, all at once.
 type Notifier struct {
-	mode   config.NotifyMode
-	window time.Duration
-	runner Runner
-	out    io.Writer
-	log    *slog.Logger
-	goos   string
-	now    func() time.Time
+	sound     func(context.Context) error
+	clickArgs func(string) []string
+	mode      config.NotifyMode
+	window    time.Duration
+	runner    Runner
+	out       io.Writer
+	log       *slog.Logger
+	goos      string
+	now       func() time.Time
 
 	mu         sync.Mutex
 	lastSent   time.Time
@@ -63,6 +66,15 @@ type Notifier struct {
 
 // Option configures a Notifier.
 type Option func(*Notifier)
+
+// WithSound uses desktop audio, falling back to the terminal bell on failure.
+func WithSound(play func(context.Context) error) Option { return func(n *Notifier) { n.sound = play } }
+
+// WithClickArgs supplies an argv vector for Omarchy's persistent click action.
+// Arguments are JSON encoded, never interpreted by a shell.
+func WithClickArgs(args func(string) []string) Option {
+	return func(n *Notifier) { n.clickArgs = args }
+}
 
 // WithRunner supplies the command runner used for OS notifications. Without one, Gravy degrades
 // to the terminal bell rather than failing.
@@ -102,6 +114,11 @@ func New(cfg config.Notifications, out io.Writer, opts ...Option) *Notifier {
 // the item is in the Needs You queue regardless of whether the ping arrives. Problems are
 // logged.
 func (n *Notifier) Notify(ctx context.Context, title, body string, urgency Urgency) {
+	n.NotifyTicket(ctx, title, body, urgency, "")
+}
+
+// NotifyTicket attaches the destination to an attention notification.
+func (n *Notifier) NotifyTicket(ctx context.Context, title, body string, urgency Urgency, ticketID string) {
 	if n.mode == config.NotifyOff {
 		return
 	}
@@ -115,8 +132,18 @@ func (n *Notifier) Notify(ctx context.Context, title, body string, urgency Urgen
 		body = fmt.Sprintf("%s (+%d more while quiet)", body, suppressed)
 	}
 
-	if _, err := io.WriteString(n.out, "\a"); err != nil {
-		n.log.Debug("notify: writing terminal bell failed", "error", err)
+	played := false
+	if n.sound != nil {
+		if err := n.sound(ctx); err != nil {
+			n.log.Warn("notify: audio failed; using terminal bell", "error", err)
+		} else {
+			played = true
+		}
+	}
+	if !played {
+		if _, err := io.WriteString(n.out, "\a"); err != nil {
+			n.log.Debug("notify: writing terminal bell failed", "error", err)
+		}
 	}
 
 	if n.mode != config.NotifyBellAndOS {
@@ -132,6 +159,21 @@ func (n *Notifier) Notify(ctx context.Context, title, body string, urgency Urgen
 		// An unsupported platform is not an error. The bell already rang.
 		n.log.Warn("notify: no OS notification mechanism for this platform; bell only", "goos", n.goos)
 		return
+	}
+	if n.goos == "linux" {
+		extra := []string{"--app-name=Gravy"}
+		if played {
+			extra = append(extra, "--hint=boolean:suppress-sound:true")
+		}
+		if n.clickArgs != nil {
+			if argv := n.clickArgs(ticketID); len(argv) > 0 {
+				encoded, err := json.Marshal(argv)
+				if err == nil {
+					extra = append(extra, "--hint=string:omarchy-exec-argv:"+string(encoded))
+				}
+			}
+		}
+		args = append(extra, args...)
 	}
 	if err := n.runner.Run(ctx, cmd, args...); err != nil {
 		n.log.Warn("notify: OS notification failed", "command", cmd, "error", err)

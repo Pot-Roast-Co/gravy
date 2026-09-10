@@ -788,7 +788,7 @@ func (o *Orchestrator) announce(ctx context.Context, a core.Attention, ticketTit
 		project = p.Name
 	}
 	title, body, urgency := notify.ForAttention(a.Reason, project, ticketTitle)
-	o.notifier.Notify(ctx, title, body, urgency)
+	notify.Deliver(ctx, o.notifier, title, body, urgency, a.TicketID)
 }
 
 // WithLogs records run output through the given store.

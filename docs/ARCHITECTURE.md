@@ -821,3 +821,24 @@ reaches the target branch unapproved).
 Every run carries a wall-clock timeout, a turn cap, and a kill switch. Every action outside the
 allowlist escalates rather than being auto-granted or silently blocking on an invisible prompt.
 Gravy will not claim more isolation than it provides.
+
+
+### GR-032 setup API
+
+`api.Service` now exposes `SetupInfo(ctx)`, `PreviewSetup(ctx, AddProjectReq)`, and
+`ApplySetup(ctx, SetupRequest)`. SetupInfo returns settings, provider status/model suggestions,
+local host capabilities, and existing projects. PreviewSetup shares AddProject's repository
+validation and the toolchain table in `internal/api/seed.go`; it proposes validation, host
+requirements and permissions without persistence. The TUI reuses settings/project field editors.
+
+The wizard keeps independent drafts of maps and slices. First-run startup uses `config.Read`,
+which leaves missing config in memory; only explicit final approval writes config or a project.
+ApplySetup rejects a stale configuration snapshot, validates before writing, and removes the
+new project if saving configuration fails. Canceling any earlier step writes neither. Existing
+projects are untouched when rerunning setup; a blank repository field saves global settings only.
+The SQLite runtime database and daemon socket can exist before approval, but no setup project
+or configuration file is created. Configuration writes remain atomic via `config.Save`.
+
+`AddProjectReq` adds optional explicit Allowlist, Requirements and Routes fields so the approved
+suggestions survive registration exactly, including an explicitly empty allowlist. Existing
+callers retain their current default behavior. No host/provider interfaces or dependencies change.

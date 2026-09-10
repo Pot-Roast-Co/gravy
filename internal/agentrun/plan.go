@@ -57,9 +57,14 @@ func (o *Orchestrator) Plan(resolve RouteResolver, docBudget int) *Planner {
 func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult, error) {
 	o := p.orch
 
-	h := o.anyHost()
-	if h == nil {
-		return core.PlanResult{}, fmt.Errorf("plan: no host available")
+	// Planning reads the project's own files, so it has to run where its clone is. anyHost
+	// used to answer here, which on a machine with more than one host meant planning a pinned
+	// project in a directory that does not exist locally — and the failure named the agent
+	// binary rather than the missing directory, because that is what fork/exec reports when a
+	// working directory is not there.
+	h, err := o.planHost(turn.Project)
+	if err != nil {
+		return core.PlanResult{}, err
 	}
 
 	runID := turn.RunID
@@ -80,7 +85,6 @@ func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult
 		handle     provider.Handle
 		providerID string
 		agent      string
-		err        error
 	)
 
 	if held, sessionID := decodeSession(turn.Session); sessionID != "" {
@@ -392,4 +396,25 @@ func lastJSONBlock(text string) (rest, block string) {
 		return text[:start], body[:end]
 	}
 	return text, ""
+}
+
+// planHost returns the machine a project's conversation must run on.
+//
+// A project pinned to a host has its clone there and nowhere else, so planning that reads its
+// documents has to run there too. An unpinned project plans on whatever host is available, which
+// is the single-machine case and the one most people are in.
+func (o *Orchestrator) planHost(project core.Project) (host.Host, error) {
+	if id := strings.TrimSpace(project.HostID); id != "" {
+		h, ok := o.hosts[id]
+		if !ok {
+			return nil, fmt.Errorf("plan: %s is on host %q, which this daemon does not have configured",
+				project.Slug, id)
+		}
+		return h, nil
+	}
+	h := o.anyHost()
+	if h == nil {
+		return nil, fmt.Errorf("plan: no host available")
+	}
+	return h, nil
 }

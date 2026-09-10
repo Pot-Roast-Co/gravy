@@ -113,7 +113,18 @@ for the `go install` and `make install` routes.
 the daemon's socket are unix-specific, and pretending otherwise would fail at the first run
 rather than at the install.
 
-> **There is no installer or onboarding wizard yet.** Both are wanted; see the roadmap.
+On first run, Gravy opens a five-step setup wizard. It checks agent logins and models, shows
+local host capabilities, and lets you edit worker counts and ordered model choices. Enter a
+repository path to inspect its toolchain, then review and edit suggested validation, host
+requirements and permissions. **Nothing is saved until you approve the final step.**
+
+Use **Ctrl+N** / **Ctrl+B** to move between steps, **Enter** to edit, and **Esc** to cancel.
+On the final review, **a** approves and saves. An agent that is not logged in is explained but
+does not prevent setup. Xcode suggestions may need your scheme and simulator destination.
+
+Reopen the wizard with **W in Settings**. Leave the repository path blank to update global
+settings without changing existing projects. Settings that need a daemon restart are listed
+after saving. An installer is still on the roadmap.
 
 ## Usage
 
@@ -179,10 +190,9 @@ A few decisions that are deliberate rather than accidental:
 
 **Working today** — the full loop across several machines: projects, tickets, local and ssh
 workers, `claude-code` and `codex`, routing with fallback, validation, automated review, planning
-conversations, merge mode, notifications.
+conversations, merge mode, notifications, and guided onboarding.
 
-**Next** — an installer and a first-run wizard, so the first ten minutes do not require reading
-this file. Permission escalation when an agent is refused something, rather than it working
+**Next** — an installer. Permission escalation when an agent is refused something, rather than it working
 around the refusal. Done and history. Per-ticket spend, and budgets.
 
 **Later** — PR land mode, merge helper, local model providers, dependency graphs. The
@@ -197,3 +207,20 @@ abstraction and worth reporting.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Notifications
+
+`notifications.mode: bell_and_os` plays a quiet, bundled two-note chime and sends a desktop
+notification. `bell` plays the chime alone; `off` disables both. Alerts share the configured
+rate limit (30 seconds by default). Linux playback uses `pw-play`, falling back to `paplay`;
+macOS uses `afplay`. If audio playback fails, Gravy falls back to a terminal bell.
+
+On Omarchy, clicking the notification (including in notification history) focuses an existing Gravy terminal
+and navigates to the ticket's Review or Needs You screen. A new terminal opens only if no
+Gravy TUI is listening for this data directory. The destination is resolved when opened, so a
+requeued ticket goes to its current queue. This uses Omarchy's persistent notification action;
+other desktops currently receive the notification without this click integration.
+
+Run `gravy notify-test` to preview the sound and desktop notification, or
+`gravy notify-test <ticket-id>` to test opening a particular ticket. `gravy open <ticket-id>`
+opens that ticket directly. These commands do not approve or run tickets.

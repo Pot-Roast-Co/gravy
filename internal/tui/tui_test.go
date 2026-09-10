@@ -20,10 +20,13 @@ import (
 // fakeService is an api.Service that answers from memory. The frame is supposed to hold no
 // domain logic, so a fake with no store behind it should be enough to drive every path.
 type fakeService struct {
-	status  api.SystemStatus
-	statusE error
-	events  chan api.Event
-	stopped bool
+	setupPreview api.SetupPreview
+	setupErr     error
+	setups       []api.SetupRequest
+	status       api.SystemStatus
+	statusE      error
+	events       chan api.Event
+	stopped      bool
 
 	// review is what GetReview returns; the rest record what the screen asked for, which is
 	// what the approve/request-changes/reject assertions check.
@@ -603,4 +606,15 @@ func goFiles(t *testing.T) []string {
 		}
 	}
 	return out
+}
+
+func (f *fakeService) SetupInfo(context.Context) (api.SetupInfo, error) {
+	return api.SetupInfo{Settings: f.settings, Agents: f.agentStatus, Projects: f.projects}, f.setupErr
+}
+func (f *fakeService) PreviewSetup(context.Context, api.AddProjectReq) (api.SetupPreview, error) {
+	return f.setupPreview, f.setupErr
+}
+func (f *fakeService) ApplySetup(_ context.Context, req api.SetupRequest) (api.Settings, error) {
+	f.setups = append(f.setups, req)
+	return api.Settings{Config: req.Config}, f.setupErr
 }

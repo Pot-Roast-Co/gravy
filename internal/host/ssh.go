@@ -36,6 +36,10 @@ type SSHHost struct {
 
 	mu   sync.Mutex
 	used int
+
+	// caps caches the probe below: it is a whole ssh connection, and Status runs it for every
+	// host on every call.
+	capsCache capsCache
 }
 
 // NewSSH returns a host reachable at an ssh target.
@@ -170,6 +174,10 @@ func (h *SSHHost) StartDetached(ExecSpec, string) (int, error) {
 // One round trip, not one per tool: every probe is a line in a single shell script, because a
 // connection setup per tool turns capability detection into a visible pause on a slow link.
 func (h *SSHHost) Capabilities(ctx context.Context) (core.Caps, error) {
+	return h.capsCache.get(func() (core.Caps, error) { return h.probeCapabilities(ctx) })
+}
+
+func (h *SSHHost) probeCapabilities(ctx context.Context) (core.Caps, error) {
 	var script strings.Builder
 	script.WriteString(`printf 'os=%s\n' "$(uname -s)"; printf 'arch=%s\n' "$(uname -m)"; `)
 	// Physical memory: darwin and linux disagree about where it lives, so both are tried and

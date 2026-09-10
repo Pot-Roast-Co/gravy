@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/agentrun"
@@ -49,17 +50,57 @@ type app struct {
 }
 
 // newApp opens the store and wires the object graph.
+// client is what a command that talks to the daemon needs, and nothing else: somewhere to find
+// the socket, a local host to start a daemon with, and the connection itself.
+//
+// newApp builds the whole daemon-side graph — the database, every host, the scheduler pool, the
+// orchestrator — and probes each remote machine's home directory and capabilities on the way.
+// Every CLI command and the TUI were paying for that and then throwing it away to talk over the
+// socket instead: with two ssh hosts configured, two seconds before `gravy` drew anything, most
+// of it spent in login shells on other people's computers. Only `serve` and `run` need the graph.
+type client struct {
+	home string
+	cfg  config.Config
+	host *host.LocalHost
+	svc  *api.Client
+}
+
+// newClient connects to the daemon, starting one if none is running.
+func newClient(ctx context.Context) (*client, error) {
+	home, err := config.Home()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Read(home)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return nil, err
+	}
+
+	h := host.NewLocal("local", cfg.Concurrency.Workers)
+	c, err := connect(ctx, home, h, true)
+	if err != nil {
+		return nil, err
+	}
+	return &client{home: home, cfg: cfg, host: h, svc: c}, nil
+}
+
+// Close hangs up. There is no database to close: the daemon owns it.
+func (c *client) Close() error { return c.svc.Close() }
+
 func newApp(ctx context.Context) (*app, error) {
 	home, err := config.Home()
 	if err != nil {
 		return nil, err
 	}
-	cfg, created, err := config.Load(home)
+	cfg, err := config.Read(home)
 	if err != nil {
 		return nil, err
 	}
-	if created {
-		fmt.Fprintf(os.Stderr, "wrote a default config to %s\n", config.Path(home))
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return nil, err
 	}
 
 	db, err := store.Open(ctx, filepath.Join(home, "gravy.db"))
@@ -156,10 +197,25 @@ func newApp(ctx context.Context) (*app, error) {
 	// opinion worth paying for twice.
 	orch = orch.WithReview(reviewResolver(rtr), cfg.Context.TokenBudget*4)
 
-	// Notifications go out on stderr for the bell and through the host for the OS call, so
-	// that internal/notify never learns how a process is started (ARCHITECTURE.md §1.1).
-	notifier := notify.New(cfg.Notifications, os.Stderr,
-		notify.WithRunner(hostRunner{h: h}), notify.WithLogger(log))
+	// Play through desktop audio so detached daemons remain audible.
+	opts := []notify.Option{notify.WithRunner(hostRunner{h: h}), notify.WithLogger(log)}
+	if play, err := notify.Sound(h.FS(), hostRunner{h: h}, filepath.Join(home, "sounds"), runtime.GOOS); err == nil {
+		opts = append(opts, notify.WithSound(play))
+	} else {
+		log.Warn("could not prepare notification sound", "error", err)
+	}
+	if runtime.GOOS == "linux" && h.FS().Exists("/usr/share/omarchy/shell/plugins/notifications/Service.qml") {
+		if exe, err := os.Executable(); err == nil {
+			opts = append(opts, notify.WithClickArgs(func(ticketID string) []string {
+				argv := []string{"env", config.EnvHome + "=" + home, exe, "activate"}
+				if ticketID != "" {
+					argv = append(argv, ticketID)
+				}
+				return argv
+			}))
+		}
+	}
+	notifier := notify.New(cfg.Notifications, os.Stderr, opts...)
 	orch = orch.WithNotifier(notifier)
 
 	svc := api.NewLocal(db, sched, hosts, newID).

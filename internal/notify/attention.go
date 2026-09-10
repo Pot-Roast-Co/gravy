@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pot-roast-co/gravy/internal/core"
@@ -55,4 +56,17 @@ func ForAttention(reason core.AttentionReason, project, ticket string) (title, b
 	// An unknown reason still tells the human something stopped, rather than staying silent
 	// because this switch has not caught up with a new one.
 	return "Gravy needs you", fmt.Sprintf("%s (%s)", subject, reason), Normal
+}
+
+// Deliver uses ticket-aware notifications when available, retaining simple notifier clients.
+func Deliver(ctx context.Context, n interface {
+	Notify(context.Context, string, string, Urgency)
+}, title, body string, urgency Urgency, ticketID string) {
+	if targeted, ok := n.(interface {
+		NotifyTicket(context.Context, string, string, Urgency, string)
+	}); ok {
+		targeted.NotifyTicket(ctx, title, body, urgency, ticketID)
+	} else {
+		n.Notify(ctx, title, body, urgency)
+	}
 }

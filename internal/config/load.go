@@ -58,6 +58,19 @@ func Load(dir string) (Config, bool, error) {
 	return cfg, false, nil
 }
 
+// Read loads configuration without creating a file. Missing configuration uses defaults
+// in memory until setup is approved.
+func Read(dir string) (Config, error) {
+	b, err := os.ReadFile(Path(dir))
+	if errors.Is(err, os.ErrNotExist) {
+		return Default(), nil
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	return Parse(b, Path(dir))
+}
+
 // LoadDefault loads from the default home directory.
 func LoadDefault() (Config, bool, error) {
 	dir, err := Home()

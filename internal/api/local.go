@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/config"
@@ -47,6 +48,7 @@ type Local struct {
 	detector Detector
 
 	// Configuration, empty on a client that cannot be configured.
+	cfgMu          sync.RWMutex
 	home           string
 	cfg            config.Config
 	applyCfg       ApplyFunc
@@ -117,6 +119,21 @@ func (l *Local) ListProjects(ctx context.Context) ([]core.Project, error) {
 // at the first run instead, which is a far worse place to discover it — the ticket is already
 // claimed, a worker is held, and the error surfaces as a mysterious run failure.
 func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project, error) {
+	if strings.TrimSpace(req.Path) == "" {
+		return l.addProjectWithoutRepo(ctx, req)
+	}
+	p, err := l.prepareProject(ctx, req)
+	if err != nil {
+		return core.Project{}, err
+	}
+	if err := l.db.CreateProject(ctx, p); err != nil {
+		return core.Project{}, err
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: p.ID})
+	return p, nil
+}
+
+func (l *Local) prepareProject(ctx context.Context, req AddProjectReq) (core.Project, error) {
 	// A pinned project's repository is on that machine, so every check has to happen there.
 	// Resolving the path locally would turn a Mac path into a Linux one, and stat would then
 	// report a repository that exists as missing.
@@ -125,11 +142,9 @@ func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project
 		return core.Project{}, err
 	}
 
-	// A project with no path is a project with no repository: somewhere to put goals and notes
-	// while the shape of the thing is still being decided. Nothing runs in one, and the
-	// scheduler says so rather than failing a ticket that lands in it.
+	// Setup prepares a real repository; AddProject handles planning-only projects separately.
 	if strings.TrimSpace(req.Path) == "" {
-		return l.addProjectWithoutRepo(ctx, req)
+		return core.Project{}, fmt.Errorf("setup needs a repository path")
 	}
 
 	path := req.Path
@@ -208,10 +223,11 @@ func (l *Local) AddProject(ctx context.Context, req AddProjectReq) (core.Project
 		MaxConcurrency: maxConcurrency,
 		CreatedAt:      l.now(),
 	}
-	if err := l.db.CreateProject(ctx, p); err != nil {
-		return core.Project{}, err
+	if req.Allowlist != nil {
+		p.Allowlist = *req.Allowlist
 	}
-	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: p.ID})
+	p.Requirements, p.Routes = req.Requirements, req.Routes
+
 	return p, nil
 }
 
@@ -306,18 +322,14 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 
 // MoveTicket applies an event through the state machine.
 func (l *Local) MoveTicket(ctx context.Context, id string, ev core.Event) (core.State, error) {
-	// A ticket queued behind unlanded work would sit in Ready looking eligible while the
-	// scheduler silently passed over it. Refusing here, with the reason, is the difference
-	// between "not yet" and "why is nothing happening".
-	if ev == core.EventMarkReady {
-		deps, derr := l.dependencies(ctx, id)
-		if derr != nil {
-			return "", derr
-		}
-		if blocked := blockedBy(deps); blocked != "" {
-			return "", fmt.Errorf("cannot mark %s ready: %s", id, blocked)
-		}
-	}
+	// Queueing a ticket behind unlanded work is allowed, and the queue holds it.
+	//
+	// This used to be refused (GR-026 AC3) on the grounds that such a ticket would sit in Ready
+	// looking eligible while the scheduler silently passed over it. It is not silent: the
+	// scheduler holds a dependent until its dependency is Done and records that as the reason,
+	// and every queue screen draws the "waiting on ..." line from ListQueue. What the refusal
+	// actually cost was the ordinary case — a plan arrives as a chain of four tickets, and the
+	// human had to come back and queue each one as its predecessor landed.
 
 	state, err := l.db.SetTicketState(ctx, id, ev)
 	if err != nil {

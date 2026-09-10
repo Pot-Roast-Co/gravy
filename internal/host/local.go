@@ -29,6 +29,8 @@ type LocalHost struct {
 
 	mu   sync.Mutex
 	used int
+
+	capsCache capsCache
 }
 
 // NewLocal returns a LocalHost with the given number of worker slots.
@@ -249,6 +251,12 @@ func (p *localProcess) Wait() (ExitStatus, error) {
 
 // Capabilities describes this machine, for filtering which hosts can run a project's tickets.
 func (h *LocalHost) Capabilities(ctx context.Context) (core.Caps, error) {
+	// Cheaper than ssh, but not free: each probe spawns a process per tool, and the dashboard
+	// asks on every refresh.
+	return h.capsCache.get(func() (core.Caps, error) { return h.probeCapabilities(ctx) })
+}
+
+func (h *LocalHost) probeCapabilities(ctx context.Context) (core.Caps, error) {
 	caps := core.Caps{
 		OS:        runtime.GOOS,
 		Arch:      runtime.GOARCH,

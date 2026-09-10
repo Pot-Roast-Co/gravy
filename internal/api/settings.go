@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -62,11 +63,13 @@ func (l *Local) WithSettings(home string, loaded config.Config, apply ApplyFunc)
 
 // GetSettings returns the current configuration.
 func (l *Local) GetSettings(_ context.Context) (Settings, error) {
+	l.cfgMu.RLock()
+	defer l.cfgMu.RUnlock()
 	if l.home == "" {
 		return Settings{}, fmt.Errorf("this client cannot read configuration")
 	}
 	return Settings{
-		Config: l.cfg, Path: config.Path(l.home),
+		Config: copyConfig(l.cfg), Path: config.Path(l.home),
 		PendingRestart: l.pendingRestart, Agents: l.agents,
 	}, nil
 }
@@ -76,6 +79,12 @@ func (l *Local) GetSettings(_ context.Context) (Settings, error) {
 // It is written to disk only after it validates, so a rejected edit cannot leave the file in a
 // state the daemon would refuse to start from next time.
 func (l *Local) UpdateSettings(_ context.Context, c config.Config) (Settings, error) {
+	l.cfgMu.Lock()
+	defer l.cfgMu.Unlock()
+	return l.updateSettings(c)
+}
+
+func (l *Local) updateSettings(c config.Config) (Settings, error) {
 	if l.home == "" {
 		return Settings{}, fmt.Errorf("this client cannot change configuration")
 	}
@@ -86,13 +95,13 @@ func (l *Local) UpdateSettings(_ context.Context, c config.Config) (Settings, er
 		return Settings{}, err
 	}
 
-	l.cfg = c
+	l.cfg = copyConfig(c)
 	if l.applyCfg != nil {
 		l.pendingRestart = l.applyCfg(c)
 	}
 	l.events.publish(Event{Kind: EventProjectChanged})
 	return Settings{
-		Config: l.cfg, Path: config.Path(l.home),
+		Config: copyConfig(l.cfg), Path: config.Path(l.home),
 		PendingRestart: l.pendingRestart, Agents: l.agents,
 	}, nil
 }
@@ -118,12 +127,38 @@ func (l *Local) UpdateProject(ctx context.Context, p core.Project) error {
 		return fmt.Errorf("parallel mode needs a concurrency of at least 1")
 	}
 
+	// Changing the machine is allowed, but the clone has to be on the new one: nothing here
+	// moves a repository, and a project pointing at a path that does not exist on its host
+	// fails every ticket at the first git command instead of at the edit that caused it.
+	if p.HostID != current.HostID {
+		h, err := l.hostFor(p.HostID)
+		if err != nil {
+			return err
+		}
+		if path := strings.TrimSpace(current.RepoPath); path != "" {
+			if !h.FS().Exists(path) {
+				return fmt.Errorf("%s: no such directory on host %s", path, hostName(p.HostID))
+			}
+			if err := checkGitRepo(ctx, h, path); err != nil {
+				return err
+			}
+		}
+		current.HostID = p.HostID
+	}
+
 	current.Name = p.Name
 	current.TargetBranch = p.TargetBranch
 	if p.MergeMode != "" {
 		current.MergeMode = p.MergeMode
 	}
 	current.Validation = p.Validation
+	// Buckets, allowlist and notes are edited on the same screen as everything above. Copying
+	// only some of the fields a client sends is a save that reports success and changes
+	// nothing — which is how a project's bucket override could be typed in, redrawn from the
+	// edited copy in memory, and be gone on the next load.
+	current.Routes = p.Routes
+	current.Allowlist = p.Allowlist
+	current.Notes = p.Notes
 	current.ParallelMode = p.ParallelMode
 	current.MaxConcurrency = p.MaxConcurrency
 	if !p.ParallelMode {
@@ -146,6 +181,8 @@ func (l *Local) UpdateProject(ctx context.Context, p core.Project) error {
 // configuration attached accepts any usable name, since it has nothing to check against and
 // refusing would be worse than accepting.
 func (l *Local) knownRoute(r core.Route) error {
+	l.cfgMu.RLock()
+	defer l.cfgMu.RUnlock()
 	if !r.Named() {
 		return fmt.Errorf("route %q is not a usable bucket name", r)
 	}
@@ -167,10 +204,20 @@ func (l *Local) knownRoute(r core.Route) error {
 
 // Routes lists the configured bucket names, so a client can offer them rather than guess.
 func (l *Local) Routes() []core.Route {
+	l.cfgMu.RLock()
+	defer l.cfgMu.RUnlock()
 	out := make([]core.Route, 0, len(l.cfg.Routes))
 	for name := range l.cfg.Routes {
 		out = append(out, name)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// copyConfig prevents in-process clients from mutating the live configuration through maps.
+func copyConfig(c config.Config) config.Config {
+	b, _ := json.Marshal(c)
+	var out config.Config
+	_ = json.Unmarshal(b, &out)
 	return out
 }

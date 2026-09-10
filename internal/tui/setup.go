@@ -1,11 +1,8 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
-
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/pot-roast-co/gravy/internal/api"
 )
@@ -13,25 +10,8 @@ import (
 // agentsDetectedMsg carries what the daemon found.
 type agentsDetectedMsg struct{ agents []api.AgentStatus }
 
-// detectAgents probes the agent CLIs.
-//
-// Not on connect: it spawns processes, and paying for that on every launch to answer a question
-// that only matters before the first project is registered would be a tax on everybody else.
-func detectAgents(svc api.Service) tea.Cmd {
-	return func() tea.Msg {
-		return agentsDetectedMsg{agents: svc.DetectAgents(context.Background())}
-	}
-}
-
-// setupView is what a fresh install shows instead of an empty dashboard.
-//
-// Someone who has never seen Gravy runs it and gets a screen with nothing on it and no
-// indication of what to do — the README used to claim a wizard walks you through setup, which
-// was not true. This is the smallest honest version: what Gravy needs, whether you have it, and
-// the one key that starts.
-//
-// It answers three questions in the order they block you: can it run agents at all, does it have
-// a repository, and what happens once it does.
+// setupView is the empty dashboard after someone cancels the first-run wizard.
+// It explains what is missing and offers a way back into guided setup.
 func setupView(agents []api.AgentStatus, th Theme, width int) string {
 	lines := []string{
 		th.Header.Render("Gravy"),
@@ -49,7 +29,7 @@ func setupView(agents []api.AgentStatus, th Theme, width int) string {
 	)
 	if anyReady(agents) {
 		lines = append(lines,
-			th.Key.Render("     P")+th.Muted.Render("  add one — its path completes as you type"),
+			th.Key.Render("     P")+th.Muted.Render("  open setup — review agents, buckets and repository suggestions"),
 			th.Muted.Render("     Gravy detects its toolchain and proposes what agents may run."),
 		)
 	} else {
@@ -57,7 +37,7 @@ func setupView(agents []api.AgentStatus, th Theme, width int) string {
 		// the order is not decoration.
 		lines = append(lines,
 			th.Muted.Render("     Once an agent above is ready, ")+th.Key.Render("P")+
-				th.Muted.Render(" registers your first repository."),
+				th.Muted.Render(" opens the setup wizard."),
 		)
 	}
 

@@ -197,7 +197,7 @@ func (d *Daemon) parkTicket(ctx context.Context, r core.Run, detail string) erro
 	// startup and the ticket title already says which work stopped.
 	if d.notifier != nil {
 		title, body, urgency := notify.ForAttention(core.ReasonHostUnavailable, "", t.Title)
-		d.notifier.Notify(ctx, title, body, urgency)
+		notify.Deliver(ctx, d.notifier, title, body, urgency, t.ID)
 	}
 
 	return d.store.OpenAttention(ctx, core.Attention{

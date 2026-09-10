@@ -123,7 +123,7 @@ func TestLinuxUsesNotifySend(t *testing.T) {
 		t.Fatalf("ran %d commands, want 1", r.count())
 	}
 	got := r.calls[0]
-	want := []string{"notify-send", "-u", "critical", "--", "Auth expired", "claude-code needs re-auth"}
+	want := []string{"notify-send", "--app-name=Gravy", "-u", "critical", "--", "Auth expired", "claude-code needs re-auth"}
 	if len(got) != len(want) {
 		t.Fatalf("command = %v, want %v", got, want)
 	}
