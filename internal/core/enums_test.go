@@ -74,9 +74,9 @@ func TestFailureClassString(t *testing.T) {
 
 func TestEnumValidity(t *testing.T) {
 	t.Run("attention reasons", func(t *testing.T) {
-		// PRODUCT.md §8 defines exactly eight reasons.
-		if len(AllAttentionReasons) != 8 {
-			t.Errorf("got %d attention reasons, want 8", len(AllAttentionReasons))
+		// PRODUCT.md §8 defines exactly nine reasons.
+		if len(AllAttentionReasons) != 9 {
+			t.Errorf("got %d attention reasons, want 9", len(AllAttentionReasons))
 		}
 		for _, r := range AllAttentionReasons {
 			if !r.Valid() {

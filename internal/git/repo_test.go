@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -912,8 +913,21 @@ func TestSquashMergePreservesDirtyMainCheckout(t *testing.T) {
 			}
 			before := git(t, main, "rev-parse", "HEAD")
 			status := git(t, main, "status", "--porcelain")
-			if _, err := r.SquashMerge(ctx, wt, "main", "land"); err == nil {
+			_, err = r.SquashMerge(ctx, wt, "main", "land")
+			if err == nil {
 				t.Fatal("merged dirty checkout")
+			}
+			// The type is the contract: the caller has to be able to tell this refusal
+			// apart from a conflict, and needs the checkout path to say where to go.
+			var dirty *DirtyCheckoutError
+			if !errors.As(err, &dirty) {
+				t.Fatalf("err = %v (%T), want *DirtyCheckoutError", err, err)
+			}
+			if len(dirty.Files) != 1 || dirty.Files[0] != "README.md" {
+				t.Errorf("files = %v, want [README.md]", dirty.Files)
+			}
+			if dirty.Checkout != main {
+				t.Errorf("checkout = %q, want the main clone %q", dirty.Checkout, main)
 			}
 			if git(t, main, "rev-parse", "HEAD") != before || git(t, main, "status", "--porcelain") != status {
 				t.Fatal("main checkout changed")

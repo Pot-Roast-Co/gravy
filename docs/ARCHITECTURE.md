@@ -671,14 +671,24 @@ fetch → rebase worktree onto target
              └─ red ────────────► NeedsYou (validation_failed)
        → merge_mode
             ├─ merge: squash-merge into target, push
+            │    └─ main checkout dirty ──► NeedsYou (checkout_dirty), nothing touched
             └─ pr:    push branch, `gh pr create`
           → ticket Done, worktree removed, dependents re-evaluated, worker released
 ```
 
-Two deliberate simplifications:
+Three deliberate rules:
 
 **Validation runs on every landing attempt.** A no-op rebase can follow failed validation or
 a human conflict resolution; it does not establish that the current tree is green.
+
+**A refusal is not a conflict.** The squash happens in the main checkout, because a worktree
+already has the ticket's branch checked out. If that checkout has uncommitted changes, git would
+sweep them into the squash commit, so landing refuses before moving anything and raises
+`checkout_dirty` — carrying the checkout path and the files, because the work to do is in a
+directory the ticket never mentions. Calling it `merge_conflict` would send the human to a
+preserved worktree that has no conflicting files and nothing to resolve. The same rule governs
+the rebase step above: git declining to start is not the same event as commits that would not
+replay.
 
 **Conflicts are handed to the human, not solved.** On conflict Gravy aborts the rebase, preserves
 the worktree, records the conflicting paths, and raises `merge_conflict`. The human resolves it in

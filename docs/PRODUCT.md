@@ -182,6 +182,7 @@ judgment, each entry carrying enough context to act without hunting:
 | `permission_request` | Agent needs an action outside the project allowlist | allow once, always allow for project, deny |
 | `validation_failed` | Self-correction budget exhausted, still red | inspect logs, send back with guidance, reject |
 | `merge_conflict` | Rebase onto target failed at land time | send back to agent to resolve, resolve in shell |
+| `checkout_dirty` | The project's main checkout has uncommitted changes, which a squash would carry into the merge | commit or stash them, then continue the land |
 | `provider_auth` | A provider CLI is unauthenticated or expired | re-auth instructions, disable provider |
 | `ticket_critique` | Ticket review produced suggestions | accept / edit / dismiss per suggestion |
 | `host_unavailable` | A required host or tool is missing | acknowledge, adjust requirements |

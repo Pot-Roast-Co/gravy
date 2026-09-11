@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -189,6 +190,19 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 	message := fmt.Sprintf("%s\n\nLanded by gravy from %s.", ticket.Title, wt.Branch)
 	merged, err := lander.SquashMerge(ctx, wt, project.TargetBranch, message)
 	if err != nil {
+		// Same refusal-is-not-a-conflict rule as the rebase above, one step later. The squash
+		// happens in the main checkout, so that is where the uncommitted changes are — and a
+		// human sent to the preserved worktree to resolve a conflict would find a clean tree,
+		// no conflicting files, and nothing to do.
+		var dirty *git.DirtyCheckoutError
+		if errors.As(err, &dirty) {
+			return l.park(ctx, ticket, core.ReasonCheckoutDirty, map[string]any{
+				"reason":   "the main checkout has uncommitted changes, which a squash would carry into the merge",
+				"files":    dirty.Files,
+				"checkout": dirty.Checkout,
+				"branch":   wt.Branch,
+			})
+		}
 		// A push rejection leaves the local target ahead of the remote; the ticket parks so
 		// a human can look rather than Gravy retrying into a worse state.
 		return l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{

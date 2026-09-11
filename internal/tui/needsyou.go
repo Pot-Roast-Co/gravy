@@ -103,7 +103,7 @@ func actContinueLanding() reasonAction {
 
 // reasonRegistry maps each reason to its renderer and actions.
 //
-// M0 populates the four reasons M0 can raise. agent_question, permission_request and
+// M0 populates the five reasons M0 can raise. agent_question, permission_request and
 // ticket_critique are M1 tickets and are deliberately absent rather than present and inert —
 // genericSpec renders anything not listed here, so an unknown reason degrades to something
 // readable instead of crashing.
@@ -158,6 +158,29 @@ var reasonRegistry = map[core.AttentionReason]reasonSpec{
 				out = append(out,
 					ctx.Theme.Muted.Render("  the worktree is preserved for you at:"),
 					ctx.Theme.Text.Render("  "+w))
+			}
+			return out
+		},
+		Actions: []reasonAction{actContinueLanding(), actReject()},
+	},
+
+	core.ReasonCheckoutDirty: {
+		Detail: func(item api.AttentionItem, ctx ViewContext) []string {
+			var out []string
+			if r, ok := item.Attention.Payload["reason"].(string); ok && r != "" {
+				out = append(out, ctx.Theme.Warning.Render("  "+r))
+			}
+			// The path first, then the files under it: the whole point of this reason is that
+			// the work to do is in a directory the row does not otherwise name.
+			if c, ok := item.Attention.Payload["checkout"].(string); ok && c != "" {
+				out = append(out,
+					ctx.Theme.Muted.Render("  commit or stash these, then continue the land:"),
+					ctx.Theme.Text.Render("  "+c))
+			}
+			if files, ok := item.Attention.Payload["files"].([]any); ok && len(files) > 0 {
+				for _, f := range files {
+					out = append(out, ctx.Theme.Danger.Render("    "+fmt.Sprint(f)))
+				}
 			}
 			return out
 		},

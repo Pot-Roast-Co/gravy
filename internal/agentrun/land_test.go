@@ -216,6 +216,68 @@ func TestConflictPreservesWorktree(t *testing.T) {
 	}
 }
 
+// TestDirtyMainCheckoutParksAsCheckoutDirty is the refusal-is-not-a-conflict rule at the squash
+// step.
+//
+// The branch is clean and rebases fine; what blocks the land is uncommitted work in the main
+// clone, which lands nowhere near the preserved worktree. Filing that as merge_conflict sends
+// the human to a worktree with no conflicting files and nothing to resolve, and the queue keeps
+// the whole project held while they look.
+func TestDirtyMainCheckoutParksAsCheckoutDirty(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed(nil)
+	res := landReady(t, h, "feature.txt", "the work\n")
+
+	// The human's own edit, sitting in the main checkout since before the ticket existed.
+	writeFile(t, h.repoPath, "README.md", "a change the human has not committed\n")
+
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if land.State != core.StateNeedsYou {
+		t.Fatalf("state = %s, want needs_you", land.State)
+	}
+
+	open, _ := h.db.ListOpenAttention(context.Background())
+	if len(open) != 1 || open[0].Reason != core.ReasonCheckoutDirty {
+		t.Fatalf("attention = %+v, want checkout_dirty", open)
+	}
+	if got := open[0].Payload["checkout"]; got != h.repoPath {
+		t.Errorf("checkout = %v, want the main clone %s", got, h.repoPath)
+	}
+	files, _ := open[0].Payload["files"].([]any)
+	if len(files) != 1 || files[0] != "README.md" {
+		t.Errorf("files = %v, want [README.md]", open[0].Payload["files"])
+	}
+	// Nothing that would send the human hunting for a conflict.
+	if len(land.ConflictFiles) != 0 {
+		t.Errorf("conflict files = %v, want none: nothing conflicted", land.ConflictFiles)
+	}
+
+	// The human's work is untouched, and so is the target.
+	body, err := os.ReadFile(filepath.Join(h.repoPath, "README.md"))
+	if err != nil || string(body) != "a change the human has not committed\n" {
+		t.Errorf("the uncommitted work was disturbed: %q (%v)", body, err)
+	}
+	if merged := gitCmd(t, h.h, h.repoPath, "show", "--name-only", "--format=", "main"); strings.Contains(merged, "feature.txt") {
+		t.Error("the work merged despite the refusal")
+	}
+
+	// Clearing the checkout is the whole fix: continue then lands, with no agent involved.
+	gitCmd(t, h.h, h.repoPath, "checkout", "--", "README.md")
+	again, err := h.orch.Land().Continue(context.Background(), "GR-100")
+	if err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	if again.State != core.StateDone {
+		t.Fatalf("state after continue = %s, want done", again.State)
+	}
+	if _, err := os.Stat(res.Worktree.Path); !os.IsNotExist(err) {
+		t.Error("the worktree survived a successful landing")
+	}
+}
+
 // TestResolveThenContinue is AC5.
 func TestResolveThenContinue(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})

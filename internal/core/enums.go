@@ -8,14 +8,15 @@ import "strings"
 // everything awaiting human judgement. If something is not here, Gravy does not need you.
 type AttentionReason string
 
-// The attention reasons. M0 ships review_pending, validation_failed, merge_conflict and
-// host_unavailable; the rest arrive with their owning features in M1.
+// The attention reasons. M0 ships review_pending, validation_failed, merge_conflict,
+// checkout_dirty and host_unavailable; the rest arrive with their owning features in M1.
 const (
 	ReasonReviewPending    AttentionReason = "review_pending"
 	ReasonAgentQuestion    AttentionReason = "agent_question"
 	ReasonPermissionReq    AttentionReason = "permission_request"
 	ReasonValidationFailed AttentionReason = "validation_failed"
 	ReasonMergeConflict    AttentionReason = "merge_conflict"
+	ReasonCheckoutDirty    AttentionReason = "checkout_dirty"
 	ReasonProviderAuth     AttentionReason = "provider_auth"
 	ReasonTicketCritique   AttentionReason = "ticket_critique"
 	ReasonHostUnavailable  AttentionReason = "host_unavailable"
@@ -24,7 +25,8 @@ const (
 // AllAttentionReasons lists every reason, in the order PRODUCT.md §8 presents them.
 var AllAttentionReasons = []AttentionReason{
 	ReasonReviewPending, ReasonAgentQuestion, ReasonPermissionReq, ReasonValidationFailed,
-	ReasonMergeConflict, ReasonProviderAuth, ReasonTicketCritique, ReasonHostUnavailable,
+	ReasonMergeConflict, ReasonCheckoutDirty, ReasonProviderAuth, ReasonTicketCritique,
+	ReasonHostUnavailable,
 }
 
 // Valid reports whether r is a known attention reason.

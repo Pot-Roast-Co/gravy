@@ -451,6 +451,23 @@ type LandResult struct {
 	Pushed bool
 }
 
+// DirtyCheckoutError reports that landing was refused because the repository's main checkout
+// has uncommitted changes.
+//
+// It is a distinct type because it is a distinct situation: nothing conflicts, nothing is red,
+// and the branch is fine. What is wrong sits in a directory the caller never mentioned — so the
+// caller needs the path and the file list to say so, and must not file this as a conflict.
+type DirtyCheckoutError struct {
+	// Checkout is the main working copy that has to be cleaned.
+	Checkout string
+	// Files are the tracked paths with uncommitted changes.
+	Files []string
+}
+
+func (e *DirtyCheckoutError) Error() string {
+	return fmt.Sprintf("land: main checkout has uncommitted changes: %s", strings.Join(e.Files, ", "))
+}
+
 // SquashMerge squashes a worktree's branch into the target branch and pushes.
 //
 // The merge happens in the main working copy rather than the worktree, because a worktree has
@@ -466,7 +483,7 @@ func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message
 		return out, err
 	}
 	if len(dirty) != 0 {
-		return out, fmt.Errorf("land: main checkout has uncommitted changes: %s", strings.Join(dirty, ", "))
+		return out, &DirtyCheckoutError{Checkout: r.repoPath, Files: dirty}
 	}
 
 	// The main copy must be on the target branch to merge into it. Its state is left as found:

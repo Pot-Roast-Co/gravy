@@ -40,6 +40,12 @@ func ForAttention(reason core.AttentionReason, project, ticket string) (title, b
 	case core.ReasonMergeConflict:
 		return "Gravy · merge conflict", subject, Critical
 
+	case core.ReasonCheckoutDirty:
+		// Named for what has to be done rather than for what failed: the fix is a commit or a
+		// stash in a checkout, and the alert is worth nothing if it sends the human to the
+		// worktree instead.
+		return "Gravy · checkout needs clearing", subject, Critical
+
 	case core.ReasonProviderAuth:
 		// Nothing will run until the human re-authenticates, so this outranks a single
 		// ticket's problem.
