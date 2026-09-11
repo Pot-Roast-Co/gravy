@@ -14,6 +14,12 @@ import (
 	"github.com/pot-roast-co/gravy/internal/host"
 )
 
+// daemonStartTimeout is how long a client waits for a daemon it just started to begin listening.
+//
+// Cold start is dominated by hostProbeBudget, so this has to exceed it with room to spare, or
+// `gravy` reports a failure to start that is really just an unreachable laptop.
+const daemonStartTimeout = 20 * time.Second
+
 // runServe is the daemon: it owns the socket, the scheduler loop and the database.
 func runServe(ctx context.Context, args []string) error {
 	if len(args) > 0 {
@@ -67,9 +73,15 @@ func connect(ctx context.Context, home string, h host.Host, autostart bool) (*ap
 		return nil, fmt.Errorf("start the daemon: %w", err)
 	}
 
-	// Binding a socket takes milliseconds; polling beats a fixed sleep that is either a stall
-	// or a race depending on the machine.
-	deadline := time.Now().Add(5 * time.Second)
+	// Polling beats a fixed sleep, which is either a stall or a race depending on the machine.
+	//
+	// The wait has to cover a cold start, not just the bind: the daemon probes every configured
+	// host before it listens, and a machine that is merely off costs the whole probe budget. So
+	// this is hostProbeBudget with room around it. It used to be five seconds on the assumption
+	// that binding a socket takes milliseconds, which it does — right after the minute of ssh
+	// timeouts that came first. Two sleeping laptops were enough to make `gravy` report that the
+	// daemon would not start while the daemon was, in fact, starting.
+	deadline := time.Now().Add(daemonStartTimeout)
 	for time.Now().Before(deadline) {
 		if c, err := api.Dial(socket); err == nil {
 			return c, nil
@@ -80,7 +92,7 @@ func connect(ctx context.Context, home string, h host.Host, autostart bool) (*ap
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	return nil, fmt.Errorf("the daemon did not come up within 5s — see %s", daemon.LogPath(home))
+	return nil, fmt.Errorf("the daemon did not come up within %s — see %s", daemonStartTimeout, daemon.LogPath(home))
 }
 
 // runStop shuts the daemon down.

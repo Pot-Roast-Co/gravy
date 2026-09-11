@@ -25,6 +25,10 @@ type settingField struct {
 	Hint    string
 	Get     func(*settings) string
 	Set     func(*settings, string) error
+	// Action makes the field a button rather than a value. Enter runs it instead of opening
+	// the editor, for the things that are done rather than set — reconnecting a machine that
+	// was switched off, where there is nothing to type and the answer comes from the daemon.
+	Action func(*settings, ViewContext) tea.Cmd
 }
 
 // settings edits the daemon's configuration and its projects.
@@ -37,6 +41,9 @@ type settings struct {
 	// agents is what this build can run, used to refuse a route naming something it cannot.
 	agents   []api.AgentOption
 	projects []core.Project
+	// hosts is the last host snapshot the dashboard pushed, so a host's line can say whether
+	// the machine is answering without this screen probing anything itself.
+	hosts    []api.HostStatus
 	dirtyIDs map[string]bool
 
 	fields []settingField
@@ -84,7 +91,23 @@ func loadSettings(svc api.Service) tea.Cmd {
 }
 
 func (s *settings) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
+	// Reachability rides along on the status push rather than being fetched here: it is
+	// already in every snapshot, and a screen that probed hosts itself would reintroduce the
+	// stall this feature exists to remove.
+	if len(ctx.Status.Hosts) > 0 {
+		s.hosts = ctx.Status.Hosts
+	}
+
 	switch msg := msg.(type) {
+	case hostReconnectedMsg:
+		s.notice = msg.notice
+		for i, h := range s.hosts {
+			if h.ID == msg.host.ID {
+				s.hosts[i] = msg.host
+			}
+		}
+		return s, nil
+
 	case enteredMsg:
 		if s.dirty {
 			// Reloading would discard edits that are not saved yet.
@@ -164,6 +187,10 @@ func (s *settings) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 			s.cursor++
 		}
 	case "enter":
+		if act := s.fields[s.cursor].Action; act != nil {
+			s.notice = ""
+			return s, act(s, ctx)
+		}
 		s.editing, s.buf, s.notice = true, s.fields[s.cursor].Get(s), ""
 	case "s":
 		return s, s.save(ctx)
@@ -399,6 +426,14 @@ func buildFields(s *settings) []settingField {
 					s.cfg.Hosts[hIdx].Workers = n
 					s.dirty = true
 					return nil
+				},
+			},
+			settingField{
+				Section: "Host " + s.cfg.Hosts[hIdx].ID, Label: "reconnect",
+				Hint: "press enter to reach this machine again after switching it on",
+				Get:  func(s *settings) string { return s.hostState(s.cfg.Hosts[hIdx].ID) },
+				Action: func(s *settings, ctx ViewContext) tea.Cmd {
+					return reconnectHost(ctx.Svc, s.cfg.Hosts[hIdx].ID)
 				},
 			},
 			settingField{
@@ -743,4 +778,48 @@ func knownAgent(c core.Choice, agents []api.AgentOption) error {
 	}
 	return fmt.Errorf("no agent called %q in this build — it has: %s",
 		c.ProviderID, strings.Join(names, ", "))
+}
+
+// hostState describes one machine in a word or two, from the last snapshot.
+func (s *settings) hostState(id string) string {
+	for _, h := range s.hosts {
+		if h.ID != id {
+			continue
+		}
+		switch {
+		case h.Checking:
+			return "checking…"
+		case h.Online:
+			return "online"
+		case h.CheckedAt.IsZero():
+			return "not reached yet"
+		default:
+			// ssh's own words. "connection timed out" tells the human the machine is off;
+			// "unreachable" would leave them wondering whether Gravy was at fault.
+			return "off — " + strings.TrimSpace(firstLine(h.Unreachable))
+		}
+	}
+	return ""
+}
+
+// hostReconnectedMsg carries the result of a manual reconnect back to the screen.
+type hostReconnectedMsg struct {
+	host   api.HostStatus
+	notice string
+}
+
+// reconnectHost asks the daemon to probe one machine now.
+func reconnectHost(svc api.Service, id string) tea.Cmd {
+	return func() tea.Msg {
+		hs, err := svc.ReconnectHost(context.Background(), id)
+		if err != nil {
+			return hostReconnectedMsg{notice: "reconnect failed: " + err.Error()}
+		}
+		if hs.Online {
+			return hostReconnectedMsg{host: hs, notice: id + " is back; work pinned to it can run"}
+		}
+		// Still off is an answer, not a failure: it is what the human needs in order to go
+		// and look at the machine rather than at Gravy.
+		return hostReconnectedMsg{host: hs, notice: id + " is still off — " + strings.TrimSpace(firstLine(hs.Unreachable))}
+	}
 }

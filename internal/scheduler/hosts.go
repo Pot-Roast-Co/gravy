@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/host"
@@ -133,32 +134,57 @@ func leastBusy(hosts []*hostState) *hostState {
 	return best
 }
 
-// StaticPool is a HostPool over a fixed set of hosts with cached capabilities.
+// StaticPool is a HostPool over a fixed set of hosts.
 //
-// Capability probing shells out to detect tools, and the scheduler ticks far more often than a
-// machine's capabilities change, so they are read once and reused.
+// Static refers to the set of hosts, not to what is known about them: the membership is fixed
+// at startup, while each host's capabilities are read from that host's own cache on every ask,
+// so a machine switched on later becomes usable without a restart.
 type StaticPool struct {
 	hosts []host.Host
-	caps  map[string]core.Caps
-	// probeErr remembers hosts that could not be reached, so a ticket pinned to one is told
-	// why rather than waiting on a host that silently does not exist.
+	// caps and probeErr are what the startup probe found. They are the report on how starting
+	// up went — which hosts answered, and why the others did not — rather than the working
+	// copy: Caps asks the host, because this pair stops being true the moment a machine's
+	// state changes.
+	caps     map[string]core.Caps
 	probeErr map[string]error
 }
 
 // NewStaticPool probes each host once and caches the result.
+//
+// The probes run concurrently because a remote one is a whole ssh round trip that does not fail
+// until its connect timeout elapses. Serially, every sleeping machine added its own timeout to
+// the total, and the total is paid on daemon startup before the socket is bound — which is how
+// two hosts being asleep turned into Gravy appearing not to start at all.
 func NewStaticPool(ctx context.Context, hosts ...host.Host) (*StaticPool, error) {
 	p := &StaticPool{hosts: hosts, caps: map[string]core.Caps{}, probeErr: map[string]error{}}
-	for _, h := range hosts {
-		caps, err := h.Capabilities(ctx)
-		if err != nil {
+
+	// Results land in a pre-sized slice rather than the maps directly: no mutex, and the maps
+	// are still filled in host order, so a pool is the same however the probes interleave.
+	type probe struct {
+		caps core.Caps
+		err  error
+	}
+	probes := make([]probe, len(hosts))
+	var wg sync.WaitGroup
+	for i, h := range hosts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			probes[i].caps, probes[i].err = h.Capabilities(ctx)
+		}()
+	}
+	wg.Wait()
+
+	for i, h := range hosts {
+		if probes[i].err != nil {
 			// A machine that is asleep, off, or not reachable right now must not stop Gravy
 			// starting: the local work has nothing to do with it. The failure is remembered so
 			// that a ticket pinned to that host is told why nothing is happening, rather than
 			// the host quietly not existing.
-			p.probeErr[h.ID()] = err
+			p.probeErr[h.ID()] = probes[i].err
 			continue
 		}
-		p.caps[h.ID()] = caps
+		p.caps[h.ID()] = probes[i].caps
 	}
 	// Every host failing is different: it means the local machine could not be probed either,
 	// which is a real problem rather than a sleeping laptop.
@@ -174,14 +200,20 @@ func (p *StaticPool) ProbeErrors() map[string]error { return p.probeErr }
 // Hosts returns the pool's hosts.
 func (p *StaticPool) Hosts() []host.Host { return p.hosts }
 
-// Caps returns cached capabilities.
-func (p *StaticPool) Caps(_ context.Context, h host.Host) (core.Caps, error) {
-	caps, ok := p.caps[h.ID()]
-	if !ok {
-		if err := p.probeErr[h.ID()]; err != nil {
-			return core.Caps{}, fmt.Errorf("host %q could not be reached: %w", h.ID(), err)
-		}
-		return core.Caps{}, fmt.Errorf("scheduler: no cached capabilities for host %q", h.ID())
+// Caps returns the host's capabilities, as the host last learned them.
+//
+// This asks the host rather than replaying what the startup probe found, because the two stop
+// agreeing the moment a machine's state changes. A laptop that was off when the daemon started
+// would otherwise stay unusable until the daemon was restarted — including immediately after
+// the human switched it on and asked Gravy to reconnect, which is exactly when they expect
+// work to start flowing again.
+//
+// It is still a cache read, not a connection: the host answers from memory and refreshes
+// behind the caller, so a tick never waits on a machine that is not there.
+func (p *StaticPool) Caps(ctx context.Context, h host.Host) (core.Caps, error) {
+	caps, err := h.Capabilities(ctx)
+	if err != nil {
+		return core.Caps{}, fmt.Errorf("host %q could not be reached: %w", h.ID(), err)
 	}
 	return caps, nil
 }

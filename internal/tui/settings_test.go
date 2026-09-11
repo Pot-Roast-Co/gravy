@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/api"
 	"github.com/pot-roast-co/gravy/internal/config"
@@ -509,5 +510,70 @@ func TestProjectHostMustExist(t *testing.T) {
 	}
 	if knownHost(scr, "nonesuch") {
 		t.Error("an unconfigured host was accepted")
+	}
+}
+
+// TestReconnectingAHostThatCameBack is the way back for a machine that was switched off.
+//
+// Gravy records an unreachable host as off and stops waiting on it, which is what keeps one
+// absent computer from slowing everything else down. The cost of that is that nothing will
+// notice on its own the moment it is switched on again, so the human needs a way to say so.
+func TestReconnectingAHostThatCameBack(t *testing.T) {
+	f := settingsFixture()
+	f.settings.Config.Hosts = []config.Host{{ID: "yeet", Target: "yeet", Workers: 1}}
+	f.status = api.SystemStatus{Hosts: []api.HostStatus{{
+		ID:          "yeet",
+		Online:      false,
+		Unreachable: "ssh: connect to host yeetcity port 22: Connection timed out",
+		CheckedAt:   time.Unix(1700000000, 0),
+	}}}
+	// The machine is on by the time the human presses the key.
+	f.reconnectTo = api.HostStatus{ID: "yeet", Online: true}
+
+	m := openSettings(t, f)
+	m = send(t, m, refreshedMsg{})
+
+	m = focusIn(t, m, "Host yeet", "reconnect")
+
+	// The host's line says it is off, and says why, before anyone asks it to reconnect.
+	scr := m.screens[SectionSettings].(*settings)
+	if state := scr.hostState("yeet"); !strings.HasPrefix(state, "off —") {
+		t.Errorf("yeet reads %q, want it reported as off with ssh's reason", state)
+	}
+	m, cmd := sendCmd(t, m, key("enter"))
+	if cmd == nil {
+		t.Fatal("enter on reconnect did nothing")
+	}
+	m = send(t, m, cmd())
+
+	if len(f.reconnected) != 1 || f.reconnected[0] != "yeet" {
+		t.Fatalf("reconnected = %v, want one probe of yeet", f.reconnected)
+	}
+	if body := m.View(); !strings.Contains(body, "yeet is back") {
+		t.Errorf("the screen does not report that yeet came back:\n%s", body)
+	}
+}
+
+// TestReconnectingAHostThatIsStillOff: still off is an answer, not an error. The human needs to
+// be told to go and look at the machine rather than at Gravy.
+func TestReconnectingAHostThatIsStillOff(t *testing.T) {
+	f := settingsFixture()
+	f.settings.Config.Hosts = []config.Host{{ID: "yeet", Target: "yeet", Workers: 1}}
+	f.reconnectTo = api.HostStatus{ID: "yeet", Online: false, Unreachable: "ssh: connect to host yeetcity port 22: Connection timed out"}
+
+	m := openSettings(t, f)
+	m = focusIn(t, m, "Host yeet", "reconnect")
+	m, cmd := sendCmd(t, m, key("enter"))
+	if cmd == nil {
+		t.Fatal("enter on reconnect did nothing")
+	}
+	m = send(t, m, cmd())
+
+	body := m.View()
+	if !strings.Contains(body, "still off") {
+		t.Errorf("a failed reconnect is not reported as the machine still being off:\n%s", body)
+	}
+	if !strings.Contains(body, "Connection timed out") {
+		t.Errorf("ssh's own reason is not shown, so the human cannot tell what to fix:\n%s", body)
 	}
 }

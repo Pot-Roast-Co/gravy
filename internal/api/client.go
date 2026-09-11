@@ -251,6 +251,11 @@ func (c *Client) Status(ctx context.Context) (SystemStatus, error) {
 	return out, c.call(ctx, mStatus, nil, &out)
 }
 
+func (c *Client) ReconnectHost(ctx context.Context, id string) (HostStatus, error) {
+	var out HostStatus
+	return out, c.call(ctx, mReconnectHost, hostIDParams{HostID: id}, &out)
+}
+
 func (c *Client) ExplainTicket(ctx context.Context, ticketID string) (Explanation, error) {
 	var out Explanation
 	return out, c.call(ctx, mExplainTicket, ticketIDParams{TicketID: ticketID}, &out)

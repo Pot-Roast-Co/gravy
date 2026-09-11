@@ -37,6 +37,12 @@ type fakeService struct {
 	rejected  []string
 	changes   map[string]string
 
+	// reconnected records which machines the screen asked the daemon to reach again;
+	// reconnectTo is what it finds when it looks.
+	reconnected  []string
+	reconnectTo  api.HostStatus
+	reconnectErr error
+
 	// logs feeds StreamLogs; killed records what the detail screen asked to stop.
 	logs      chan api.LogLine
 	killed    []string
@@ -92,6 +98,18 @@ func (f *fakeService) Status(context.Context) (api.SystemStatus, error) {
 		return api.SystemStatus{}, f.statusE
 	}
 	return f.status, nil
+}
+
+func (f *fakeService) ReconnectHost(_ context.Context, id string) (api.HostStatus, error) {
+	f.reconnected = append(f.reconnected, id)
+	if f.reconnectErr != nil {
+		return api.HostStatus{}, f.reconnectErr
+	}
+	hs := f.reconnectTo
+	if hs.ID == "" {
+		hs.ID = id
+	}
+	return hs, nil
 }
 
 func (f *fakeService) Events(context.Context) (<-chan api.Event, func(), error) {

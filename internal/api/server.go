@@ -461,6 +461,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 	case mStatus:
 		return s.svc.Status(ctx)
 
+	case mReconnectHost:
+		var p hostIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ReconnectHost(ctx, p.HostID)
+
 	case mExplainTicket:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

@@ -469,9 +469,35 @@ func runStatus(ctx context.Context, args []string) error {
 	fmt.Println()
 	fmt.Println("HOSTS")
 	for _, h := range st.Hosts {
-		fmt.Printf("  %-8s %s/%s  workers %d/%d\n", h.ID, h.OS, h.Arch, h.UsedSlots, h.TotalSlots)
+		// A machine that is off is the answer to "why is nothing happening on yeet", so it
+		// says so here rather than appearing as a row with the platform column empty.
+		platform := h.OS + "/" + h.Arch
+		if platform == "/" {
+			platform = "-"
+		}
+		fmt.Printf("  %-8s %-12s workers %d/%d%s\n", h.ID, platform, h.UsedSlots, h.TotalSlots, hostNote(h))
 	}
 	return nil
+}
+
+// hostNote describes a host that is not simply online, and nothing at all for one that is.
+func hostNote(h api.HostStatus) string {
+	switch {
+	case h.Online:
+		return ""
+	case h.CheckedAt.IsZero():
+		return "  not reached yet"
+	default:
+		return "  OFF — " + truncateTo(firstLine(h.Unreachable), 60)
+	}
+}
+
+// firstLine keeps a multi-line ssh complaint on one row.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 func payloadHint(at core.Attention) string {

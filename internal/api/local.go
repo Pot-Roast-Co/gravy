@@ -468,13 +468,11 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 		return a.CreatedAt.Before(b.CreatedAt)
 	})
 
+	// Status is drawn constantly, so it reads reachability from memory and never probes. A
+	// host that is switched off is reported as off immediately; asking the network instead is
+	// what used to make one absent machine stall the whole screen.
 	for _, h := range l.hosts {
-		used, total := h.Slots()
-		hs := HostStatus{ID: h.ID(), UsedSlots: used, TotalSlots: total}
-		if caps, err := h.Capabilities(ctx); err == nil {
-			hs.OS, hs.Arch, hs.Tools = caps.OS, caps.Arch, caps.Tools
-		}
-		st.Hosts = append(st.Hosts, hs)
+		st.Hosts = append(st.Hosts, hostStatus(ctx, h))
 	}
 
 	open, err := l.db.ListOpenAttention(ctx)
@@ -705,3 +703,41 @@ func SortAttention(items []AttentionItem) {
 }
 
 var _ Service = (*Local)(nil)
+
+// hostStatus reads one host's load and last-known reachability without touching the network.
+func hostStatus(ctx context.Context, h host.Host) HostStatus {
+	used, total := h.Slots()
+	r := h.Reachability()
+	hs := HostStatus{
+		ID:          h.ID(),
+		UsedSlots:   used,
+		TotalSlots:  total,
+		Online:      r.Online,
+		Unreachable: r.Err,
+		CheckedAt:   r.CheckedAt,
+		Checking:    r.Checking,
+	}
+	// Capabilities are served from the same cache the reachability came from, so this is a
+	// map read rather than a connection. An off host keeps the tools it had when it was last
+	// reached, which is what makes "it is off, and it is the one with Xcode" sayable.
+	if caps, err := h.Capabilities(ctx); err == nil {
+		hs.OS, hs.Arch, hs.Tools = caps.OS, caps.Arch, caps.Tools
+	}
+	return hs
+}
+
+// ReconnectHost probes one host now, so a machine that has just been switched on can rejoin
+// without restarting the daemon.
+func (l *Local) ReconnectHost(ctx context.Context, id string) (HostStatus, error) {
+	for _, h := range l.hosts {
+		if h.ID() != id {
+			continue
+		}
+		// The probe result is deliberately discarded: a failure here is not an error to
+		// report up, it is the answer — the machine is still off, and it is recorded as such
+		// for every later caller to read without waiting.
+		_, _ = h.Recheck(ctx)
+		return hostStatus(ctx, h), nil
+	}
+	return HostStatus{}, fmt.Errorf("no host %q is configured", id)
+}

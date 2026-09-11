@@ -174,7 +174,22 @@ func (h *SSHHost) StartDetached(ExecSpec, string) (int, error) {
 // One round trip, not one per tool: every probe is a line in a single shell script, because a
 // connection setup per tool turns capability detection into a visible pause on a slow link.
 func (h *SSHHost) Capabilities(ctx context.Context) (core.Caps, error) {
-	return h.capsCache.get(func() (core.Caps, error) { return h.probeCapabilities(ctx) })
+	return h.capsCache.get(ctx, h.probeCapabilities)
+}
+
+// Reachability reports what the last probe of this machine found, from memory.
+//
+// No connection is made: a machine that is off has to be nameable as off on a screen that
+// redraws constantly, and the whole problem with discovering it on demand is that finding out
+// costs exactly as long as the machine is absent.
+func (h *SSHHost) Reachability() Reachability { return h.capsCache.state() }
+
+// Recheck connects now and waits for the answer, whatever is cached.
+//
+// This is the reconnect the human asks for after switching a machine on. Serving that from a
+// cache written while it was still off is the one case where staleness is the wrong answer.
+func (h *SSHHost) Recheck(ctx context.Context) (core.Caps, error) {
+	return h.capsCache.recheck(ctx, h.probeCapabilities)
 }
 
 func (h *SSHHost) probeCapabilities(ctx context.Context) (core.Caps, error) {
@@ -260,6 +275,13 @@ func (h *SSHHost) run(ctx context.Context, spec ExecSpec) (string, error) {
 		return "", err
 	}
 	if st.Code != 0 {
+		// A probe cut short by our own deadline cannot be explained by ssh: we killed it
+		// before it reached its own timeout, so all it leaves behind is a signal. "exit 137"
+		// says nothing about the machine, and this is the line a human reads to find out why
+		// their host is listed as off.
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("did not answer in time")
+		}
 		detail := strings.TrimSpace(stderr)
 		if detail == "" {
 			detail = strings.TrimSpace(out)

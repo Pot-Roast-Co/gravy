@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/agentrun"
@@ -28,6 +29,14 @@ import (
 	"github.com/pot-roast-co/gravy/internal/store"
 	"github.com/pot-roast-co/gravy/internal/validate"
 )
+
+// hostProbeBudget caps how long startup will spend reaching remote machines.
+//
+// It is deliberately shorter than ssh's own ConnectTimeout: a host that has not answered by now
+// is not going to, and the queue on this machine should not wait to find that out. Hosts that
+// miss the budget are recorded as unreachable exactly as if ssh had refused, so work pinned to
+// them waits with a reason attached rather than disappearing.
+const hostProbeBudget = 8 * time.Second
 
 // app is the wiring every command shares.
 //
@@ -118,23 +127,53 @@ func newApp(ctx context.Context) (*app, error) {
 	}
 	// Worktrees for a project on another machine live under that machine's home directory,
 	// which is probed rather than guessed: the user is rarely called the same thing on both.
-	remoteHomes := map[string]string{}
+	//
+	// This probe and the capability probe below both run here, concurrently and under one
+	// deadline, because both are ssh round trips that a machine which is off does not refuse —
+	// it simply never answers, and the probe costs its whole connect timeout. Run one after
+	// another they were additive, and every second of them is spent before the socket is bound:
+	// with two hosts asleep the daemon took over a minute to start listening, long past the
+	// point where the client gives up and reports that Gravy would not start. A laptop being
+	// shut is not a reason for the local queue to stop.
+	probeCtx, cancelProbe := context.WithTimeout(ctx, hostProbeBudget)
+	defer cancelProbe()
+
+	var (
+		remoteHomes = map[string]string{}
+		homesMu     sync.Mutex
+		pool        *scheduler.StaticPool
+		poolErr     error
+		probes      sync.WaitGroup
+	)
+
+	probes.Add(1)
+	go func() {
+		defer probes.Done()
+		pool, poolErr = scheduler.NewStaticPool(probeCtx, hosts...)
+	}()
+
 	for _, rh := range hosts {
 		sh, ok := rh.(*host.SSHHost)
 		if !ok {
 			continue
 		}
-		remote, herr := sh.Home(ctx)
-		if herr != nil {
-			continue // unreachable hosts are reported below, with their probe failure
-		}
-		remoteHomes[sh.ID()] = filepath.Join(remote, ".gravy")
+		probes.Add(1)
+		go func() {
+			defer probes.Done()
+			remote, herr := sh.Home(probeCtx)
+			if herr != nil {
+				return // unreachable hosts are reported below, with their probe failure
+			}
+			homesMu.Lock()
+			defer homesMu.Unlock()
+			remoteHomes[sh.ID()] = filepath.Join(remote, ".gravy")
+		}()
 	}
+	probes.Wait()
 
-	pool, err := scheduler.NewStaticPool(ctx, hosts...)
-	if err != nil {
+	if poolErr != nil {
 		db.Close()
-		return nil, err
+		return nil, poolErr
 	}
 
 	// Each route resolves independently, so a ticket asking for "strong" can run a different

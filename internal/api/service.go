@@ -80,6 +80,9 @@ type Service interface {
 
 	// system
 	Status(ctx context.Context) (SystemStatus, error)
+	// ReconnectHost probes one configured host now and reports what it found. It is how a
+	// machine that was off rejoins the fleet without restarting the daemon.
+	ReconnectHost(ctx context.Context, id string) (HostStatus, error)
 	ExplainTicket(ctx context.Context, ticketID string) (Explanation, error)
 	// Events is the server-push stream. Clients render from it rather than polling; the
 	// returned stop function ends the subscription, and the channel closes when ctx does.
@@ -192,7 +195,7 @@ type ProjectStatus struct {
 	Blocked string
 }
 
-// HostStatus is one host's load.
+// HostStatus is one host's load and whether it is answering.
 type HostStatus struct {
 	ID          string
 	OS          string
@@ -201,6 +204,16 @@ type HostStatus struct {
 	TotalSlots  int
 	Tools       map[string]string
 	ProviderIDs []string
+	// Online is whether the last probe reached the machine. A configured host that is switched
+	// off reports false here forever rather than being quietly missing, because "yeet is off"
+	// is the answer to "why is nothing happening on yeet".
+	Online bool
+	// Unreachable is ssh's own reason, when there is one.
+	Unreachable string
+	// CheckedAt is when that was last established; zero means it has not been probed yet.
+	CheckedAt time.Time
+	// Checking is true while a reconnect is in flight.
+	Checking bool
 }
 
 // Explanation answers "why is this ticket not running?".

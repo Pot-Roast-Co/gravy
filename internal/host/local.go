@@ -253,7 +253,17 @@ func (p *localProcess) Wait() (ExitStatus, error) {
 func (h *LocalHost) Capabilities(ctx context.Context) (core.Caps, error) {
 	// Cheaper than ssh, but not free: each probe spawns a process per tool, and the dashboard
 	// asks on every refresh.
-	return h.capsCache.get(func() (core.Caps, error) { return h.probeCapabilities(ctx) })
+	return h.capsCache.get(ctx, h.probeCapabilities)
+}
+
+// Reachability reports the local machine as reachable once it has been probed. It is the
+// machine Gravy is running on: if it were not answering, nothing would be asking.
+func (h *LocalHost) Reachability() Reachability { return h.capsCache.state() }
+
+// Recheck re-probes this machine's toolchain. Cheap, and the honest answer to a human asking
+// Gravy to look again after installing something.
+func (h *LocalHost) Recheck(ctx context.Context) (core.Caps, error) {
+	return h.capsCache.recheck(ctx, h.probeCapabilities)
 }
 
 func (h *LocalHost) probeCapabilities(ctx context.Context) (core.Caps, error) {

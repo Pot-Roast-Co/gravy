@@ -115,6 +115,7 @@ const (
 	mListAttention    = "ListAttention"
 	mResolveAttention = "ResolveAttention"
 	mStatus           = "Status"
+	mReconnectHost    = "ReconnectHost"
 	mExplainTicket    = "ExplainTicket"
 	mEvents           = "Events"
 	mStreamLogs       = "StreamLogs"
@@ -144,6 +145,9 @@ type (
 	}
 	ticketIDParams struct {
 		TicketID string `json:"ticket_id"`
+	}
+	hostIDParams struct {
+		HostID string `json:"host_id"`
 	}
 	moveTicketParams struct {
 		ID    string `json:"id"`

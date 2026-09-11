@@ -17,7 +17,19 @@ import (
 // rewrite (ARCHITECTURE.md §1.1).
 type Host interface {
 	ID() string
+	// Capabilities describes the machine. The first call for a host may connect and block;
+	// every call after it must answer from memory, refreshing behind the caller if what it
+	// holds has gone stale. Callers on a request path — the scheduler's tick, the dashboard —
+	// rely on that, because a machine that is switched off does not refuse a connection, it
+	// simply never answers, and probing one inline stalls whatever asked.
 	Capabilities(ctx context.Context) (core.Caps, error)
+	// Reachability reports what Gravy last learned about this machine, from memory. It never
+	// touches the network, so a status screen can name every host that is off without waiting
+	// on any of them.
+	Reachability() Reachability
+	// Recheck probes now and waits, whatever is cached. It is the human saying they have just
+	// turned the machine back on.
+	Recheck(ctx context.Context) (core.Caps, error)
 	Exec(ctx context.Context, spec ExecSpec) (Process, error)
 	// StartDetached launches a process that outlives the caller, appending its output to
 	// logPath, and returns its pid. It exists so a client can bring up a daemon without
@@ -70,3 +82,25 @@ type FS interface {
 	RemoveAll(path string) error
 	Exists(path string) bool
 }
+
+// Reachability is what Gravy last learned about whether a machine answers.
+//
+// It is remembered rather than discovered on demand: a configured host that is switched off
+// must be reportable as "off" instantly and indefinitely, without the act of reporting it
+// costing a connection timeout.
+type Reachability struct {
+	// Online is true only when the last probe succeeded. A host that has never been probed is
+	// neither online nor known to be off, which is why Err and CheckedAt matter.
+	Online bool
+	// Err is why the last probe failed, verbatim from ssh, so the human is told "connection
+	// timed out" rather than "unreachable".
+	Err string
+	// CheckedAt is when that was learned. Zero means never probed.
+	CheckedAt time.Time
+	// Checking is true while a probe is in flight, so the UI can say so rather than appearing
+	// to have ignored the keystroke.
+	Checking bool
+}
+
+// Off reports whether this host is known not to answer.
+func (r Reachability) Off() bool { return !r.Online && !r.CheckedAt.IsZero() }

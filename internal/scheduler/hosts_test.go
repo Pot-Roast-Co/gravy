@@ -2,10 +2,15 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 )
 
 // TestPinnedProjectRunsOnlyOnItsHost is the point of pinning.
@@ -160,5 +165,138 @@ func TestAProjectRunsOnlyWhereItsCodeIs(t *testing.T) {
 	}
 	if !explained {
 		t.Errorf("the remote host was excluded without a reason: %v", rejections)
+	}
+}
+
+// slowHost answers its first capability probe only after a delay, or when the context is
+// cancelled — which is what an ssh probe to a machine that is switched off actually does.
+//
+// Like the real hosts, it then remembers the answer, including a failure. That is not
+// convenience: Host.Capabilities promises not to block once a host has been probed, and a fake
+// that re-probed every time would let a regression in that promise pass unnoticed here.
+type slowHost struct {
+	id    string
+	delay time.Duration
+	err   error
+
+	mu     sync.Mutex
+	probed bool
+	caps   core.Caps
+	perr   error
+}
+
+func (h *slowHost) ID() string { return h.id }
+
+func (h *slowHost) Capabilities(ctx context.Context) (core.Caps, error) {
+	h.mu.Lock()
+	if h.probed {
+		defer h.mu.Unlock()
+		return h.caps, h.perr
+	}
+	h.mu.Unlock()
+
+	var (
+		caps core.Caps
+		err  error
+	)
+	select {
+	case <-time.After(h.delay):
+		caps, err = core.Caps{OS: "linux"}, nil
+		if h.err != nil {
+			caps, err = core.Caps{}, h.err
+		}
+	case <-ctx.Done():
+		caps, err = core.Caps{}, ctx.Err()
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.probed, h.caps, h.perr = true, caps, err
+	return caps, err
+}
+
+func (h *slowHost) Exec(context.Context, host.ExecSpec) (host.Process, error) {
+	return nil, errors.New("not used")
+}
+func (h *slowHost) StartDetached(host.ExecSpec, string) (int, error) {
+	return 0, errors.New("not used")
+}
+func (h *slowHost) FS() host.FS { return nil }
+
+func (h *slowHost) Reachability() host.Reachability {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return host.Reachability{Online: h.probed && h.perr == nil, Checking: !h.probed}
+}
+
+func (h *slowHost) Recheck(ctx context.Context) (core.Caps, error) { return h.Capabilities(ctx) }
+func (h *slowHost) Slots() (int, int)                              { return 0, 1 }
+
+// TestStaticPoolProbesHostsConcurrently is the bug that made a sleeping laptop look like a
+// broken Gravy.
+//
+// A probe of a machine that is off does not fail fast; it costs ssh's whole connect timeout.
+// Probed one after another, every unreachable host added its own timeout to daemon startup, and
+// all of it is spent before the socket is bound — so the client gave up and reported that the
+// daemon would not start while it was still working through other people's computers. Probing
+// concurrently makes the cost one timeout however many hosts are asleep.
+func TestStaticPoolProbesHostsConcurrently(t *testing.T) {
+	t.Parallel()
+
+	const (
+		delay = 200 * time.Millisecond
+		hosts = 4
+	)
+
+	var list []host.Host
+	for i := range hosts {
+		list = append(list, &slowHost{id: fmt.Sprintf("h%d", i), delay: delay})
+	}
+
+	start := time.Now()
+	pool, err := NewStaticPool(context.Background(), list...)
+	if err != nil {
+		t.Fatalf("NewStaticPool: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// Serial probing would take hosts*delay. Half of that is comfortably above one probe and
+	// far below the serial cost, so this fails on a regression without flaking on a slow box.
+	if limit := hosts * delay / 2; elapsed >= limit {
+		t.Errorf("probing %d hosts took %s, want well under %s — probes are running serially",
+			hosts, elapsed, limit)
+	}
+	for _, h := range list {
+		if _, err := pool.Caps(context.Background(), h); err != nil {
+			t.Errorf("Caps(%s) = %v, want the probed capabilities", h.ID(), err)
+		}
+	}
+}
+
+// TestStaticPoolRecordsHostsThatMissTheDeadline keeps an unreachable machine from taking the
+// local queue down with it: the probe deadline expiring is recorded per host, exactly as a
+// refused connection would be, and the hosts that did answer are still usable.
+func TestStaticPoolRecordsHostsThatMissTheDeadline(t *testing.T) {
+	t.Parallel()
+
+	quick := &slowHost{id: "local", delay: 0}
+	asleep := &slowHost{id: "air", delay: time.Hour}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	pool, err := NewStaticPool(ctx, quick, asleep)
+	if err != nil {
+		t.Fatalf("NewStaticPool: %v", err)
+	}
+
+	if _, err := pool.Caps(context.Background(), quick); err != nil {
+		t.Errorf("Caps(local) = %v, want the local host to be usable", err)
+	}
+	if pool.ProbeErrors()["air"] == nil {
+		t.Error("a host that never answered is not in ProbeErrors; a ticket pinned to it would wait with no reason given")
+	}
+	if _, err := pool.Caps(context.Background(), asleep); err == nil {
+		t.Error("Caps(air) succeeded for a host that never answered")
 	}
 }

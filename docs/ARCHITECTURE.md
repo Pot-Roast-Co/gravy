@@ -117,10 +117,29 @@ package host
 
 type Host interface {
     ID() string
+    // Capabilities may block on its first call for a host; every call after it answers from
+    // memory and refreshes behind the caller. The scheduler tick and the dashboard rely on
+    // that: a machine that is switched off does not refuse a connection, it never answers,
+    // so probing one inline stalls whatever asked.
     Capabilities(ctx context.Context) (Caps, error)
+    // Reachability is what was last learned about the machine, from memory, never the network.
+    Reachability() Reachability
+    // Recheck probes now and waits, whatever is cached: the human saying they have just
+    // switched the machine back on.
+    Recheck(ctx context.Context) (Caps, error)
     Exec(ctx context.Context, spec ExecSpec) (Process, error)
     FS() FS
     Slots() (used, total int)
+}
+
+// Reachability is remembered rather than discovered on demand, so that a configured host which
+// is off is reportable as off instantly and indefinitely — the cost of finding out must not be
+// paid by every caller that merely wants to name it.
+type Reachability struct {
+    Online    bool      // the last probe succeeded
+    Err       string    // why not, verbatim from ssh
+    CheckedAt time.Time // zero means never probed
+    Checking  bool      // a probe is in flight
 }
 
 type Caps struct {
@@ -731,6 +750,7 @@ type Service interface {
 
     // system
     Status(ctx) (SystemStatus, error)                       // hosts, workers, providers, routes
+    ReconnectHost(ctx, id string) (HostStatus, error)       // probe a machine that was off
     ExplainTicket(ctx, ticketID string) (Explanation, error)
     Events(ctx) (<-chan Event, error)                        // server push
 }
