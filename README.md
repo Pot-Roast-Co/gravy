@@ -9,7 +9,8 @@ Gravy runs your existing coding agents — Claude Code, Codex, more later — as
 against a ticket queue. Each ticket gets an isolated Git worktree. Work is validated
 automatically. Nothing merges without you.
 
-> **Status: pre-alpha.** Under active development toward M0. Not yet usable.
+> **Status: alpha.** v0.1.0 is the first tagged release and is used daily on Linux and macOS.
+> Expect rough edges and breaking changes before 1.0.
 
 ## Why
 
