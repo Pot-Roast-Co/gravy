@@ -12,17 +12,18 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           cache: true
 
-      # v7 is the first release that supports golangci-lint v2, which .golangci.yml is
-      # written against. v6 rejects the version string outright.
+      # golangci-lint-action v7+ is required for golangci-lint v2, which .golangci.yml is
+      # written against; v6 rejects the version string outright. v9 moves to the Node 24
+      # runtime, which the runners now demand.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.1.6
 
@@ -43,8 +44,8 @@ jobs:
   lint-layers-self-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           cache: true
