@@ -45,6 +45,9 @@ type Repos interface {
 
 // Repo is the git surface the orchestrator uses.
 type Repo interface {
+	// Host is the machine the repository and its worktrees are on, and so the only machine
+	// on which a command can be run inside one of them.
+	Host() host.Host
 	Fetch(ctx context.Context) error
 	// TargetRef resolves the target branch to the ref holding freshly-fetched state.
 	TargetRef(ctx context.Context, branch string) (string, error)

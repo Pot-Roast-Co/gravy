@@ -58,10 +58,14 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 	if err != nil {
 		return res, fmt.Errorf("land: %w", err)
 	}
-	h := o.anyHost()
-	if h == nil {
-		return res, fmt.Errorf("land: no host registered")
+	repo, err := o.repos.For(project)
+	if err != nil {
+		return res, fmt.Errorf("land: %w", err)
 	}
+	// Validation before landing runs in the worktree, so it runs on the machine that has the
+	// worktree. Picking any registered host here once sent "mix deps.get" over ssh to a laptop
+	// that was closed, and the approval came back as a validation failure.
+	h := repo.Host()
 
 	// Review -> Landing. The transition table permits this edge only from Review, which is the
 	// approval gate expressed structurally rather than as a check that could be forgotten.
@@ -76,10 +80,6 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 		return res, fmt.Errorf("land: %w", err)
 	}
 
-	repo, err := o.repos.For(project)
-	if err != nil {
-		return res, fmt.Errorf("land: %w", err)
-	}
 	wt := git.Worktree{Path: ticket.WorktreePath, Branch: ticket.Branch, Base: project.TargetBranch}
 
 	state, err := l.land(ctx, &res, ticket, project, repo, wt, h)
