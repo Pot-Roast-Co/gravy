@@ -2,14 +2,17 @@ package agentrun_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/agentrun"
 	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/host"
 	"github.com/pot-roast-co/gravy/internal/provider/fake"
 )
 
@@ -448,5 +451,53 @@ func TestApproveClearsTheQueue(t *testing.T) {
 	}
 	if len(open) != 0 {
 		t.Errorf("queue still holds %+v after the ticket was approved and landed", open)
+	}
+}
+
+// closedLaptop is a registered host that is switched off. Any command sent to it fails the way
+// ssh does when the machine never answers.
+type closedLaptop struct {
+	host.Host
+	id    string
+	execs atomic.Int32
+}
+
+func (h *closedLaptop) ID() string { return h.id }
+
+func (h *closedLaptop) Exec(context.Context, host.ExecSpec) (host.Process, error) {
+	h.execs.Add(1)
+	return nil, fmt.Errorf("ssh: connect to host %s port 22: Connection timed out", h.id)
+}
+
+// TestLandValidatesOnTheWorktreesHost is a real failure with a second machine configured.
+//
+// The lander took whatever host came out of the map for its validation, which is random. With a
+// laptop registered and closed, roughly every other approval sent "mix deps.get" over ssh to it,
+// ssh timed out, and the ticket was parked as validation_failed with no code at fault. The
+// worktree is on one machine; that is where its validation runs.
+func TestLandValidatesOnTheWorktreesHost(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{{Name: "deps", Cmd: "true", Required: true}})
+	landReady(t, h, "feature.txt", "the work\n")
+
+	// Enough closed laptops that a random pick would almost never land on the right host.
+	var laptops []*closedLaptop
+	for i := 0; i < 8; i++ {
+		l := &closedLaptop{id: fmt.Sprintf("air-%d", i)}
+		laptops = append(laptops, l)
+		h.orch.RegisterHost(l)
+	}
+
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if land.State != core.StateDone {
+		t.Fatalf("state = %s, want done; validation: %s", land.State, land.Validation.Summary())
+	}
+	for _, l := range laptops {
+		if n := l.execs.Load(); n != 0 {
+			t.Errorf("host %s ran %d command(s); the worktree is not there", l.id, n)
+		}
 	}
 }

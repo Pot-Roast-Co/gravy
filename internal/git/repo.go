@@ -28,6 +28,12 @@ type LocalRepo struct {
 	runner       runner
 }
 
+// Host returns the machine this repository and its worktrees live on.
+//
+// Anything that runs a command inside one of those worktrees has to run it here: the path is
+// interpreted on this host and means nothing to any other.
+func (r *LocalRepo) Host() host.Host { return r.runner.host }
+
 // Option configures a LocalRepo.
 type Option func(*LocalRepo)
 
