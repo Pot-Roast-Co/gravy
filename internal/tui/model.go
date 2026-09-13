@@ -388,6 +388,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screens[SectionReview] = screen
 		return m, cmd
 
+	case projectBacklogMsg:
+		for i, project := range m.status.Projects {
+			if project.Project.ID == msg.projectID {
+				m.projectIdx = i
+				m.active, m.showHelp = SectionBacklog, false
+				m.filter, m.focus, m.filtering = "", "", false
+				return m, entered("")
+			}
+		}
+		return m, refreshStatus(m.svc)
+
 	case gotoMsg:
 		m.active, m.showHelp = msg.section, false
 		m.focus = msg.focus

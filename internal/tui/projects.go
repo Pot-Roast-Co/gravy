@@ -21,6 +21,8 @@ type projectsLoadedMsg struct {
 	err      error
 }
 
+type projectBacklogMsg struct{ projectID string }
+
 // projectDoneMsg reports a create or an edit.
 type projectDoneMsg struct {
 	verb string
@@ -265,7 +267,7 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 		// Filtering the frame to this project and going to its backlog is what "see its
 		// tickets" means, rather than building a second ticket list here.
 		if cur, ok := p.current(); ok {
-			return p, Goto(SectionBacklog, cur.ID)
+			return p, func() tea.Msg { return projectBacklogMsg{projectID: cur.ID} }
 		}
 		return p, nil
 

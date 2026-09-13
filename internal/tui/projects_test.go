@@ -183,6 +183,9 @@ func TestProjectsTypingDoesNotTriggerGlobals(t *testing.T) {
 // TestProjectsEnterOpensItsTickets rather than building a second ticket list here.
 func TestProjectsEnterOpensItsTickets(t *testing.T) {
 	m := openProjects(t, projectFixture())
+	m.projectIdx = 1
+	m.filter = "unrelated text"
+	m = selectProject(t, m, "gravy")
 	m, cmd := sendCmd(t, m, key("enter"))
 	if cmd == nil {
 		t.Fatal("enter did nothing")
@@ -190,6 +193,14 @@ func TestProjectsEnterOpensItsTickets(t *testing.T) {
 	m = send(t, m, cmd())
 	if m.active != SectionBacklog {
 		t.Errorf("enter went to %v, want the backlog", m.active)
+	}
+	if m.projectName() != "gravy" || m.filter != "" {
+		t.Fatalf("wrong filters: project %q, text %q", m.projectName(), m.filter)
+	}
+	q := newQueue(core.StateBacklog)
+	q.items = []api.TicketDetail{{Project: core.Project{Name: "gravy"}, Ticket: core.Ticket{Title: "Archive projects"}}, {Project: core.Project{Name: "pocket-blooms"}, Ticket: core.Ticket{Title: "Other work"}}}
+	if visible := q.visible(m.viewContext()); len(visible) != 1 || visible[0].Ticket.Title != "Archive projects" {
+		t.Fatalf("visible %+v", visible)
 	}
 }
 
