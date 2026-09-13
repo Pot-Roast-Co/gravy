@@ -41,12 +41,14 @@ type Host interface {
 
 // ExecSpec describes a command to run.
 type ExecSpec struct {
-	Cmd     string
-	Args    []string
-	Dir     string
-	Env     map[string]string
-	Timeout time.Duration
-	Stdin   io.Reader
+	Cmd  string
+	Args []string
+	Dir  string
+	Env  map[string]string
+	// UnsetEnv removes inherited and explicitly supplied variables. Removal wins.
+	UnsetEnv []string
+	Timeout  time.Duration
+	Stdin    io.Reader
 }
 
 // Process is a running command. Output streams as it is produced; it is never buffered to

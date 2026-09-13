@@ -151,7 +151,12 @@ func (l *Local) UpdateProject(ctx context.Context, p core.Project) error {
 	if p.MergeMode != "" {
 		current.MergeMode = p.MergeMode
 	}
+	if err := core.ValidatePreviewServices(p.PreviewServices); err != nil {
+		return err
+	}
+	current.PreviewServices = append([]core.PreviewService(nil), p.PreviewServices...)
 	current.Validation = p.Validation
+	current.PreviewCommand = strings.TrimSpace(p.PreviewCommand)
 	// Buckets, allowlist and notes are edited on the same screen as everything above. Copying
 	// only some of the fields a client sends is a save that reports success and changes
 	// nothing — which is how a project's bucket override could be typed in, redrawn from the

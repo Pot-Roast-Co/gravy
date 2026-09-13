@@ -357,7 +357,7 @@ func TestEnabledProviders(t *testing.T) {
 	c := Default()
 	c.Providers["disabled-one"] = Provider{Enabled: false, Command: "nope"}
 	got := c.EnabledProviders()
-	want := []string{"claude-code", "codex"}
+	want := []string{"claude-code", "codex", "copilot"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("EnabledProviders() = %v, want %v", got, want)
 	}

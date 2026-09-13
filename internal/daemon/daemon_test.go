@@ -261,3 +261,46 @@ func TestReconcileRescuesAnInterruptedRun(t *testing.T) {
 		t.Errorf("second Reconcile = (%d, %v), want (0, nil)", touched, err)
 	}
 }
+
+func TestReconcileRecoversReviewAfterRunEnded(t *testing.T) {
+	for _, verdict := range []string{"", `{"overall":"pass"}`} {
+		t.Run(verdict, func(t *testing.T) {
+			home, db, svc := fixture(t)
+			ctx := context.Background()
+			tk := core.Ticket{ID: "review-ticket", ProjectID: "p1", Title: "finished implementation", State: core.StateReviewing, Route: core.RouteImplementation, WorktreePath: "preserved-worktree", Feedback: "preserved feedback", CreatedAt: time.Now()}
+			if err := db.CreateTicket(ctx, tk); err != nil {
+				t.Fatal(err)
+			}
+			ended := time.Now().Add(-time.Hour)
+			run := core.Run{ID: "ended-run", TicketID: tk.ID, HostID: "local", ProviderID: "codex", Model: "gpt-6-astra", State: core.StateValidating, FailureClass: core.Success, StartedAt: ended, EndedAt: &ended, Verdict: verdict}
+			if err := db.CreateRun(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+			d := New(home, svc, idleRunner{}, db, func() string { return "recovered-review" }, nil)
+			if n, err := d.Reconcile(ctx); err != nil || n != 1 {
+				t.Fatalf("reconcile %d: %v", n, err)
+			}
+			got, err := db.GetTicket(ctx, tk.ID)
+			if err != nil || got.State != core.StateReview || got.WorktreePath != tk.WorktreePath || got.Feedback != tk.Feedback {
+				t.Fatalf("ticket %+v, %v", got, err)
+			}
+			saved, err := db.GetRun(ctx, run.ID)
+			if err != nil || saved.FailureClass != core.Success || saved.Verdict == "" {
+				t.Fatalf("run %+v, %v", saved, err)
+			}
+			if verdict != "" && saved.Verdict != verdict {
+				t.Fatal("replaced a completed verdict")
+			}
+			if verdict == "" && !strings.Contains(saved.Verdict, "interrupted") && !strings.Contains(saved.Verdict, "daemon stopped") {
+				t.Fatal("missing interruption explanation")
+			}
+			attention, err := db.ListOpenAttention(ctx)
+			if err != nil || len(attention) != 1 || attention[0].Reason != core.ReasonReviewPending {
+				t.Fatalf("attention %+v, %v", attention, err)
+			}
+			if n, err := d.Reconcile(ctx); err != nil || n != 0 {
+				t.Fatalf("second reconcile %d: %v", n, err)
+			}
+		})
+	}
+}

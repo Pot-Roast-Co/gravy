@@ -23,6 +23,9 @@ type PlannedTicket struct {
 
 // PlanTurn is one request to the planner.
 type PlanTurn struct {
+	// History and Agent let a fallback rebuild the conversation without reusing another provider's session.
+	History string
+	Agent   string
 	Project Project
 	// Backlog is what already exists, so "what should be next" is answered against real work
 	// rather than in a vacuum.
@@ -42,8 +45,7 @@ type PlanResult struct {
 	Session string
 	// Agent names the provider and model running the conversation, for the screen to show.
 	//
-	// Set when a conversation starts, and empty on a resume: resuming is bound to the session's
-	// agent and never re-resolves a route, so there is no fresh choice to report.
+	// Set on every successful turn, including when a cooldown changes the selected model.
 	Agent string
 	// Reply is what the planner said, for the human to read and push back on.
 	Reply string

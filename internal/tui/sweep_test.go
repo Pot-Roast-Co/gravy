@@ -230,7 +230,7 @@ func TestTypingIntoAPromptDoesNotQuit(t *testing.T) {
 			t.Fatal("typing q into the feedback prompt quit the program")
 		}
 	}
-	if !strings.Contains(m.View(), "what needs to change: q") {
+	if !strings.Contains(m.View(), "q▏") {
 		t.Errorf("the prompt did not receive the q:\n%s", m.View())
 	}
 

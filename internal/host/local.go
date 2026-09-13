@@ -86,8 +86,8 @@ func (h *LocalHost) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 
 	cmd := exec.Command(spec.Cmd, spec.Args...) //nolint:gosec // running configured commands is this package's purpose
 	cmd.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), envSlice(spec.Env)...)
+	if len(spec.Env) > 0 || len(spec.UnsetEnv) > 0 {
+		cmd.Env = executionEnv(spec)
 	}
 	cmd.Stdin = spec.Stdin
 	setProcessGroup(cmd)
@@ -431,8 +431,8 @@ func (h *LocalHost) StartDetached(spec ExecSpec, logPath string) (int, error) {
 
 	cmd := exec.Command(spec.Cmd, spec.Args...) //nolint:gosec // running configured commands is this package's purpose
 	cmd.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), envSlice(spec.Env)...)
+	if len(spec.Env) > 0 || len(spec.UnsetEnv) > 0 {
+		cmd.Env = executionEnv(spec)
 	}
 	cmd.Stdin = devNull
 	cmd.Stdout = logFile
@@ -449,4 +449,23 @@ func (h *LocalHost) StartDetached(spec ExecSpec, logPath string) (int, error) {
 		return pid, fmt.Errorf("start %s: release: %w", spec.Cmd, err)
 	}
 	return pid, nil
+}
+
+func executionEnv(spec ExecSpec) []string {
+	env := append(os.Environ(), envSlice(spec.Env)...)
+	kept := env[:0]
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		remove := false
+		for _, name := range spec.UnsetEnv {
+			if key == name {
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }

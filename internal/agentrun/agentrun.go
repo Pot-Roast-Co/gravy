@@ -326,7 +326,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, err
 	}
 
-	// A provider-side failure has already parked the ticket in Needs You. Falling through here
+	// A provider-side failure has already requeued the ticket or parked it for attention. Falling through here
 	// would tell the state machine that validation passed on a ticket that never validated.
 	if loop.parked {
 		current, gerr := o.store.GetTicket(ctx, ticket.ID)
@@ -633,7 +633,8 @@ func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, project c
 	return results, nil
 }
 
-// handleProviderFailure cools down the model and parks the ticket.
+// handleProviderFailure cools down the model and requeues quota/rate-limit failures.
+// Authentication and host failures still need human attention.
 //
 // The self-correction budget is deliberately untouched: it exists for the agent failing at the
 // work, and a quota limit says nothing about whether the agent could fix its own build error.
@@ -667,6 +668,19 @@ func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ti
 		}); err != nil {
 			return fmt.Errorf("agentrun: record cooldown: %w", err)
 		}
+	}
+
+	if outcome.Class == provider.QuotaExhausted || outcome.Class == provider.RateLimited {
+		// Persist the cooldown before releasing the ticket, so the scheduler cannot
+		// immediately select the same exhausted choice. It resolves the route afresh;
+		// if all choices are cooling, Ready waits without holding a worker or asking
+		// the human to retry. Keep the existing worktree and feedback intact.
+		if _, err := o.store.SetTicketState(ctx, ticket.ID, core.EventProviderRetry); err != nil {
+			return fmt.Errorf("agentrun: requeue after provider limit: %w", err)
+		}
+		o.log.Info("provider limit; ticket returned to routing", "ticket", ticket.ID,
+			"provider", a.ProviderID, "model", a.Model, "class", outcome.Class.String())
+		return nil
 	}
 
 	reason := core.ReasonValidationFailed

@@ -17,6 +17,8 @@ type Planner interface {
 
 // PlanReq is one turn of a planning conversation.
 type PlanReq struct {
+	History   string
+	Agent     string
 	ProjectID string
 	// Message is what the human said. Empty on a new conversation means "what should be next?".
 	Message string
@@ -65,7 +67,7 @@ func (l *Local) Plan(ctx context.Context, req PlanReq) (PlanReply, error) {
 
 	res, err := l.planner.Plan(ctx, core.PlanTurn{
 		Project: project, Backlog: backlog,
-		Session: req.Session, Message: req.Message, RunID: req.RunID,
+		Session: req.Session, Message: req.Message, RunID: req.RunID, History: req.History, Agent: req.Agent,
 	})
 	if err != nil {
 		return PlanReply{Session: res.Session}, err

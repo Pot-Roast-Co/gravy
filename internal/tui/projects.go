@@ -189,6 +189,8 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 				return p, nil
 			}
 			p.mode, p.input, p.notice, p.dirty = projectConfig, "", "", true
+			p.fields = projectFields(p.agents, p.hosts, p.draft)
+			p.field = min(p.field, len(p.fields)-1)
 		case key == "tab":
 			// The daemon knows every bucket, host and model. Reciting them from memory is
 			// how the syntax gets learned by getting it wrong.
@@ -246,7 +248,8 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 		// whole fleet.
 		if cur, ok := p.current(); ok {
 			p.mode, p.draft, p.dirty, p.field = projectConfig, cur, false, 0
-			p.fields = projectFields(p.agents, p.hosts)
+			p.draft.PreviewServices = append([]core.PreviewService(nil), cur.PreviewServices...)
+			p.fields = projectFields(p.agents, p.hosts, p.draft)
 		}
 		return p, nil
 
@@ -293,6 +296,10 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 // On leaving rather than on every keystroke: a project with a half-typed host is not a project
 // the scheduler should see, and writing each field as it is typed would publish exactly that.
 func (p *projects) leaveConfig(ctx ViewContext) tea.Cmd {
+	if err := core.ValidatePreviewServices(p.draft.PreviewServices); err != nil {
+		p.notice = err.Error()
+		return nil
+	}
 	p.mode = projectBrowsing
 	if !p.dirty {
 		return nil
@@ -424,8 +431,7 @@ func (p *projects) View(ctx ViewContext) string {
 		case projectConfirmDelete:
 			label = "  delete "
 		}
-		lines = append(lines, "",
-			th.Muted.Render(label)+th.Accent.Render(p.input)+th.Muted.Render("▏"))
+		lines = append(lines, inputLines(label, p.input, ctx.Width, max(2, ctx.Height/2), th)...)
 	}
 
 	return p.scrolled(lines, ctx, th)
@@ -442,8 +448,7 @@ func (p *projects) configLines(ctx ViewContext, th Theme) []string {
 
 		value := f.Get(p.draft)
 		if p.mode == projectEditingField && i == p.field {
-			out = append(out, style.Render(fmt.Sprintf("  %s%-18s", marker, f.Label))+
-				th.Accent.Render(p.input)+th.Muted.Render("▏"))
+			out = append(out, inputLines(f.Label, p.input, ctx.Width, max(2, ctx.Height/2), th)...)
 			if len(p.matches) > 1 {
 				out = append(out, th.Muted.Render("      "+matchList(p.matches, max(20, ctx.Width-10))))
 			}
@@ -532,9 +537,9 @@ func serialLabel(p core.Project) string {
 
 // scrolled draws the body at the current offset, with the footer pinned to the bottom.
 func (p *projects) scrolled(lines []string, ctx ViewContext, th Theme) string {
-	footer := p.footer(th)
+	footer := p.footer(th, ctx.Width)
 
-	body := ctx.Height - 2
+	body := ctx.Height - 2 - strings.Count(footer, "\n")
 	if body < 1 {
 		return trunc(footer, ctx.Width)
 	}
@@ -545,6 +550,9 @@ func (p *projects) scrolled(lines []string, ctx ViewContext, th Theme) string {
 
 	view := body - 1
 	maxOffset := len(lines) - view
+	if row := cursorRow(lines); row >= 0 {
+		p.scroll = max(0, row-view+1)
+	}
 	p.scroll = clamp(p.scroll, 0, maxOffset)
 
 	out := append([]string{}, lines[p.scroll:p.scroll+view]...)
@@ -553,10 +561,12 @@ func (p *projects) scrolled(lines []string, ctx ViewContext, th Theme) string {
 	return strings.Join(append(out, "", footer), "\n")
 }
 
-func (p *projects) footer(th Theme) string {
-	if p.notice != "" {
-		return th.Warning.Render("  " + p.notice)
+func (p *projects) footer(th Theme, widths ...int) (result string) {
+	width := 100
+	if len(widths) > 0 {
+		width = widths[0]
 	}
+	defer func() { result = actionFooter(p.notice, result, width, th) }()
 	switch p.mode {
 	case projectNaming:
 		return th.Muted.Render("  enter to create · esc to cancel")
@@ -570,5 +580,5 @@ func (p *projects) footer(th Theme) string {
 		return th.Muted.Render("  tab completes · enter to accept · ctrl+u clear · esc to cancel")
 	}
 	return th.Muted.Render(
-		"  c settings · e notes · n new · D delete · enter its tickets · P add · j/k move")
+		"  / search projects · c settings · e notes · n new · D delete · enter its tickets · P add · j/k move")
 }

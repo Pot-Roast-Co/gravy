@@ -51,6 +51,7 @@ func TestProjectDocsPriorityOrder(t *testing.T) {
 		files map[string]string
 		want  []string
 	}{
+		{name: "Copilot instructions without CLAUDE.md", files: map[string]string{".github/copilot-instructions.md": "use tabs", "README.md": "readme"}, want: []string{".github/copilot-instructions.md", "README.md"}},
 		{
 			name:  "conventions come before design docs",
 			files: map[string]string{"README.md": "readme", "CLAUDE.md": "conventions"},

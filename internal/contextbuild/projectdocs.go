@@ -38,6 +38,7 @@ var ProjectDocFiles = []string{
 	// is the document an agent is judged against.
 	"CLAUDE.md",
 	"AGENTS.md",
+	".github/copilot-instructions.md",
 	"CONTRIBUTING.md",
 	".github/CONTRIBUTING.md",
 	// Design docs: what the thing is and how it is shaped.

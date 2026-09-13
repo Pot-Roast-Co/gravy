@@ -29,8 +29,8 @@ type projectField struct {
 //
 // agents and hosts are what this build can actually run, so a typo is refused here rather than
 // discovered by a ticket that waits on a machine or a model that does not exist.
-func projectFields(agents []api.AgentOption, hosts []string) []projectField {
-	return []projectField{
+func projectFields(agents []api.AgentOption, hosts []string, projects ...core.Project) []projectField {
+	fields := []projectField{
 		{
 			Label: "host",
 			Hint:  "the machine this project's clone is on",
@@ -105,6 +105,12 @@ func projectFields(agents []api.AgentOption, hosts []string) []projectField {
 			},
 		},
 		{
+			Label: "preview command",
+			Hint:  "starts the app from a ticket worktree in Review (e.g. npm run dev)",
+			Get:   func(p core.Project) string { return p.PreviewCommand },
+			Set:   func(p *core.Project, v string) error { p.PreviewCommand = strings.TrimSpace(v); return nil },
+		},
+		{
 			Label: "target branch",
 			Hint:  "the branch approved work merges into",
 			Get:   func(p core.Project) string { return p.TargetBranch },
@@ -159,6 +165,11 @@ func projectFields(agents []api.AgentOption, hosts []string) []projectField {
 			},
 		},
 	}
+	var project core.Project
+	if len(projects) > 0 {
+		project = projects[0]
+	}
+	return append(fields, previewFields(project)...)
 }
 
 // parseAllowedCommands reads "mix, cd, go" into allowlist patterns.

@@ -110,7 +110,7 @@ func (d dashboard) View(ctx ViewContext) string {
 	appendSection("READY", len(ctx.Status.Ready), ready,
 		[]string{"the queue is empty", `add work: gravy ticket add "<title>"`})
 
-	return window(lines, selected, ctx.Height, th)
+	return pinFooter(lines, selected, ctx.Height, th, actionFooter("", th.Muted.Render("enter open · j/k move · g/G first/last · S review sweep · P add project"), ctx.Width, th))
 }
 
 // window scrolls so the selected line stays visible, and reports what it hid rather than

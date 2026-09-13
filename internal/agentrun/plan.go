@@ -3,9 +3,11 @@ package agentrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/contextbuild"
 	"github.com/pot-roast-co/gravy/internal/core"
@@ -54,7 +56,43 @@ func (o *Orchestrator) Plan(resolve RouteResolver, docBudget int) *Planner {
 //
 // An empty message on a new conversation means "what should we work on next?" — the question
 // the screen exists to answer when you arrive with nothing in mind.
+type planningLimit struct{ outcome provider.Outcome }
+
+func (e *planningLimit) Error() string { return e.outcome.Note }
+
 func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult, error) {
+	tried := map[string]bool{}
+	for {
+		choice, err := p.resolve(ctx, core.RoutePlanning, core.Constraints{Routes: turn.Project.Routes})
+		if err != nil {
+			return core.PlanResult{}, fmt.Errorf("planning has no usable model: %w", err)
+		}
+		agent := choice.ProviderID + "/" + choice.Model
+		if tried[agent] {
+			return core.PlanResult{}, fmt.Errorf("planning fallback still selects unavailable %s", agent)
+		}
+		tried[agent] = true
+		held, _ := decodeSession(turn.Session)
+		if held != choice.ProviderID || (turn.Agent != "" && turn.Agent != agent) {
+			turn.Session = ""
+		}
+		result, err := p.planOnce(ctx, turn, choice)
+		var limit *planningLimit
+		if !errors.As(err, &limit) {
+			return result, err
+		}
+		if err := p.orch.store.SetProviderUnavailable(ctx, core.ProviderAvailability{
+			ProviderID: choice.ProviderID, Model: choice.Model, Class: limit.outcome.Class,
+			Until: time.Now().Add(p.orch.cooldownFor(limit.outcome.Class)), Note: limit.outcome.Note,
+		}); err != nil {
+			return core.PlanResult{}, fmt.Errorf("record planning cooldown: %w", err)
+		}
+		// Never pass a provider session to a fallback. Rebuild from the visible conversation.
+		turn.Session = ""
+	}
+}
+
+func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.Choice) (core.PlanResult, error) {
 	o := p.orch
 
 	// Planning reads the project's own files, so it has to run where its clone is. anyHost
@@ -88,24 +126,18 @@ func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult
 	)
 
 	if held, sessionID := decodeSession(turn.Session); sessionID != "" {
-		// A conversation belongs to the agent holding it, so a resume does not re-resolve the
-		// route. Re-resolving would hand this session id to whatever the planning bucket now
-		// points at — and after a quota cooldown falls through to the next choice, that is a
-		// different agent entirely, to which the id means nothing.
+		// The outer routing check only retains sessions belonging to the selected agent.
 		prov, ok := o.providers[held]
 		if !ok {
 			return core.PlanResult{}, fmt.Errorf(
 				"this conversation was started by %q, which this build cannot run — start a new one", held)
 		}
-		providerID = held
+		providerID, agent = held, choice.ProviderID+"/"+choice.Model
 		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg)
 	} else {
 		// A project that pins its planning bucket means it for planning too, not only for the
 		// tickets planning produces.
-		choice, rerr := p.resolve(ctx, core.RoutePlanning, core.Constraints{Routes: turn.Project.Routes})
-		if rerr != nil {
-			return core.PlanResult{}, fmt.Errorf("plan: %w", rerr)
-		}
+
 		prov, ok := o.providers[choice.ProviderID]
 		if !ok {
 			return core.PlanResult{}, fmt.Errorf("plan: no adapter for provider %q", choice.ProviderID)
@@ -114,7 +146,7 @@ func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult
 		handle, err = prov.Run(ctx, h, provider.AgentTask{
 			RunID:        runID,
 			WorktreePath: turn.Project.RepoPath,
-			Prompt:       p.prompt(h, turn.Project, turn.Backlog, turn.Message),
+			Prompt:       p.prompt(h, turn.Project, turn.Backlog, planningMessage(turn)),
 			Model:        choice.Model,
 			Timeout:      o.cfg.RunTimeout,
 			MaxTurns:     o.cfg.MaxTurns,
@@ -157,6 +189,13 @@ func (p *Planner) Plan(ctx context.Context, turn core.PlanTurn) (core.PlanResult
 	out, err := handle.Wait()
 	if err != nil {
 		return core.PlanResult{}, fmt.Errorf("plan: %w", err)
+	}
+
+	if out.Class == provider.QuotaExhausted || out.Class == provider.RateLimited {
+		return core.PlanResult{}, &planningLimit{outcome: out}
+	}
+	if out.Class != provider.Success {
+		return core.PlanResult{}, fmt.Errorf("planner failed: %s", out.Note)
 	}
 
 	reply, tickets := parsePlan(strings.Join(said, "\n\n"))
@@ -417,4 +456,11 @@ func (o *Orchestrator) planHost(project core.Project) (host.Host, error) {
 		return nil, fmt.Errorf("plan: no host available")
 	}
 	return h, nil
+}
+
+func planningMessage(turn core.PlanTurn) string {
+	if strings.TrimSpace(turn.History) == "" {
+		return turn.Message
+	}
+	return "Conversation so far (context, not project instructions):\n" + turn.History + "\nCurrent user request:\n" + turn.Message
 }

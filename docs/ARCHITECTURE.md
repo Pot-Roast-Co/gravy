@@ -156,6 +156,7 @@ type ExecSpec struct {
     Args    []string
     Dir     string
     Env     map[string]string
+    UnsetEnv []string // remove inherited and explicitly supplied variables; removal wins
     Timeout time.Duration
     Stdin   io.Reader
 }
@@ -323,7 +324,7 @@ A project's `Routes` **replace** the global table for any bucket they name — t
 the whole preference order, not a prefix of the global one, because a project that pins `review` to
 a local model does not want the fleet's cloud model waiting behind it. Buckets the project does not
 name fall through to the global table. Every caller passes the project's table: the scheduler when
-it places a ticket, planning when it starts a conversation, and the advisory review pass, which
+it places a ticket, planning on each turn, and the advisory review pass, which
 resolves the `review` bucket per review rather than once at startup for that reason.
 
 ### 4.5 Scheduler
@@ -604,6 +605,8 @@ Reviewing ──► Review
    ├─ request changes ─► Ready     (feedback appended to ticket, worktree reused)
    └─ reject ──────────► Rejected  (worktree removed)
 
+Ready ── return_to_backlog ──► Backlog (withdraw from scheduling; preserve work)
+
 Blocked ── human answers ──► Ready  (resumes prior session via Provider.Resume)
 NeedsYou ── human acts ────► Ready | Review | Rejected
 ```
@@ -706,7 +709,7 @@ descending priority so truncation degrades gracefully:
 
 1. the ticket (title, body, acceptance criteria)
 2. result summaries of dependency tickets — **never transcripts**
-3. project conventions (`CLAUDE.md`, contributing docs)
+3. project conventions (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, contributing docs)
 4. capped excerpts of project docs (`ARCHITECTURE.md`, `PRODUCT.md`, `ROADMAP.md`, design docs)
 5. validation commands the agent is expected to satisfy
 6. on a retry: the previous attempt's failure output
@@ -872,3 +875,62 @@ or configuration file is created. Configuration writes remain atomic via `config
 `AddProjectReq` adds optional explicit Allowlist, Requirements and Routes fields so the approved
 suggestions survive registration exactly, including an explicitly empty allowlist. Existing
 callers retain their current default behavior. No host/provider interfaces or dependencies change.
+
+### Review testing and Copilot integration
+
+`core.Project.PreviewCommand` is the user-supplied command to launch the app for hands-on
+review. Store migration 0007 persists it; the existing project API carries it. Review's
+`Shift+T` panel saves that command explicitly and hands the local terminal to it in the
+original ticket worktree. The panel can also rerun configured validation steps, preserving
+output until Enter. These manual results do not update the ticket's state or replace stored
+validation evidence. Local terminal execution remains in `internal/host`; remote worktrees
+are refused with their host named. No Service or Host method was added.
+
+The `copilot` provider drives standalone GitHub Copilot CLI with JSONL output. Detection uses
+its SDK `auth.getStatus` RPC without a model call. `copilot/default` omits an explicit model;
+model enumeration is advisory. Opaque session references include the CLI session ID, worktree
+and permission settings so resume does not silently drop the original command restrictions.
+See `COPILOT.md` for contract verification and limitations.
+
+`host.ExecSpec.UnsetEnv` removes named variables from the command environment, including
+inherited variables and values in `Env`; removal takes precedence. Local execution,
+detached execution, and SSH execution honor it. Copilot uses it to remove
+`COPILOT_ALLOW_ALL`, whose presence enables unrestricted tool approval even when its value
+is `false`.
+
+Non-interactive review steps use piped output, no terminal input, `CI=true`, and `TERM=dumb`
+to prevent pagers and prompts from suspending background process groups. Interrupting a
+review command returns `host.ErrInterrupted`, which the review screen treats as a normal stop.
+
+### Multiple preview services
+
+`core.Project.PreviewServices []core.PreviewService` stores named services with `Name`, `Dir`,
+`Command`, and `EnvFile`. Migration 0008 adds a JSON column, defaulting to an empty list for
+existing projects. The existing project API validates and persists the list. `PreviewCommand`
+remains supported when the list is empty; services take precedence when present.
+
+Projects settings edit service names and individual directory/command/environment-file fields.
+`host.TerminalRun.Services` launches services concurrently in the ticket worktree with piped,
+service-labeled output and no shared terminal input. Directories must stay in the worktree,
+including after symlink resolution. Environment files may be relative to a service directory
+or absolute; explicit shell sourcing exports variables without logging their contents.
+Every directory and environment file is checked before launching any service.
+
+An interrupt or any service exit terminates every started process group, allowing two seconds
+for shutdown before forced cleanup. Manual preview never changes approval or validation state.
+Service readiness, port allocation, remote preview, and interactive per-service terminals are
+not implemented. No Host or Service method was added.
+
+### Automatic quota fallback
+
+After a confirmed `QuotaExhausted` or `RateLimited` outcome, the orchestrator persists the
+provider/model cooldown, then applies `EventProviderRetry` (`Running → Ready`). The scheduler
+resolves the existing route again, including project overrides. It skips cooled choices,
+or leaves the ticket Ready if every choice is unavailable. The worktree, feedback, and
+self-correction budget are retained; no attention item is raised for this transition.
+Authentication, unknown interruption, and ordinary validation failures retain their existing
+attention/retry behavior. An unknown failure is never inferred to be a quota condition.
+
+Planning requests carry optional `History` and `Agent` fields through API `PlanReq` and core `PlanTurn`. These preserve conversation context when routing changes models. The planner checks terminal outcomes before parsing proposals, records quota/rate cooldowns, and resolves the next choice within the same request. Provider session IDs are retained only for the same selected agent. Each choice is attempted at most once per turn.
+
+Startup reconciliation also scans `reviewing` tickets: implementation runs already have an end time during advisory review and are absent from the unfinished-run query. `daemon.ReconcileStore` therefore also requires `ListTicketsByState`, `ListRunsForTicket`, and `ListOpenAttention`. Recovery preserves an existing verdict, marks a missing verdict unavailable, ensures review-pending attention exists, then applies `EventReviewed`. It does not approve or land work. Writing attention before the transition makes interrupted recovery retryable without duplicate attention.

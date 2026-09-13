@@ -28,6 +28,10 @@ type Project struct {
 	Requirements Requirements
 	// Validation steps run inside the worktree, in order.
 	Validation []Step
+	// PreviewCommand starts this project's app for hands-on review in the ticket worktree.
+	PreviewCommand string
+	// PreviewServices run together during manual review; when set they replace PreviewCommand.
+	PreviewServices []PreviewService
 	// Allowlist is what an agent may do here without asking.
 	Allowlist Allowlist
 	// Routes overrides the global route table for this project.
@@ -216,4 +220,13 @@ type ProviderAvailability struct {
 	// guessed backoff whenever one is available.
 	Until time.Time
 	Note  string
+}
+
+// PreviewService is one process in a project's manual preview.
+// Dir is relative to the ticket worktree; EnvFile is relative to Dir or absolute.
+type PreviewService struct {
+	Name    string
+	Dir     string
+	Command string
+	EnvFile string
 }

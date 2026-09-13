@@ -101,3 +101,6 @@ func setNewSession(cmd *exec.Cmd) {
 	}
 	cmd.SysProcAttr.Setsid = true
 }
+
+// terminateGroup gives preview services a chance to shut down before forced cleanup.
+func terminateGroup(pid int) error { return syscall.Kill(-pid, syscall.SIGTERM) }

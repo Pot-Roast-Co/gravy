@@ -568,10 +568,8 @@ func (s *settings) View(ctx ViewContext) string {
 			marker = "▸ "
 			selected = len(lines)
 			if s.editing {
-				lines = append(lines, th.Accent.Render(marker+columns(ctx.Width-2,
-					col{text: f.Label, width: 22},
-					col{text: s.buf + "▏", flex: true},
-				)))
+				lines = append(lines, inputLines(f.Label, s.buf, ctx.Width, max(2, ctx.Height/2), th)...)
+				selected = len(lines) - 1
 				continue
 			}
 			style = th.Accent
@@ -585,19 +583,19 @@ func (s *settings) View(ctx ViewContext) string {
 	// The footer is pinned rather than appended to the scrolling list. This list is longer
 	// than any terminal, so a footer inside the window is a footer you never see — which
 	// silently hid every validation message and the unsaved-changes warning.
-	return pinFooter(lines, selected, ctx.Height, th, s.footer(th))
+	return pinFooter(lines, selected, ctx.Height, th, s.footer(th, ctx.Width))
 }
 
-func (s *settings) footer(th Theme) string {
+func (s *settings) footer(th Theme, widths ...int) (result string) {
+	width := 100
+	if len(widths) > 0 {
+		width = widths[0]
+	}
+	defer func() { result = actionFooter(s.notice, result, width, th) }()
 	if s.editing {
 		hint := "enter to accept · esc to cancel"
-		if s.notice != "" {
-			hint = s.notice
-		}
+
 		return th.Muted.Render("  " + s.fields[s.cursor].Hint + "  ·  " + hint)
-	}
-	if s.notice != "" {
-		return th.Warning.Render(s.notice)
 	}
 
 	state := th.Muted.Render("saved")

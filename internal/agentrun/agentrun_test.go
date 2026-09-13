@@ -19,6 +19,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/provider/fake"
 	"github.com/pot-roast-co/gravy/internal/review"
+	"github.com/pot-roast-co/gravy/internal/router"
 	"github.com/pot-roast-co/gravy/internal/store"
 	"github.com/pot-roast-co/gravy/internal/validate"
 )
@@ -1274,5 +1275,118 @@ func TestAgentThatNeverStartedCommitsNothing(t *testing.T) {
 		t.Fatal("a run that never started was allowed to proceed")
 	} else if !strings.Contains(err.Error(), "never started") {
 		t.Errorf("error = %v, want it to say the agent never started", err)
+	}
+}
+
+func TestProviderLimitsAutomaticallyReturnToRouting(t *testing.T) {
+	for _, class := range []core.FailureClass{core.QuotaExhausted, core.RateLimited} {
+		t.Run(class.String(), func(t *testing.T) {
+			h := newHarness(t, []fake.Script{{Outcome: provider.Outcome{Class: class, Note: "confirmed provider limit"}}, {Outcome: provider.Outcome{Class: provider.Success}}}, agentrun.Config{SelfCorrectionBudget: 2, RunTimeout: time.Minute})
+			h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+			ctx := context.Background()
+			tk, err := h.db.GetTicket(ctx, "GR-100")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tk.Feedback = "Keep the user's requested correction"
+			if err := h.db.UpdateTicket(ctx, tk); err != nil {
+				t.Fatal(err)
+			}
+			first, err := h.orch.Run(ctx, h.assignment())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first.FinalState != core.StateReady || first.Attempts != 1 {
+				t.Fatalf("first run: %+v", first)
+			}
+			tk, err = h.db.GetTicket(ctx, tk.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tk.State != core.StateReady || tk.RetryCount != 0 || tk.Feedback != "Keep the user's requested correction" || tk.WorktreePath == "" {
+				t.Fatalf("ticket not preserved: %+v", tk)
+			}
+			attention, err := h.db.ListOpenAttention(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(attention) != 0 {
+				t.Fatalf("quota asked the human to retry: %+v", attention)
+			}
+			if h.slots.inUse() != 0 {
+				t.Fatal("quota held a worker")
+			}
+			choices := []core.Choice{{ProviderID: "fake", Model: "m"}, {ProviderID: "fake", Model: "fallback"}}
+			route := router.New(h.db, func(core.Route) []core.Choice { return choices }, nil)
+			// No fallback available: stay Ready and wait, rather than retrying the limited model.
+			choices = choices[:1]
+			if _, err := route.Resolve(ctx, tk.Route, core.Constraints{}); err == nil {
+				t.Fatal("selected the cooling model")
+			}
+			choices = append(choices, core.Choice{ProviderID: "fake", Model: "fallback"})
+			choice, err := route.Resolve(ctx, tk.Route, core.Constraints{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if choice.Model != "fallback" {
+				t.Fatalf("choice: %+v", choice)
+			}
+			a := h.assignment()
+			a.ProviderID = choice.ProviderID
+			a.Model = choice.Model
+			second, err := h.orch.Run(ctx, a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.FinalState != core.StateReview {
+				t.Fatalf("fallback failed: %+v", second)
+			}
+			if second.Worktree.Path != first.Worktree.Path {
+				t.Fatal("fallback replaced the worktree")
+			}
+		})
+	}
+}
+
+func TestPlanningLimitFallsBackWithConversation(t *testing.T) {
+	for _, class := range []core.FailureClass{core.QuotaExhausted, core.RateLimited} {
+		t.Run(class.String(), func(t *testing.T) {
+			h := newHarness(t, []fake.Script{
+				{Events: []provider.Event{{Kind: provider.EventMessage, Text: "You've hit your session limit"}}, Outcome: provider.Outcome{Class: class, Note: "provider limit"}},
+				{Events: []provider.Event{{Kind: provider.EventMessage, Text: "Here is the revised plan"}}, Outcome: provider.Outcome{Class: provider.Success}},
+			}, agentrun.Config{})
+			project, _ := h.seed(nil)
+			route := router.New(h.db, func(core.Route) []core.Choice {
+				return []core.Choice{{ProviderID: "fake", Model: "primary"}, {ProviderID: "fake", Model: "backup"}}
+			}, nil)
+			result, err := h.orch.Plan(route.Resolve, 1000).Plan(context.Background(), core.PlanTurn{Project: project, Session: "fake:existing", Agent: "fake/primary", History: "User: Update the Gravy ASCII art", Message: "try the same request again"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Agent != "fake/backup" || result.Reply != "Here is the revised plan" {
+				t.Fatalf("result: %+v", result)
+			}
+			runs := h.provider.Runs()
+			if len(h.provider.Resumes()) != 1 || len(runs) != 1 {
+				t.Fatalf("resumes %d, runs %d", len(h.provider.Resumes()), len(runs))
+			}
+			if runs[0].Model != "backup" || !strings.Contains(runs[0].Prompt, "Update the Gravy ASCII art") || !strings.Contains(runs[0].Prompt, "try the same request again") {
+				t.Fatalf("fallback lost context: %+v", runs[0])
+			}
+		})
+	}
+}
+
+func TestPlanningFailureDoesNotBecomeReply(t *testing.T) {
+	for _, class := range []core.FailureClass{core.RateLimited, core.TaskFailure} {
+		t.Run(class.String(), func(t *testing.T) {
+			h := newHarness(t, []fake.Script{{Events: []provider.Event{{Kind: provider.EventMessage, Text: "failure text"}}, Outcome: provider.Outcome{Class: class, Note: "failure"}}}, agentrun.Config{})
+			project, _ := h.seed(nil)
+			route := router.New(h.db, func(core.Route) []core.Choice { return []core.Choice{{ProviderID: "fake", Model: "primary"}} }, nil)
+			result, err := h.orch.Plan(route.Resolve, 1000).Plan(context.Background(), core.PlanTurn{Project: project, Message: "plan"})
+			if err == nil || result.Reply != "" || len(h.provider.Runs()) != 1 {
+				t.Fatalf("result %+v, error %v, runs %d", result, err, len(h.provider.Runs()))
+			}
+		})
 	}
 }

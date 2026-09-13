@@ -53,10 +53,14 @@ const (
 	EventSubmit Event = "submit"
 	// EventMarkReady makes a backlog ticket eligible for scheduling.
 	EventMarkReady Event = "mark_ready"
+	// EventReturnToBacklog withdraws a Ready ticket from scheduling, preserving its work.
+	EventReturnToBacklog Event = "return_to_backlog"
 	// EventAssign records that the scheduler picked a host, provider and model.
 	EventAssign Event = "assign"
 	// EventStart records that the agent process launched.
 	EventStart Event = "start"
+	// EventProviderRetry releases a run for routing after a provider cooldown is recorded.
+	EventProviderRetry Event = "provider_retry"
 	// EventAgentFinished is a run that exited without escalating: on to validation.
 	EventAgentFinished Event = "agent_finished"
 	// EventAsk is the single escalation road: the agent wrote its AskPath because it hit a
@@ -146,8 +150,9 @@ var transitions = map[State]map[Event]State{
 		EventReject:    StateRejected,
 	},
 	StateReady: {
-		EventAssign: StateAssigned,
-		EventReject: StateRejected,
+		EventReturnToBacklog: StateBacklog,
+		EventAssign:          StateAssigned,
+		EventReject:          StateRejected,
 	},
 	StateAssigned: {
 		EventStart: StateRunning,
@@ -159,6 +164,7 @@ var transitions = map[State]map[Event]State{
 		EventRunFailed: StateNeedsYou,
 	},
 	StateRunning: {
+		EventProviderRetry: StateReady,
 		EventAgentFinished: StateValidating,
 		EventAsk:           StateBlocked,
 		EventRunFailed:     StateNeedsYou,

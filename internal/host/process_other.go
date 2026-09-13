@@ -57,3 +57,5 @@ func Reap(pid int) error { return killGroup(pid) }
 
 // setNewSession is a no-op where sessions are not available.
 func setNewSession(*exec.Cmd) {}
+
+func terminateGroup(pid int) error { return Terminate(pid) }

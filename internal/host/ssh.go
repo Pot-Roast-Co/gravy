@@ -118,6 +118,9 @@ func remoteCommand(spec ExecSpec) string {
 	for k, v := range spec.Env {
 		fmt.Fprintf(&b, "export %s=%s; ", k, shellQuote(v))
 	}
+	for _, name := range spec.UnsetEnv {
+		fmt.Fprintf(&b, "unset %s; ", shellQuote(name))
+	}
 	if spec.Dir != "" {
 		fmt.Fprintf(&b, "cd %s && ", shellQuote(spec.Dir))
 	}

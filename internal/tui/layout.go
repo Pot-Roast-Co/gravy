@@ -143,6 +143,6 @@ func pinFooter(lines []string, selected, height int, th Theme, footer string) st
 	if height <= 1 {
 		return window(lines, selected, height, th)
 	}
-	body := window(lines, selected, height-2, th)
+	body := window(lines, selected, max(0, height-1-lipgloss.Height(footer)), th)
 	return strings.Join([]string{body, "", footer}, "\n")
 }

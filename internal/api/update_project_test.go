@@ -25,6 +25,8 @@ func TestUpdateProjectSavesEveryEditableField(t *testing.T) {
 	p.Allowlist = core.Allowlist{Commands: []core.Pattern{{Match: "mix *", Note: "an Elixir project"}}}
 	p.Notes = "the nuns are armed"
 	p.TargetBranch = "trunk"
+	p.PreviewCommand = "npm run dev"
+	p.PreviewServices = []core.PreviewService{{Name: "Backend", Dir: "backend", Command: "mix phx.server", EnvFile: ".env"}, {Name: "Frontend", Dir: "frontend", Command: "flutter run -d chrome"}}
 	p.Validation = []core.Step{{Name: "test", Cmd: "go test ./...", Required: true}}
 	if err := l.UpdateProject(ctx, p); err != nil {
 		t.Fatalf("UpdateProject: %v", err)
@@ -43,7 +45,10 @@ func TestUpdateProjectSavesEveryEditableField(t *testing.T) {
 	if got.Notes != "the nuns are armed" {
 		t.Errorf("stored notes = %q, want the edited notes", got.Notes)
 	}
-	if got.TargetBranch != "trunk" || len(got.Validation) != 1 {
+	if len(got.PreviewServices) != 2 || got.PreviewServices[0] != p.PreviewServices[0] || got.PreviewServices[1] != p.PreviewServices[1] {
+		t.Fatalf("preview services lost: %+v", got.PreviewServices)
+	}
+	if got.TargetBranch != "trunk" || len(got.Validation) != 1 || got.PreviewCommand != "npm run dev" {
 		t.Errorf("stored project = %+v, want the edited branch and validation", got)
 	}
 }

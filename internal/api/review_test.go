@@ -271,3 +271,39 @@ func TestListQueueResolvesDependencies(t *testing.T) {
 		t.Errorf("project not resolved: %+v", b.Project)
 	}
 }
+
+func TestReturnToBacklogPreservesWorkAndRefusesAssigned(t *testing.T) {
+	svc, db := atReview(t)
+	ctx := context.Background()
+	if err := svc.RequestChanges(ctx, "GR-1", "keep this feedback"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.GetTicket(ctx, "GR-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.WorktreePath, before.Branch = "/repo/worktree", "ticket-branch"
+	if err := db.UpdateTicket(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.MoveTicket(ctx, "GR-1", core.EventReturnToBacklog)
+	if err != nil || state != core.StateBacklog {
+		t.Fatalf("state %s: %v", state, err)
+	}
+	after, err := db.GetTicket(ctx, "GR-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.WorktreePath != before.WorktreePath || after.Branch != before.Branch || after.Feedback != before.Feedback {
+		t.Fatalf("work was changed: before %+v, after %+v", before, after)
+	}
+	if _, err := svc.MoveTicket(ctx, "GR-1", core.EventMarkReady); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.MoveTicket(ctx, "GR-1", core.EventAssign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.MoveTicket(ctx, "GR-1", core.EventReturnToBacklog); !errors.Is(err, core.ErrIllegalTransition) {
+		t.Fatalf("assigned ticket should refuse withdrawal: %v", err)
+	}
+}

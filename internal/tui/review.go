@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +24,9 @@ const (
 	reviewBrowsing reviewMode = iota
 	reviewConfirmReject
 	reviewFeedback
+	reviewTry
+	reviewPreviewCommand
+	reviewTrySaving
 )
 
 // maxPatchLines caps an inline diff.
@@ -52,8 +57,9 @@ type review struct {
 	// you is checking whether it looks reasonable, not whether it did what was asked.
 	showTicket bool
 
-	mode     reviewMode
-	feedback string
+	mode         reviewMode
+	feedback     string
+	previewInput string
 	// notice reports the outcome of the last action, or why a key did nothing.
 	notice string
 
@@ -94,6 +100,31 @@ func loadReview(svc api.Service, ticketID string) tea.Cmd {
 
 func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
+	case previewSavedMsg:
+		if msg.ticketID != r.ticketID {
+			return r, nil
+		}
+		r.mode = reviewTry
+		if msg.err != nil {
+			r.notice = "save failed: " + msg.err.Error()
+		} else {
+			r.bundle.Project.PreviewCommand = msg.command
+			r.notice = "saved; press a to run the app"
+		}
+		return r, nil
+	case reviewTriedMsg:
+		if msg.ticketID != r.ticketID {
+			return r, nil
+		}
+		if errors.Is(msg.err, host.ErrInterrupted) {
+			r.notice = msg.action + " stopped"
+		} else if msg.err != nil {
+			r.notice = msg.action + ": " + msg.err.Error()
+		} else {
+			r.notice = msg.action + " finished successfully"
+		}
+		return r, nil
+
 	case rereviewedMsg:
 		if msg.err != nil {
 			r.notice = "review: " + msg.err.Error()
@@ -154,6 +185,11 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		r.expanded = map[string]bool{}
 		return r, loadReview(ctx.Svc, id)
 
+	case refreshedMsg:
+		if r.ticketID != "" && r.mode != reviewPreviewCommand && r.mode != reviewTrySaving {
+			return r, loadReview(ctx.Svc, r.ticketID)
+		}
+		return r, nil
 	case reviewLoadedMsg:
 		r.bundle, r.loaded, r.err = msg.bundle, true, nil
 		return r, nil
@@ -187,6 +223,8 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	key := msg.String()
 
 	switch r.mode {
+	case reviewTry, reviewPreviewCommand, reviewTrySaving:
+		return r.tryKey(msg, ctx)
 	case reviewFeedback:
 		switch {
 		case key == "esc":
@@ -208,9 +246,10 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 			}
 		case key == "backspace":
 			if r.feedback != "" {
-				r.feedback = r.feedback[:len(r.feedback)-1]
+				_, size := utf8.DecodeLastRuneInString(r.feedback)
+				r.feedback = r.feedback[:len(r.feedback)-size]
 			}
-		case len(msg.Runes) == 1:
+		case len(msg.Runes) > 0:
 			r.feedback += string(msg.Runes)
 			r.notice = ""
 		}
@@ -258,6 +297,8 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		r.scrollToCursor, r.scroll = false, 0
 	case "G":
 		r.scrollToCursor, r.scroll = false, 1<<30
+	case "T":
+		r.mode, r.notice = reviewTry, ""
 	case "t":
 		r.showTicket = !r.showTicket
 	case "v":
@@ -336,6 +377,12 @@ func firstPendingReview(ctx ViewContext) string {
 }
 
 func (r *review) View(ctx ViewContext) string {
+	if ctx.Width <= 0 || ctx.Height <= 0 {
+		return ""
+	}
+	if r.mode == reviewTry || r.mode == reviewPreviewCommand || r.mode == reviewTrySaving {
+		return r.tryView(ctx)
+	}
 	th := ctx.Theme
 	if ctx.Width <= 0 || ctx.Height <= 0 {
 		return ""
@@ -456,8 +503,15 @@ func (r *review) View(ctx ViewContext) string {
 // which is why the two are tracked separately.
 func (r *review) scrolled(lines []string, cursorLine int, ctx ViewContext, th Theme) string {
 	footer := r.footer(th, ctx.Width)
+	if r.mode == reviewFeedback {
+		hint := "enter send · ctrl+u clear · esc cancel"
+		if r.notice != "" {
+			hint = r.notice + " · " + hint
+		}
+		footer = feedbackInput(r.feedback, hint, ctx.Width, ctx.Height, th)
+	}
 
-	body := ctx.Height - 2
+	body := ctx.Height - 1 - lipgloss.Height(footer)
 	if body < 1 {
 		return trunc(footer, ctx.Width)
 	}
@@ -498,42 +552,30 @@ func (r *review) footer(th Theme, width int) string {
 	case reviewFeedback:
 		hint := "▏  enter to send back · ctrl+u clear · esc to cancel"
 		if r.notice != "" {
-			hint = "▏  " + r.notice
+			hint = "▏  " + r.notice + " · enter send · esc cancel"
 		}
-		return th.Accent.Render("what needs to change: ") + th.Text.Render(r.feedback) +
-			th.Muted.Render(hint)
+		return feedbackInput(r.feedback, strings.TrimPrefix(hint, "▏  "), width, 10, th)
 	case reviewConfirmReject:
 		return th.Danger.Render("reject this ticket and delete its worktree? ") +
 			th.Muted.Render("y / n")
 	}
-	if r.notice != "" && len(r.sweep) == 0 {
-		return th.Warning.Render(r.notice)
+	withNotice := func(actions string) string {
+		if r.notice == "" {
+			return actions
+		}
+		return th.Warning.Render(trunc(r.notice, width)) + "\n" + actions
 	}
 	if len(r.sweep) > 0 {
 		// The progress indicator is the whole reason a sweep feels different from a list: you
 		// can see the end of it.
 		progress := th.Accent.Render(fmt.Sprintf("sweep %d of %d  ", r.sweepIdx+1, len(r.sweep)))
-		return progress + th.Muted.Render("a approve · r changes · x reject · s skip · q exit")
+		return withNotice(progress + th.Muted.Render("a approve · r changes · x reject · T try feature · s skip · q exit"))
 	}
 	ticket := "t ticket"
 	if r.showTicket {
 		ticket = "t hide ticket"
 	}
-	// Ordered by what a reviewer reaches for, and trimmed from the end when the terminal is
-	// too narrow: losing "tab file" is survivable, losing "a approve" is not.
-	parts := []string{
-		"a approve", "r changes", "x reject", ticket,
-		"v re-review", "e editor", "d difftool", "! shell",
-		"enter expand", "tab file",
-	}
-	for len(parts) > 1 {
-		line := "  " + strings.Join(parts, " · ")
-		if lipgloss.Width(line) <= width {
-			return th.Muted.Render(line)
-		}
-		parts = parts[:len(parts)-1]
-	}
-	return th.Muted.Render("  " + parts[0])
+	return withNotice(actionFooter("", th.Muted.Render("a approve · r changes · x reject · T try feature · "+ticket+" · v re-review · e editor · d difftool · ! shell · enter expand · tab file"), width, th))
 }
 
 // patchLines renders a diff hunk, truncated. Review optimises for fast triage with an escape to

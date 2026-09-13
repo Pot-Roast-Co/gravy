@@ -263,12 +263,12 @@ func (r *running) View(ctx ViewContext) string {
 	}
 
 	head := r.headerLines(ctx)
-	foot := []string{"", r.footer(th)}
+	foot := append([]string{""}, strings.Split(r.footer(th, ctx.Width), "\n")...)
 
 	logHeight := ctx.Height - len(head) - len(foot)
 	if logHeight < 1 {
 		// Too short for both: the log is what this screen is for.
-		return window(append(head, foot...), -1, ctx.Height, th)
+		return pinFooter(head, -1, ctx.Height, th, r.footer(th, ctx.Width))
 	}
 
 	out := append([]string{}, head...)
@@ -360,12 +360,14 @@ func (r *running) logLines(ctx ViewContext, height int) []string {
 	return out
 }
 
-func (r *running) footer(th Theme) string {
+func (r *running) footer(th Theme, widths ...int) (result string) {
+	width := 100
+	if len(widths) > 0 {
+		width = widths[0]
+	}
+	defer func() { result = actionFooter(r.notice, result, width, th) }()
 	if r.confirmKill {
 		return th.Danger.Render("kill this run and everything it started? ") + th.Muted.Render("y / n")
-	}
-	if r.notice != "" {
-		return th.Warning.Render(r.notice)
 	}
 	mode := th.Muted.Render("paused")
 	if r.follow {

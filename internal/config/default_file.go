@@ -53,6 +53,9 @@ providers:
   codex:
     enabled: true
     command: codex
+  copilot:
+    enabled: true
+    command: copilot
 
 routes:
   # Tickets request a route, never a model. Each route is an ordered list of "provider/model"
@@ -72,6 +75,8 @@ routes:
   # "default" here means "do not ask for one". On an API-key login you can name a real model.
   # Move this above claude-code to run your work through Codex instead.
   # - codex/default
+  # Use copilot/default here (and on review/planning) to use GitHub Copilot.
+  # Explicit Copilot model IDs are accepted too.
   review:
     - claude-code/sonnet
   cheap:

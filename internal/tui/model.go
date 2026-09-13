@@ -144,9 +144,10 @@ type Model struct {
 	showHelp bool
 	// adding is the global P prompt. It sits on the frame, not on a screen, so that it is
 	// reachable from the empty first-run dashboard.
-	adding    addProject
-	filtering bool
-	filter    string
+	adding        addProject
+	projectSearch projectSearch
+	filtering     bool
+	filter        string
 	// focus is the row a screen asked the destination to select when navigating.
 	focus string
 
@@ -452,6 +453,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.projectSearch.open {
+		return m.searchProjectKey(msg)
+	}
+
 	// A screen with a prompt or a mode of its own gets the keyboard before the global keymap,
 	// so typing a "q" does not quit the program.
 	if !m.showHelp && capturing(m.screens[m.active]) {
@@ -495,6 +500,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case m.keys.Filter.Matches(key):
+		if m.active == SectionProjects || m.active == SectionPlan {
+			m.projectSearch = projectSearch{open: true}
+			return m, nil
+		}
 		m.filtering, m.filter = true, ""
 		return m, nil
 
@@ -607,6 +616,8 @@ func (m Model) bodyView(height int) string {
 		body = setupView(m.agents, m.theme, m.width)
 	case m.adding.open:
 		body = m.adding.view(m.theme, m.width)
+	case m.projectSearch.open:
+		body = m.projectSearchView(height)
 	case m.showHelp:
 		body = helpView(m.keys, m.theme, m.width)
 	case m.conn == connUnreachable:

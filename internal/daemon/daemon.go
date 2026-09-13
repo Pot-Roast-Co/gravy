@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,6 +34,9 @@ type Runner interface {
 // ReconcileStore is what startup reconciliation needs from persistence.
 type ReconcileStore interface {
 	ListUnfinishedRuns(ctx context.Context) ([]core.Run, error)
+	ListTicketsByState(context.Context, core.State) ([]core.Ticket, error)
+	ListRunsForTicket(context.Context, string) ([]core.Run, error)
+	ListOpenAttention(context.Context) ([]core.Attention, error)
 	UpdateRun(ctx context.Context, r core.Run) error
 	GetTicket(ctx context.Context, id string) (core.Ticket, error)
 	SetTicketState(ctx context.Context, id string, ev core.Event) (core.State, error)
@@ -170,6 +174,52 @@ func (d *Daemon) Reconcile(ctx context.Context) (int, error) {
 		}
 		touched++
 		d.log.Warn("recovered an interrupted run", "run", r.ID, "ticket", r.TicketID, "detail", orphan)
+	}
+	// A coding run ends before advisory review starts, so unfinished runs alone miss
+	// reviews interrupted by shutdown. No reviewer belongs to this new daemon yet.
+	tickets, err := d.store.ListTicketsByState(ctx, core.StateReviewing)
+	if err != nil {
+		return touched, err
+	}
+	attention, err := d.store.ListOpenAttention(ctx)
+	if err != nil {
+		return touched, err
+	}
+	for _, ticket := range tickets {
+		runs, err := d.store.ListRunsForTicket(ctx, ticket.ID)
+		if err != nil {
+			return touched, err
+		}
+		runID := ""
+		if len(runs) > 0 {
+			run := runs[0]
+			runID = run.ID
+			if run.Verdict == "" {
+				verdict, _ := json.Marshal(map[string]string{"unavailable": "The daemon stopped during automated review. Press v in Review to rerun it."})
+				run.Verdict = string(verdict)
+				if err := d.store.UpdateRun(ctx, run); err != nil {
+					return touched, err
+				}
+			}
+		}
+		// Write attention first and reuse it on retry if shutdown interrupts recovery.
+		pending := false
+		for _, a := range attention {
+			if a.TicketID == ticket.ID && a.Reason == core.ReasonReviewPending {
+				pending = true
+				break
+			}
+		}
+		if !pending {
+			if err := d.store.OpenAttention(ctx, core.Attention{ID: d.newID(), ProjectID: ticket.ProjectID, TicketID: ticket.ID, RunID: runID, Reason: core.ReasonReviewPending, Payload: map[string]any{"detail": "Automated review was interrupted by daemon shutdown; rerun with v in Review."}, CreatedAt: time.Now()}); err != nil {
+				return touched, err
+			}
+		}
+		if _, err := d.store.SetTicketState(ctx, ticket.ID, core.EventReviewed); err != nil {
+			return touched, err
+		}
+		touched++
+		d.log.Warn("recovered an interrupted review", "ticket", ticket.ID, "run", runID)
 	}
 	return touched, nil
 }

@@ -285,6 +285,7 @@ func (p *plan) ask(ctx ViewContext, message, display string) tea.Cmd {
 	}
 
 	message = strings.TrimSpace(message)
+	priorEntries := len(p.entries)
 	// What is shown is not always what is sent: a canned instruction reads as the action it
 	// was, not as a paragraph the human did not write.
 	if label := strings.TrimSpace(display); label != "" {
@@ -302,10 +303,23 @@ func (p *plan) ask(ctx ViewContext, message, display string) tea.Cmd {
 	// sent rather than after it returns — which would be after the pause it exists to explain.
 	runID := planRunID()
 	svc, session := ctx.Svc, p.session
+	agent := p.agent
+	var history strings.Builder
+	for _, entry := range p.entries[:priorEntries] {
+		if entry.failed {
+			continue
+		}
+		who := "Assistant"
+		if entry.mine {
+			who = "User"
+		}
+		fmt.Fprintf(&history, "%s: %s\n\n", who, entry.text)
+	}
+	transcript := history.String()
 
 	turn := func() tea.Msg {
 		reply, err := svc.Plan(context.Background(), api.PlanReq{
-			ProjectID: project, Message: message, Session: session, RunID: runID,
+			ProjectID: project, Message: message, Session: session, RunID: runID, History: transcript, Agent: agent,
 		})
 		return planTurnMsg{reply: reply, err: err}
 	}
@@ -500,7 +514,7 @@ func (p *plan) View(ctx ViewContext) string {
 		// edit whose text was drawn nowhere: the footer said "enter to send" while you typed
 		// into what looked like a dead screen.
 		if p.editing {
-			lines = append(lines, "", p.promptLine(th))
+			lines = append(lines, inputLines("Your message", p.input, ctx.Width, max(2, ctx.Height/2), th)...)
 		}
 		return p.scrolled(lines, ctx, th)
 	}
@@ -555,7 +569,7 @@ func (p *plan) View(ctx ViewContext) string {
 
 	switch {
 	case p.editing:
-		lines = append(lines, "", p.promptLine(th))
+		lines = append(lines, inputLines("Your message", p.input, ctx.Width, max(2, ctx.Height/2), th)...)
 	case len(p.entries) > 0 && !p.busy:
 		// A visible place to answer. Without it the screen reads as a menu of commands rather
 		// than a conversation waiting on you.
@@ -570,7 +584,7 @@ func (p *plan) scrolled(lines []string, ctx ViewContext, th Theme) string {
 	footer := p.footer(ctx)
 
 	// The body gets everything except a blank line and the footer.
-	body := ctx.Height - 2
+	body := ctx.Height - 2 - strings.Count(footer, "\n")
 	if body < 1 {
 		return trunc(footer, ctx.Width)
 	}
@@ -581,7 +595,7 @@ func (p *plan) scrolled(lines []string, ctx ViewContext, th Theme) string {
 	// One line goes to the indicator, so hidden content is never silently cut off.
 	view := body - 1
 	maxOffset := len(lines) - view
-	if p.follow {
+	if p.follow || p.editing {
 		p.scroll = maxOffset
 	}
 	p.scroll = clamp(p.scroll, 0, maxOffset)
@@ -599,20 +613,9 @@ func (p *plan) scrolled(lines []string, ctx ViewContext, th Theme) string {
 	return strings.Join(append(out, "", footer), "\n")
 }
 
-// promptLine is the line you type on.
-//
-// It is a method rather than three inline calls because it has to appear on every branch of the
-// view: the one that returns early for an empty conversation is exactly where a first message is
-// typed.
-func (p *plan) promptLine(th Theme) string {
-	return th.Muted.Render("  > ") + th.Accent.Render(p.input) + th.Muted.Render("▏")
-}
-
-func (p *plan) footer(ctx ViewContext) string {
+func (p *plan) footer(ctx ViewContext) (result string) {
+	defer func() { result = actionFooter(p.notice, result, ctx.Width, ctx.Theme) }()
 	th := ctx.Theme
-	if p.notice != "" {
-		return th.Warning.Render("  " + p.notice)
-	}
 	if p.editing {
 		return th.Muted.Render("  enter to send · esc to cancel")
 	}
@@ -625,8 +628,8 @@ func (p *plan) footer(ctx ViewContext) string {
 	var parts []string
 	switch {
 	case len(p.entries) == 0:
-		// The body already spells out n and i on an empty screen; repeating them here is
-		// noise, so the footer carries only what the body does not.
+		parts = []string{"n what next", "i write an idea"}
+		// Keep the available keys in the footer even when the body also explains them.
 		if len(ctx.Status.Projects) > 1 && p.pinnedID == "" {
 			parts = append(parts, "p project")
 		}
@@ -643,6 +646,7 @@ func (p *plan) footer(ctx ViewContext) string {
 	if len(p.entries) > 0 {
 		parts = append(parts, "j/k scroll", "x start over")
 	}
+	parts = append(parts, "/ search projects")
 	return th.Muted.Render("  " + strings.Join(parts, " · "))
 }
 

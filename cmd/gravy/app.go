@@ -23,6 +23,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/provider/adapters/claudecode"
 	"github.com/pot-roast-co/gravy/internal/provider/adapters/codex"
+	"github.com/pot-roast-co/gravy/internal/provider/adapters/copilot"
 	"github.com/pot-roast-co/gravy/internal/router"
 	"github.com/pot-roast-co/gravy/internal/runlog"
 	"github.com/pot-roast-co/gravy/internal/scheduler"
@@ -226,6 +227,7 @@ func newApp(ctx context.Context) (*app, error) {
 	providers := []provider.Provider{
 		claudecode.New(claudecode.WithCommand(providerCommand(cfg, claudecode.ID, claudecode.DefaultCommand))),
 		codex.New(codex.WithCommand(providerCommand(cfg, codex.ID, codex.DefaultCommand))),
+		copilot.New(copilot.WithCommand(providerCommand(cfg, copilot.ID, copilot.DefaultCommand))),
 	}
 	for _, p := range providers {
 		orch.RegisterProvider(p)
@@ -396,6 +398,7 @@ func (a *app) loop() *daemon.Loop { return daemon.NewLoop(a.sched, a.orch, a.log
 var registeredProviders = map[string]string{
 	claudecode.ID: claudecode.DefaultCommand,
 	codex.ID:      codex.DefaultCommand,
+	copilot.ID:    copilot.DefaultCommand,
 }
 
 func enabled(cfg config.Config, providerID string) bool {

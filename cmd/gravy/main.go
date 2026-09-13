@@ -27,7 +27,14 @@ func run(args []string) error {
 
 	// Ctrl-C stops the queue loop cleanly, letting in-flight runs finish rather than orphaning
 	// agent processes and their children.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	// Bubble Tea owns Ctrl+C in the TUI and ignores it while a child owns the
+	// terminal. A second SIGINT handler here would cancel Gravy when the human
+	// stops a preview server or interrupts a command in the review shell.
+	if cmd == "" || cmd == "open" {
+		signals = []os.Signal{syscall.SIGTERM}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), signals...)
 	defer stop()
 
 	switch cmd {

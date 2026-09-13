@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,6 +20,7 @@ const (
 	queueBrowsing queueMode = iota
 	queueForm
 	queueConfirmDelete
+	queueConfirmReject
 )
 
 // formField is one line of the ticket form.
@@ -43,12 +45,13 @@ type queue struct {
 	cursor   int
 	selected map[string]bool
 
-	mode    queueMode
-	fields  []formField
-	field   int
-	editing string // ticket id being edited, empty when creating
-	notice  string
-	pendDel api.TicketDetail
+	mode       queueMode
+	fields     []formField
+	field      int
+	editing    string // ticket id being edited, empty when creating
+	notice     string
+	pendDel    api.TicketDetail
+	pendReject []core.Ticket
 }
 
 func newQueue(state core.State) *queue {
@@ -98,6 +101,15 @@ func (q *queue) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			return q, nil
 		}
 		q.items, q.loaded, q.err = msg.items, true, nil
+		present := make(map[string]bool, len(msg.items))
+		for _, item := range msg.items {
+			present[item.Ticket.ID] = true
+		}
+		for id := range q.selected {
+			if !present[id] {
+				delete(q.selected, id)
+			}
+		}
 		return q, nil
 
 	case queueErrMsg:
@@ -144,6 +156,26 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	switch q.mode {
 	case queueForm:
 		return q.formKey(msg, ctx)
+	case queueConfirmReject:
+		q.mode = queueBrowsing
+		targets := q.pendReject
+		q.pendReject = nil
+		if key != "y" && key != "Y" {
+			q.notice = "reject cancelled"
+			return q, nil
+		}
+		return q, func() tea.Msg {
+			var failed []string
+			for _, t := range targets {
+				if err := ctx.Svc.Reject(context.Background(), t.ID); err != nil {
+					failed = append(failed, fmt.Sprintf("%s: %v", t.ID, err))
+				}
+			}
+			if len(failed) > 0 {
+				return queueDoneMsg{verb: "reject", err: fmt.Errorf("%s", strings.Join(failed, "; "))}
+			}
+			return queueDoneMsg{verb: fmt.Sprintf("rejected %d ticket(s)", len(targets))}
+		}
 	case queueConfirmDelete:
 		q.mode = queueBrowsing
 		if key == "y" || key == "Y" {
@@ -164,6 +196,16 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	// `n` works on an empty queue; everything else needs a row.
 	if key == "n" {
 		q.startForm("", core.Ticket{})
+		var names []string
+		selected := ""
+		for _, item := range ctx.Status.Projects {
+			name := projectName(item.Project)
+			names = append(names, name)
+			if item.Project.ID == q.projectID(ctx) {
+				selected = name
+			}
+		}
+		q.fields = append(q.fields, formField{Label: "project", Value: selected, Hint: strings.Join(names, " | ")})
 		return q, nil
 	}
 
@@ -194,7 +236,15 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		return q, q.moveSelection(items, ctx)
 	case "e":
 		q.startForm(cur.Ticket.ID, cur.Ticket)
+	case "r":
+		if q.state == core.StateReady {
+			q.mode, q.pendReject = queueConfirmReject, q.targets(items)
+		}
 	case "D":
+		if q.state == core.StateReady {
+			q.mode, q.pendReject = queueConfirmReject, q.targets(items)
+			return q, nil
+		}
 		q.mode, q.pendDel, q.notice = queueConfirmDelete, cur, ""
 	case "J":
 		return q, q.reorder(items, +1, ctx)
@@ -214,11 +264,8 @@ func (q *queue) moveSelection(items []api.TicketDetail, ctx ViewContext) tea.Cmd
 	ev := core.EventMarkReady
 	verb := "queued"
 	if q.state == core.StateReady {
-		// There is no edge back from Ready to Backlog in the state machine, so this direction
-		// is refused rather than faked.
-		return func() tea.Msg {
-			return queueDoneMsg{verb: "move", err: fmt.Errorf("a Ready ticket cannot go back to the backlog; reject it instead")}
-		}
+		ev = core.EventReturnToBacklog
+		verb = "sent to backlog"
 	}
 
 	svc := ctx.Svc
@@ -231,7 +278,7 @@ func (q *queue) moveSelection(items []api.TicketDetail, ctx ViewContext) tea.Cmd
 		}
 		if len(failed) > 0 {
 			// The reason is the point: a dependency that is not landed must say so.
-			return queueDoneMsg{verb: "queue", err: fmt.Errorf("%s", strings.Join(failed, "; "))}
+			return queueDoneMsg{verb: verb, err: fmt.Errorf("%s", strings.Join(failed, "; "))}
 		}
 		return queueDoneMsg{verb: fmt.Sprintf("%s %d ticket(s)", verb, len(targets))}
 	}
@@ -326,11 +373,12 @@ func (q *queue) formKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 
 	case key == "backspace":
 		if v := q.fields[q.field].Value; v != "" {
-			q.fields[q.field].Value = v[:len(v)-1]
+			_, size := utf8.DecodeLastRuneInString(v)
+			q.fields[q.field].Value = v[:len(v)-size]
 		}
 		return q, nil
 
-	case len(msg.Runes) == 1:
+	case len(msg.Runes) > 0:
 		q.fields[q.field].Value += string(msg.Runes)
 		q.notice = ""
 		return q, nil
@@ -353,6 +401,19 @@ func (q *queue) submitForm(ctx ViewContext) tea.Cmd {
 
 	editing, svc := q.editing, ctx.Svc
 	project := q.projectID(ctx)
+	if editing == "" && len(q.fields) > 3 {
+		project = ""
+		for _, item := range ctx.Status.Projects {
+			if projectName(item.Project) == strings.TrimSpace(q.fields[3].Value) {
+				project = item.Project.ID
+				break
+			}
+		}
+	}
+	if editing == "" && project == "" {
+		q.notice = "choose a project in the project field (esc then P to add one)"
+		return nil
+	}
 	q.mode, q.fields = queueBrowsing, nil
 
 	if editing != "" {
@@ -361,11 +422,7 @@ func (q *queue) submitForm(ctx ViewContext) tea.Cmd {
 				core.Ticket{ID: editing, Title: title, Body: body, Route: route})}
 		}
 	}
-	if project == "" {
-		return func() tea.Msg {
-			return queueDoneMsg{verb: "create", err: fmt.Errorf("no project selected — add one with P, or pick one with p")}
-		}
-	}
+
 	return func() tea.Msg {
 		_, err := svc.CreateTicket(context.Background(), api.CreateTicketReq{
 			ProjectID: project, Title: title, Body: body, Route: route,
@@ -421,7 +478,7 @@ func (q *queue) View(ctx ViewContext) string {
 			"",
 			th.Muted.Render("  nothing here"),
 			th.Key.Render("  n")+th.Muted.Render(" writes a ticket"))
-		return window(append(lines, "", q.footer(ctx)), -1, ctx.Height, th)
+		return pinFooter(lines, -1, ctx.Height, th, q.footer(ctx))
 	}
 
 	q.cursor = clamp(q.cursor, 0, len(items)-1)
@@ -468,6 +525,9 @@ func (q *queue) formView(ctx ViewContext) string {
 	}
 
 	lines := []string{th.Header.Render(head), ""}
+	if q.editing == "" {
+		lines = append(lines, th.Muted.Render("  Saves to Backlog. Queue with space when ready."), th.Muted.Render("  Plan and instruction files are optional."), "")
+	}
 	for i, f := range q.fields {
 		label := th.Muted.Render(fmt.Sprintf("  %-6s ", f.Label))
 		value := f.Value
@@ -476,7 +536,7 @@ func (q *queue) formView(ctx ViewContext) string {
 			value, style = f.Hint, th.Muted
 		}
 		if i == q.field {
-			lines = append(lines, label+th.Accent.Render(f.Value)+th.Muted.Render("▏"))
+			lines = append(lines, inputLines(f.Label, f.Value, ctx.Width, max(2, ctx.Height/2), th)...)
 			continue
 		}
 		lines = append(lines, label+style.Render(trunc(value, max(0, ctx.Width-10))))
@@ -484,29 +544,36 @@ func (q *queue) formView(ctx ViewContext) string {
 
 	hint := "tab to move · enter to save · esc to cancel"
 	if q.notice != "" {
-		hint = q.notice
+		hint = q.notice + "\n" + hint
 	}
-	return window(append(lines, "", th.Muted.Render("  "+hint)), -1, ctx.Height, th)
+	return pinFooter(lines, cursorRow(lines), ctx.Height, th, actionFooter("", th.Muted.Render(hint), ctx.Width, th))
 }
 
-func (q *queue) footer(ctx ViewContext) string {
+func (q *queue) footer(ctx ViewContext) (result string) {
+	defer func() { result = actionFooter(q.notice, result, ctx.Width, ctx.Theme) }()
 	th := ctx.Theme
+	if q.mode == queueConfirmReject {
+		target := fmt.Sprintf("%d selected tickets", len(q.pendReject))
+		if len(q.pendReject) == 1 {
+			target = shortID(q.pendReject[0].ID)
+		}
+		return th.Danger.Render("reject "+target+" and remove their worktrees? ") + th.Muted.Render("y / n")
+	}
 	if q.mode == queueConfirmDelete {
 		return th.Danger.Render("delete "+shortID(q.pendDel.Ticket.ID)+" permanently? ") +
 			th.Muted.Render("y / n")
 	}
-	if q.notice != "" {
-		return th.Warning.Render(q.notice)
-	}
+	action := "D delete"
 	move := "space queue it"
 	if q.state == core.StateReady {
-		move = "space (ready already)"
+		move = "space send to backlog"
+		action = "r reject"
 	}
 	if n := len(q.selected); n > 0 {
 		move += " (" + strconv.Itoa(n) + " selected)"
 	}
 	return th.Muted.Render(strings.Join([]string{
-		"n new", "e edit", move, "x select", "J/K reorder", "+/- priority", "D delete",
+		"n new ticket", "e edit", move, "x select", "J/K reorder", "+/- priority", action,
 	}, " · "))
 }
 

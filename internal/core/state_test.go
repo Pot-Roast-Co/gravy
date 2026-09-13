@@ -19,12 +19,14 @@ func TestTransitionLegal(t *testing.T) {
 		{StateBacklog, EventReject, StateRejected},
 
 		{StateReady, EventAssign, StateAssigned},
+		{StateReady, EventReturnToBacklog, StateBacklog},
 		{StateReady, EventReject, StateRejected},
 
 		{StateAssigned, EventStart, StateRunning},
 		{StateAssigned, EventKill, StateBacklog},
 
 		{StateRunning, EventAgentFinished, StateValidating},
+		{StateRunning, EventProviderRetry, StateReady},
 		{StateRunning, EventAsk, StateBlocked},
 		{StateRunning, EventRunFailed, StateNeedsYou},
 		{StateRunning, EventKill, StateBacklog},

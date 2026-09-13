@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -308,9 +309,10 @@ func (s *needsYou) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 			}
 		case key == "backspace":
 			if s.feedback != "" {
-				s.feedback = s.feedback[:len(s.feedback)-1]
+				_, size := utf8.DecodeLastRuneInString(s.feedback)
+				s.feedback = s.feedback[:len(s.feedback)-size]
 			}
-		case len(msg.Runes) == 1:
+		case len(msg.Runes) > 0:
 			s.feedback += string(msg.Runes)
 			s.notice = ""
 		}
@@ -375,12 +377,12 @@ func (s *needsYou) View(ctx ViewContext) string {
 
 	items := s.visibleItems(ctx)
 	if len(items) == 0 {
-		return strings.Join(append([]string{
+		return pinFooter(append([]string{
 			th.Header.Render("Needs You (0)"),
 			"",
 			th.Success.Render("  Nothing needs you."),
 			th.Muted.Render("  If it is not here, Gravy does not need you."),
-		}, s.heldQueues(ctx)...), "\n")
+		}, s.heldQueues(ctx)...), -1, ctx.Height, th, actionFooter(s.notice, th.Muted.Render("1 dashboard · 4 backlog · 7 review"), ctx.Width, th))
 	}
 	s.cursor = clamp(s.cursor, 0, len(items)-1)
 
@@ -407,7 +409,15 @@ func (s *needsYou) View(ctx ViewContext) string {
 	lines = append(lines, specFor(item.Attention.Reason).Detail(item, ctx)...)
 	lines = append(lines, s.heldQueues(ctx)...)
 
-	return pinFooter(lines, selected, ctx.Height, th, s.footer(item, th))
+	footer := s.footer(item, th, ctx.Width)
+	if s.mode == nyFeedback {
+		hint := "enter send · esc cancel"
+		if s.notice != "" {
+			hint = s.notice + " · " + hint
+		}
+		footer = feedbackInput(s.feedback, hint, ctx.Width, ctx.Height, th)
+	}
+	return pinFooter(lines, selected, ctx.Height, th, footer)
 }
 
 // heldQueues names the ticket blocking each serialised project, so an idle queue is never
@@ -430,20 +440,22 @@ func (s *needsYou) heldQueues(ctx ViewContext) []string {
 	return out
 }
 
-func (s *needsYou) footer(item api.AttentionItem, th Theme) string {
+func (s *needsYou) footer(item api.AttentionItem, th Theme, widths ...int) (result string) {
+	width := 100
+	if len(widths) > 0 {
+		width = widths[0]
+	}
+	defer func() { result = actionFooter(s.notice, result, width, th) }()
 	switch s.mode {
 	case nyFeedback:
 		hint := "▏  enter to send back · esc to cancel"
 		if s.notice != "" {
-			hint = "▏  " + s.notice
+			hint = "▏  " + s.notice + " · enter send · esc cancel"
 		}
 		return th.Accent.Render("what needs to change: ") + th.Text.Render(s.feedback) + th.Muted.Render(hint)
 	case nyConfirmReject:
 		return th.Danger.Render("reject "+shortID(s.pending.Attention.TicketID)+
 			" and delete its worktree? ") + th.Muted.Render("y / n")
-	}
-	if s.notice != "" {
-		return th.Warning.Render(s.notice)
 	}
 
 	parts := make([]string, 0, 4)

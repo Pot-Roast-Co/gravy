@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"testing"
 
@@ -261,25 +262,69 @@ func TestEditSavesTheChangedFields(t *testing.T) {
 	}
 }
 
-// TestReadyCannotGoBackwards: the state machine has no edge from Ready to Backlog, so the screen
-// says so rather than appearing to do nothing.
-func TestReadyCannotGoBackwards(t *testing.T) {
+func TestReadySendToBacklog(t *testing.T) {
 	f := backlogFixture()
-	m := boot(t, f, 96, 28)
+	m := boot(t, f, 120, 28)
 	m = send(t, m, key(SectionReady.Key()))
 	m = send(t, m, queueLoadedMsg{state: core.StateReady, items: f.queue})
-
+	if !strings.Contains(m.View(), "space send to backlog") {
+		t.Fatal(m.View())
+	}
+	m = send(t, m, key("x"))
+	m = send(t, m, key("j"))
+	m = send(t, m, key("x"))
 	m, cmd := sendCmd(t, m, key(" "))
 	if cmd == nil {
 		t.Fatal("space produced no command")
 	}
 	m = send(t, m, cmd())
-
-	if !strings.Contains(m.View(), "cannot go back") {
-		t.Errorf("moving a Ready ticket back is not explained:\n%s", m.View())
+	if len(f.moved) != 2 {
+		t.Fatalf("moved: %v", f.moved)
 	}
-	if len(f.moved) != 0 {
-		t.Errorf("a Ready ticket was moved anyway: %v", f.moved)
+	for _, mv := range f.moved {
+		if mv[1] != string(core.EventReturnToBacklog) {
+			t.Fatalf("move: %v", mv)
+		}
+	}
+	if !strings.Contains(m.View(), "sent to backlog 2") {
+		t.Fatal(m.View())
+	}
+}
+
+func TestReadyRejectSelection(t *testing.T) {
+	for _, binding := range []string{"r", "D"} {
+		t.Run(binding, func(t *testing.T) {
+			f := backlogFixture()
+			m := boot(t, f, 140, 28)
+			m = send(t, m, key(SectionReady.Key()))
+			m = send(t, m, queueLoadedMsg{state: core.StateReady, items: f.queue})
+			if !strings.Contains(m.View(), "r reject") || strings.Contains(m.View(), "D delete") {
+				t.Fatal(m.View())
+			}
+			m = send(t, m, key("x"))
+			m = send(t, m, key("j"))
+			m = send(t, m, key("x"))
+			m, cmd := sendCmd(t, m, key(binding))
+			if cmd != nil || !strings.Contains(m.View(), "reject 2 selected tickets") {
+				t.Fatal(m.View())
+			}
+			m, cmd = sendCmd(t, m, key("n"))
+			if cmd != nil || len(f.rejected) != 0 {
+				t.Fatal("cancel rejected tickets")
+			}
+			m = send(t, m, key(binding))
+			m, cmd = sendCmd(t, m, key("y"))
+			if cmd == nil {
+				t.Fatal("confirmation produced no command")
+			}
+			m = send(t, m, cmd())
+			if strings.Join(f.rejected, ",") != "t1,t2" || len(f.deleted) != 0 {
+				t.Fatalf("rejected %v, deleted %v", f.rejected, f.deleted)
+			}
+			if !strings.Contains(m.View(), "rejected 2") {
+				t.Fatal(m.View())
+			}
+		})
 	}
 }
 
@@ -298,8 +343,8 @@ func TestQueueNoticeDoesNotSquatOnTheFooter(t *testing.T) {
 	if !strings.Contains(m.View(), "saved") {
 		t.Fatal("the confirmation was never shown")
 	}
-	if strings.Contains(m.View(), "space queue it") {
-		t.Fatal("expected the notice to replace the hints while it is fresh")
+	if !strings.Contains(m.View(), "space queue it") {
+		t.Fatal("the notice hid the available actions")
 	}
 
 	// The next key restores the keys.
@@ -310,5 +355,34 @@ func TestQueueNoticeDoesNotSquatOnTheFooter(t *testing.T) {
 	}
 	if !strings.Contains(view, "space queue it") {
 		t.Errorf("the footer does not say how to queue a ticket:\n%s", view)
+	}
+}
+
+func TestManualTicketPasteAndProjectSelection(t *testing.T) {
+	f := backlogFixture()
+	second := core.Project{ID: "second", Slug: "second", Name: "Second"}
+	f.status.Projects = append(f.status.Projects, api.ProjectStatus{Project: second})
+	m := openBacklog(t, f)
+	m = send(t, m, key("n"))
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Add café☕")})
+	m = send(t, m, key("backspace"))
+	m, cmd := sendCmd(t, m, key("enter"))
+	if cmd != nil {
+		t.Fatal("created without choosing a project")
+	}
+	if !strings.Contains(m.View(), "Add café") {
+		t.Fatal("lost form on validation error")
+	}
+	for i := 0; i < 3; i++ {
+		m = send(t, m, key("tab"))
+	}
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(projectName(second))})
+	m, cmd = sendCmd(t, m, key("enter"))
+	if cmd == nil {
+		t.Fatal(m.View())
+	}
+	send(t, m, cmd())
+	if len(f.created) != 1 || f.created[0].Title != "Add café" || f.created[0].ProjectID != "second" || f.created[0].Ready {
+		t.Fatalf("%+v", f.created)
 	}
 }

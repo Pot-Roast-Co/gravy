@@ -10,7 +10,7 @@ import (
 )
 
 const projectColumns = `id, slug, name, repo_path, target_branch, merge_mode, requirements,
-	validation, allowlist, routes, parallel_mode, max_concurrency, created_at, host_id, notes`
+	validation, allowlist, routes, parallel_mode, max_concurrency, created_at, host_id, notes, preview_command, preview_services`
 
 // CreateProject inserts a project.
 func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
@@ -26,16 +26,20 @@ func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	preview, err := marshalJSON(p.PreviewServices)
+	if err != nil {
+		return err
+	}
 	routes, err := marshalJSON(p.Routes)
 	if err != nil {
 		return err
 	}
 
 	_, err = d.exec(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Slug, p.Name, p.RepoPath, p.TargetBranch, string(p.MergeMode),
 		req, val, allow, routes, boolToInt(p.ParallelMode), p.MaxConcurrency,
-		unixOrZero(p.CreatedAt), p.HostID, p.Notes)
+		unixOrZero(p.CreatedAt), p.HostID, p.Notes, p.PreviewCommand, preview)
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Slug, err)
 	}
@@ -98,6 +102,10 @@ func (d *DB) UpdateProject(ctx context.Context, p core.Project) error {
 	if err != nil {
 		return err
 	}
+	preview, err := marshalJSON(p.PreviewServices)
+	if err != nil {
+		return err
+	}
 	routes, err := marshalJSON(p.Routes)
 	if err != nil {
 		return err
@@ -106,10 +114,10 @@ func (d *DB) UpdateProject(ctx context.Context, p core.Project) error {
 	res, err := d.exec(ctx, `UPDATE projects SET
 		slug=?, name=?, repo_path=?, target_branch=?, merge_mode=?, requirements=?,
 		validation=?, allowlist=?, routes=?, parallel_mode=?, max_concurrency=?, host_id=?,
-		notes=?
+		notes=?, preview_command=?, preview_services=?
 		WHERE id=?`,
 		p.Slug, p.Name, p.RepoPath, p.TargetBranch, string(p.MergeMode), req, val, allow,
-		routes, boolToInt(p.ParallelMode), p.MaxConcurrency, p.HostID, p.Notes, p.ID)
+		routes, boolToInt(p.ParallelMode), p.MaxConcurrency, p.HostID, p.Notes, p.PreviewCommand, preview, p.ID)
 	if err != nil {
 		return fmt.Errorf("update project %q: %w", p.ID, err)
 	}
@@ -131,16 +139,19 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanProject(s scanner) (core.Project, error) {
 	var (
-		p                       core.Project
-		mergeMode               string
-		req, val, allow, routes string
-		parallel                int
-		createdAt               int64
+		p                                core.Project
+		mergeMode                        string
+		req, val, allow, routes, preview string
+		parallel                         int
+		createdAt                        int64
 	)
 	if err := s.Scan(&p.ID, &p.Slug, &p.Name, &p.RepoPath, &p.TargetBranch, &mergeMode,
 		&req, &val, &allow, &routes, &parallel, &p.MaxConcurrency, &createdAt,
-		&p.HostID, &p.Notes); err != nil {
+		&p.HostID, &p.Notes, &p.PreviewCommand, &preview); err != nil {
 		return core.Project{}, err
+	}
+	if err := unmarshalJSON(preview, &p.PreviewServices); err != nil {
+		return core.Project{}, fmt.Errorf("project preview services: %w", err)
 	}
 	p.MergeMode = core.LandMode(mergeMode)
 	p.ParallelMode = parallel != 0

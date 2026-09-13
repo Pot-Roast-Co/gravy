@@ -152,6 +152,7 @@ func Default() Config {
 		Concurrency: Concurrency{Workers: 4},
 		Providers: map[string]Provider{
 			"claude-code": {Enabled: true, Command: "claude"},
+			"copilot":     {Enabled: true, Command: "copilot"},
 			"codex":       {Enabled: true, Command: "codex"},
 		},
 		Routes: map[core.Route][]string{
