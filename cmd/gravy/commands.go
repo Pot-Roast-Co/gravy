@@ -38,6 +38,8 @@ func runProject(ctx context.Context, args []string) error {
 	switch sub {
 	case "add":
 		return projectAdd(ctx, rest)
+	case "set-target":
+		return projectSetTarget(ctx, rest)
 	case "archive":
 		return projectArchive(ctx, rest, true)
 	case "unarchive":
@@ -45,7 +47,7 @@ func runProject(ctx context.Context, args []string) error {
 	case "list", "ls", "":
 		return projectList(ctx, rest)
 	default:
-		return fmt.Errorf("unknown project command %q (try: add, list, archive, unarchive)", sub)
+		return fmt.Errorf("unknown project command %q (try: add, list, set-target, archive, unarchive)", sub)
 	}
 }
 
@@ -205,6 +207,73 @@ func projectList(ctx context.Context, args []string) error {
 //
 // Nothing is deleted and nothing in flight is stopped: the project's tickets, runs and summaries
 // stay exactly where they are, and a ticket already running or awaiting review finishes.
+// projectSetTarget changes the branch a project's approved work merges into.
+//
+// It exists because the target branch was otherwise editable only on the Settings screen, and a
+// target resolved wrong at registration is invisible until work lands somewhere nobody meant.
+// Finding out from a merge on the wrong branch and then being told the fix is a TUI screen is a
+// bad trade for one field.
+func projectSetTarget(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy project set-target", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy project set-target <slug|id> <branch>")
+		fmt.Fprintln(os.Stderr, "\nChanges the branch approved work merges into.")
+		fs.PrintDefaults()
+	}
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 2 {
+		fs.Usage()
+		return fmt.Errorf("expected a project and a branch")
+	}
+	branch := strings.TrimSpace(rest[1])
+	if branch == "" {
+		return fmt.Errorf("a project needs a target branch")
+	}
+
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	slug, was, changed, err := setTargetBranch(ctx, a.svc, rest[0], branch)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Printf("%s already merges into %s\n", slug, branch)
+		return nil
+	}
+	// Both branches named. The whole point is that the old value was wrong without anyone
+	// seeing it, so it gets said out loud on the way out.
+	fmt.Printf("%s now merges into %s (was %s)\n", slug, branch, was)
+	return nil
+}
+
+// setTargetBranch points a project at a branch and reports what it was before.
+//
+// Split from the command so the rule can be tested without a daemon: the interesting part is
+// that it edits one field of the project it read, rather than writing a fresh one and dropping
+// everything the caller did not mention.
+func setTargetBranch(ctx context.Context, svc api.Service, ref, branch string) (slug, was string, changed bool, err error) {
+	p, err := findProject(ctx, svc, ref)
+	if err != nil {
+		return "", "", false, err
+	}
+	if p.TargetBranch == branch {
+		return p.Slug, branch, false, nil
+	}
+	was = p.TargetBranch
+	p.TargetBranch = branch
+	if err := svc.UpdateProject(ctx, p); err != nil {
+		return "", "", false, err
+	}
+	return p.Slug, was, true, nil
+}
+
 func projectArchive(ctx context.Context, args []string, archived bool) error {
 	verb := "archive"
 	if !archived {
