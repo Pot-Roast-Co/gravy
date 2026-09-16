@@ -737,9 +737,10 @@ the TUI does not poll.
 ```go
 type Service interface {
     // projects
-    ListProjects(ctx) ([]core.Project, error)
+    ListProjects(ctx, ProjectFilter) ([]core.Project, error) // working set unless asked
     AddProject(ctx, AddProjectReq) (core.Project, error)
     UpdateProject(ctx, core.Project) error
+    ArchiveProject(ctx, id string, archived bool) error      // its own method, never a field
 
     // tickets
     ListTickets(ctx, TicketFilter) ([]core.Ticket, error)
@@ -762,7 +763,7 @@ type Service interface {
     ResolveAttention(ctx, id string, answer Answer) error
 
     // system
-    Status(ctx) (SystemStatus, error)                       // hosts, workers, providers, routes
+    Status(ctx, ProjectFilter) (SystemStatus, error)        // hosts, workers, providers, routes
     ReconnectHost(ctx, id string) (HostStatus, error)       // probe a machine that was off
     ExplainTicket(ctx, ticketID string) (Explanation, error)
     Events(ctx) (<-chan Event, error)                        // server push

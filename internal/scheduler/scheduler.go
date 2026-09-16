@@ -46,7 +46,6 @@ type Store interface {
 	ListTicketsByState(ctx context.Context, state core.State) ([]core.Ticket, error)
 	GetTicket(ctx context.Context, id string) (core.Ticket, error)
 	GetProject(ctx context.Context, id string) (core.Project, error)
-	ListProjects(ctx context.Context) ([]core.Project, error)
 	CountActiveTickets(ctx context.Context, projectID string) (int, error)
 	CountActiveTicketsByRoute(ctx context.Context, route core.Route) (int, error)
 	ListTickets(ctx context.Context, projectID string) ([]core.Ticket, error)
@@ -239,7 +238,14 @@ func (s *Scheduler) consider(ctx context.Context, t core.Ticket, pool *hostSnaps
 	why = append(why, fmt.Sprintf("ticket %s in project %s, priority %d, position %.0f",
 		t.ID, project.Slug, t.Priority, t.Position))
 
-	// 0. A project with no repository has nowhere to work.
+	// 0. An archived project queues nothing new. Its Ready tickets stay Ready — unarchiving is
+	//    all it takes for the next tick to pick them up — and nothing already in flight is
+	//    affected, because this runs only for tickets that have yet to start.
+	if project.Archived {
+		return blocked("project archived"), nil
+	}
+
+	// 0b. A project with no repository has nowhere to work.
 	if strings.TrimSpace(project.RepoPath) == "" {
 		return blocked(fmt.Sprintf("project %s has no repository yet", project.Slug)), nil
 	}

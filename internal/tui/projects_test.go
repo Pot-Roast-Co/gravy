@@ -18,11 +18,14 @@ func openProjects(t *testing.T, f *fakeService) Model {
 
 // selectProject moves the cursor onto a project by name, rather than by counting keystrokes
 // against an order the screen is free to change.
+//
+// It walks rows() rather than the project slice, because the cursor indexes the drawn list —
+// working set, then the archived group's header, then the archived projects.
 func selectProject(t *testing.T, m Model, name string) Model {
 	t.Helper()
 	scr := m.screens[SectionProjects].(*projects)
-	for i, p := range scr.projects {
-		if p.Name == name {
+	for i, row := range scr.rows() {
+		if !row.group && row.project.Name == name {
 			for scr.cursor < i {
 				m = send(t, m, key("j"))
 			}

@@ -118,7 +118,7 @@ func TestDaemonAnswersOverTheSocket(t *testing.T) {
 	}
 	defer c.Close()
 
-	st, err := c.Status(context.Background())
+	st, err := c.Status(context.Background(), api.ProjectFilter{})
 	if err != nil {
 		t.Fatalf("Status over the socket: %v", err)
 	}

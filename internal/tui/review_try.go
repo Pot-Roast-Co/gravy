@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/pot-roast-co/gravy/internal/api"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/host"
 )
@@ -44,7 +45,7 @@ func (r *review) tryKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 			id, projectID := r.ticketID, r.bundle.Project.ID
 			r.mode = reviewTrySaving
 			return r, func() tea.Msg {
-				projects, err := ctx.Svc.ListProjects(context.Background())
+				projects, err := ctx.Svc.ListProjects(context.Background(), api.ProjectFilter{IncludeArchived: true})
 				if err != nil {
 					return previewSavedMsg{ticketID: id, err: err}
 				}

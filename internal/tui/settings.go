@@ -82,7 +82,7 @@ func loadSettings(svc api.Service) tea.Cmd {
 		if err != nil {
 			return settingsErrMsg{err}
 		}
-		projects, err := svc.ListProjects(ctx)
+		projects, err := svc.ListProjects(ctx, api.ProjectFilter{})
 		if err != nil {
 			return settingsErrMsg{err}
 		}

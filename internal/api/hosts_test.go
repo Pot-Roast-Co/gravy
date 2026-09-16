@@ -77,7 +77,7 @@ func TestStatusReportsAnOffHostWithoutWaitingForIt(t *testing.T) {
 
 	done := make(chan SystemStatus, 1)
 	go func() {
-		st, err := l.Status(context.Background())
+		st, err := l.Status(context.Background(), ProjectFilter{})
 		if err != nil {
 			t.Error(err)
 		}

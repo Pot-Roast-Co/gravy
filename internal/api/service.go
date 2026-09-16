@@ -24,9 +24,15 @@ type Service interface {
 	ApplySetup(ctx context.Context, req SetupRequest) (Settings, error)
 
 	// projects
-	ListProjects(ctx context.Context) ([]core.Project, error)
+	ListProjects(ctx context.Context, f ProjectFilter) ([]core.Project, error)
 	AddProject(ctx context.Context, req AddProjectReq) (core.Project, error)
 	UpdateProject(ctx context.Context, p core.Project) error
+	// ArchiveProject takes a finished repository out of the working set, or puts it back.
+	//
+	// Its own method rather than a field UpdateProject writes: archiving is a state change
+	// worth recording on purpose, and one that must not happen as a side effect of saving an
+	// edit to a project's notes from a screen holding a stale copy of the flag.
+	ArchiveProject(ctx context.Context, id string, archived bool) error
 	// DeleteProject removes a project and, by cascade, its tickets, runs and attention rows.
 	DeleteProject(ctx context.Context, id string) error
 
@@ -79,7 +85,7 @@ type Service interface {
 	ResolveAttention(ctx context.Context, id string) error
 
 	// system
-	Status(ctx context.Context) (SystemStatus, error)
+	Status(ctx context.Context, f ProjectFilter) (SystemStatus, error)
 	// ReconnectHost probes one configured host now and reports what it found. It is how a
 	// machine that was off rejoins the fleet without restarting the daemon.
 	ReconnectHost(ctx context.Context, id string) (HostStatus, error)
@@ -126,6 +132,14 @@ type CreateTicketReq struct {
 	DependsOn []string
 }
 
+// ProjectFilter narrows what a project listing — or the fleet snapshot — shows. The zero value
+// is the working set.
+type ProjectFilter struct {
+	// IncludeArchived adds archived projects back in, for a caller looking at history rather
+	// than at what is being worked on.
+	IncludeArchived bool `json:"include_archived,omitempty"`
+}
+
 // TicketFilter narrows a ticket listing. Zero values mean "no filter".
 type TicketFilter struct {
 	ProjectID string
@@ -138,6 +152,10 @@ type TicketFilter struct {
 // pain Gravy removes, so the snapshot a dashboard renders is fleet-wide by construction rather
 // than by the caller looping over projects and hoping the reads agree.
 type SystemStatus struct {
+	// Projects is the working set: archived projects are left out unless the caller asks for
+	// them. Their in-flight work is not — archiving is not a kill switch, so a ticket that was
+	// already running or awaiting review keeps its row in Running and Attention until it
+	// reaches Done or Rejected, even though the project itself is no longer listed here.
 	Projects []ProjectStatus
 	Hosts    []HostStatus
 	// Attention is the open Needs You queue, oldest first.
