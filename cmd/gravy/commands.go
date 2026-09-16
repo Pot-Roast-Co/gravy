@@ -19,18 +19,33 @@ import (
 
 // ---- project -------------------------------------------------------------
 
-func runProject(ctx context.Context, args []string) error {
-	sub := ""
-	if len(args) > 0 {
-		sub = args[0]
+// projectSubcommand splits `gravy project ...` arguments into a subcommand and the arguments
+// belonging to it.
+//
+// Listing is the default, so a bare `gravy project` and a leading flag such as `gravy project
+// --all` both mean "list" — and neither has a subcommand word to strip off the front. Slicing
+// one off regardless is how the default branch panics on an empty argument list instead of
+// listing the projects.
+func projectSubcommand(args []string) (sub string, rest []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
 	}
+	return "", args
+}
+
+func runProject(ctx context.Context, args []string) error {
+	sub, rest := projectSubcommand(args)
 	switch sub {
 	case "add":
-		return projectAdd(ctx, args[1:])
+		return projectAdd(ctx, rest)
+	case "archive":
+		return projectArchive(ctx, rest, true)
+	case "unarchive":
+		return projectArchive(ctx, rest, false)
 	case "list", "ls", "":
-		return projectList(ctx)
+		return projectList(ctx, rest)
 	default:
-		return fmt.Errorf("unknown project command %q (try: add, list)", sub)
+		return fmt.Errorf("unknown project command %q (try: add, list, archive, unarchive)", sub)
 	}
 }
 
@@ -140,14 +155,20 @@ func modeLabel(p core.Project) string {
 	return "serial — one ticket in flight, through merge"
 }
 
-func projectList(ctx context.Context) error {
+func projectList(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy project list", flag.ContinueOnError)
+	all := fs.Bool("all", false, "include archived projects")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
 	a, err := newClient(ctx)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
 
-	projects, err := a.svc.ListProjects(ctx)
+	projects, err := a.svc.ListProjects(ctx, api.ProjectFilter{IncludeArchived: *all})
 	if err != nil {
 		return err
 	}
@@ -171,9 +192,80 @@ func projectList(ctx context.Context) error {
 		if p.ParallelMode {
 			mode = fmt.Sprintf("parallel(%d)", p.MaxConcurrency)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Slug, p.TargetBranch, mode, v, p.RepoPath)
+		slug := p.Slug
+		if p.Archived {
+			slug += " (archived)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", slug, p.TargetBranch, mode, v, p.RepoPath)
 	}
 	return w.Flush()
+}
+
+// projectArchive takes a finished repository out of the working set, or puts it back.
+//
+// Nothing is deleted and nothing in flight is stopped: the project's tickets, runs and summaries
+// stay exactly where they are, and a ticket already running or awaiting review finishes.
+func projectArchive(ctx context.Context, args []string, archived bool) error {
+	verb := "archive"
+	if !archived {
+		verb = "unarchive"
+	}
+	fs := flag.NewFlagSet("gravy project "+verb, flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: gravy project %s <slug|id>\n", verb)
+		fs.PrintDefaults()
+	}
+	names, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(names) != 1 {
+		fs.Usage()
+		return fmt.Errorf("expected exactly one project")
+	}
+
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	p, err := findProject(ctx, a.svc, names[0])
+	if err != nil {
+		return err
+	}
+	if p.Archived == archived {
+		fmt.Printf("%s is already %sd\n", p.Slug, verb)
+		return nil
+	}
+	if err := a.svc.ArchiveProject(ctx, p.ID, archived); err != nil {
+		return err
+	}
+
+	if archived {
+		fmt.Printf("archived %s — its tickets, runs and history are kept\n", p.Slug)
+		fmt.Printf("  ready tickets stay ready; nothing new starts until: gravy project unarchive %s\n", p.Slug)
+		return nil
+	}
+	fmt.Printf("unarchived %s — the scheduler will pick its ready tickets up again\n", p.Slug)
+	return nil
+}
+
+// findProject looks a project up by slug or id, archived ones included.
+//
+// Unlike resolveProject there is no "the only one registered" default: these commands name the
+// project they act on, and an archived one has to be nameable or it could never come back.
+func findProject(ctx context.Context, svc api.Service, ref string) (core.Project, error) {
+	projects, err := svc.ListProjects(ctx, api.ProjectFilter{IncludeArchived: true})
+	if err != nil {
+		return core.Project{}, err
+	}
+	for _, p := range projects {
+		if p.Slug == ref || p.ID == ref {
+			return p, nil
+		}
+	}
+	return core.Project{}, fmt.Errorf("no project named %q", ref)
 }
 
 // ---- ticket --------------------------------------------------------------
@@ -257,30 +349,44 @@ func ticketAdd(ctx context.Context, args []string) error {
 // resolveProject takes the service rather than an app so both the client commands and the
 // in-process ones can use it.
 func resolveProject(ctx context.Context, svc api.Service, slug string) (core.Project, error) {
-	projects, err := svc.ListProjects(ctx)
+	// Named explicitly, an archived project still resolves — filing a ticket against finished
+	// work is a deliberate act, and it simply will not start until the project comes back. What
+	// an archived project never becomes is the implicit default below.
+	projects, err := svc.ListProjects(ctx, api.ProjectFilter{IncludeArchived: true})
 	if err != nil {
 		return core.Project{}, err
 	}
-	if len(projects) == 0 {
-		return core.Project{}, fmt.Errorf("no projects registered — add one with: gravy project add <path>")
-	}
-	if slug == "" {
-		if len(projects) == 1 {
-			return projects[0], nil
+	if slug != "" {
+		for _, p := range projects {
+			if p.Slug == slug {
+				return p, nil
+			}
 		}
-		names := make([]string, len(projects))
-		for i, p := range projects {
-			names[i] = p.Slug
-		}
-		return core.Project{}, fmt.Errorf("several projects registered (%s); pass -project",
-			strings.Join(names, ", "))
+		return core.Project{}, fmt.Errorf("no project named %q", slug)
 	}
+
+	working := make([]core.Project, 0, len(projects))
 	for _, p := range projects {
-		if p.Slug == slug {
-			return p, nil
+		if !p.Archived {
+			working = append(working, p)
 		}
 	}
-	return core.Project{}, fmt.Errorf("no project named %q", slug)
+	switch len(working) {
+	case 0:
+		if len(projects) > 0 {
+			return core.Project{}, fmt.Errorf(
+				"every project is archived; name one with -project, or: gravy project unarchive <slug>")
+		}
+		return core.Project{}, fmt.Errorf("no projects registered — add one with: gravy project add <path>")
+	case 1:
+		return working[0], nil
+	}
+	names := make([]string, len(working))
+	for i, p := range working {
+		names[i] = p.Slug
+	}
+	return core.Project{}, fmt.Errorf("several projects registered (%s); pass -project",
+		strings.Join(names, ", "))
 }
 
 func ticketList(ctx context.Context, args []string) error {
@@ -315,7 +421,9 @@ func ticketList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	projects, _ := a.svc.ListProjects(ctx)
+	// Archived ones too: a listed ticket names its project, and one in a finished repository
+	// would otherwise print a blank column.
+	projects, _ := a.svc.ListProjects(ctx, api.ProjectFilter{IncludeArchived: true})
 	slugByID := map[string]string{}
 	for _, p := range projects {
 		slugByID[p.ID] = p.Slug
@@ -418,6 +526,7 @@ func stamp(started time.Time) string {
 
 func runStatus(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gravy status", flag.ContinueOnError)
+	all := fs.Bool("all", false, "include archived projects")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -428,7 +537,7 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	defer a.Close()
 
-	st, err := a.svc.Status(ctx)
+	st, err := a.svc.Status(ctx, api.ProjectFilter{IncludeArchived: *all})
 	if err != nil {
 		return err
 	}
@@ -459,6 +568,10 @@ func runStatus(ctx context.Context, args []string) error {
 			note := ps.Blocked
 			if note == "" {
 				note = "-"
+				if ps.Project.Archived {
+					// Only reachable with --all: the default listing has no archived rows.
+					note = "archived"
+				}
 			}
 			fmt.Fprintf(w, "  %s\t%d\t%s\t%d\t%s\n",
 				ps.Project.Slug, ps.Counts[core.StateReady], active, ps.Counts[core.StateDone], note)

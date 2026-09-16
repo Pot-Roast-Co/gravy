@@ -41,7 +41,9 @@ func (l *Local) SetupInfo(ctx context.Context) (SetupInfo, error) {
 	if out.Settings, err = l.GetSettings(ctx); err != nil {
 		return out, err
 	}
-	if out.Projects, err = l.ListProjects(ctx); err != nil {
+	// Archived ones included: the wizard uses this to say what is already registered, and a
+	// slug is still taken by a project that has left the working set.
+	if out.Projects, err = l.ListProjects(ctx, ProjectFilter{IncludeArchived: true}); err != nil {
 		return out, err
 	}
 	out.Agents = l.DetectAgents(ctx)

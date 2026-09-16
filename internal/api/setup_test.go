@@ -76,7 +76,7 @@ func TestSetupDetectionProposesWithoutWriting(t *testing.T) {
 					t.Fatal("missing xcode requirement")
 				}
 			}
-			projects, _ := l.ListProjects(context.Background())
+			projects, _ := l.ListProjects(context.Background(), ProjectFilter{})
 			if len(projects) != 0 {
 				t.Fatal("preview persisted project")
 			}
@@ -115,7 +115,7 @@ func TestSetupApprovalAndRerunPreserveUnrelatedSettings(t *testing.T) {
 	if err := loaded.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	projects, _ := l.ListProjects(context.Background())
+	projects, _ := l.ListProjects(context.Background(), ProjectFilter{})
 	if len(projects) != 1 || len(projects[0].Validation) != 3 {
 		t.Fatal(projects)
 	}
@@ -125,7 +125,7 @@ func TestSetupApprovalAndRerunPreserveUnrelatedSettings(t *testing.T) {
 	if _, err := l.ApplySetup(context.Background(), SetupRequest{Original: original, Config: next}); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := l.ListProjects(context.Background())
+	after, _ := l.ListProjects(context.Background(), ProjectFilter{})
 	if !reflect.DeepEqual(projects, after) {
 		t.Fatal("rerun changed projects")
 	}
@@ -146,7 +146,7 @@ func TestSetupSaveFailureRollsBackNewProject(t *testing.T) {
 	if _, err := l.ApplySetup(context.Background(), req); err == nil {
 		t.Fatal("expected config save failure")
 	}
-	projects, _ := l.ListProjects(context.Background())
+	projects, _ := l.ListProjects(context.Background(), ProjectFilter{})
 	if len(projects) != 0 {
 		t.Fatal("left half-created project")
 	}

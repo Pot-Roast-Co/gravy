@@ -115,9 +115,13 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	return nil
 }
 
-func (c *Client) ListProjects(ctx context.Context) ([]core.Project, error) {
+func (c *Client) ListProjects(ctx context.Context, f ProjectFilter) ([]core.Project, error) {
 	var out []core.Project
-	return out, c.call(ctx, mListProjects, nil, &out)
+	return out, c.call(ctx, mListProjects, projectFilterParams{Filter: f}, &out)
+}
+
+func (c *Client) ArchiveProject(ctx context.Context, id string, archived bool) error {
+	return c.call(ctx, mArchiveProject, archiveProjectParams{ID: id, Archived: archived}, nil)
 }
 
 func (c *Client) AddProject(ctx context.Context, req AddProjectReq) (core.Project, error) {
@@ -246,9 +250,9 @@ func (c *Client) ResolveAttention(ctx context.Context, id string) error {
 	return c.call(ctx, mResolveAttention, idParams{ID: id}, nil)
 }
 
-func (c *Client) Status(ctx context.Context) (SystemStatus, error) {
+func (c *Client) Status(ctx context.Context, f ProjectFilter) (SystemStatus, error) {
 	var out SystemStatus
-	return out, c.call(ctx, mStatus, nil, &out)
+	return out, c.call(ctx, mStatus, projectFilterParams{Filter: f}, &out)
 }
 
 func (c *Client) ExplainTicket(ctx context.Context, ticketID string) (Explanation, error) {

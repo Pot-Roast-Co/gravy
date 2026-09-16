@@ -62,7 +62,7 @@ func TestRoundTripEveryMethod(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {
-		got, err := c.ListProjects(ctx)
+		got, err := c.ListProjects(ctx, ProjectFilter{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +94,7 @@ func TestRoundTripEveryMethod(t *testing.T) {
 	})
 
 	t.Run("Status", func(t *testing.T) {
-		st, err := c.Status(ctx)
+		st, err := c.Status(ctx, ProjectFilter{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -183,6 +183,42 @@ func TestRoundTripEveryMethod(t *testing.T) {
 	t.Run("ExplainTicket", func(t *testing.T) {
 		if _, err := c.ExplainTicket(ctx, "GR-1"); err == nil {
 			t.Error("explain with no scheduler succeeded")
+		}
+	})
+
+	t.Run("ArchiveProject", func(t *testing.T) {
+		if err := c.ArchiveProject(ctx, "p1", true); err != nil {
+			t.Fatal(err)
+		}
+		// The filter has to cross the wire too. A params struct that did not marshal would
+		// arrive as its zero value and quietly list the working set either way.
+		working, err := c.ListProjects(ctx, ProjectFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(working) != 0 {
+			t.Errorf("working set = %+v, want the archived project left out", working)
+		}
+		all, err := c.ListProjects(ctx, ProjectFilter{IncludeArchived: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 1 || !all[0].Archived {
+			t.Errorf("IncludeArchived = %+v, want the project with its flag set", all)
+		}
+
+		if err := c.ArchiveProject(ctx, "p1", false); err != nil {
+			t.Fatal(err)
+		}
+		back, err := c.ListProjects(ctx, ProjectFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(back) != 1 || back[0].Archived {
+			t.Errorf("after unarchiving, working set = %+v", back)
+		}
+		if err := c.ArchiveProject(ctx, "nope", true); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("archiving a missing project = %v, want ErrNotFound across the wire", err)
 		}
 	})
 }

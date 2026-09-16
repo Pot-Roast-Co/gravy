@@ -131,6 +131,10 @@ type Model struct {
 	// all projects by default because remembering which agent is on which repository is the
 	// pain being removed.
 	projectIdx int
+	// projectID is which project that index meant, so a snapshot that reordered or dropped the
+	// list — a project archived from another client, say — re-points the filter at the same
+	// repository rather than silently at its neighbour.
+	projectID string
 
 	// attention is how many items were in the Needs You queue at the last refresh, so a new
 	// one can be heard. The daemon cannot ring a bell — it has no terminal, and writes one
@@ -212,7 +216,7 @@ func (m Model) Init() tea.Cmd { return connect(m.svc) }
 func connect(svc api.Service) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		st, err := svc.Status(ctx)
+		st, err := svc.Status(ctx, api.ProjectFilter{})
 		if err != nil {
 			return connectErrMsg{err}
 		}
@@ -238,7 +242,7 @@ func waitForEvent(ch <-chan api.Event) tea.Cmd {
 
 func refreshStatus(svc api.Service) tea.Cmd {
 	return func() tea.Msg {
-		st, err := svc.Status(context.Background())
+		st, err := svc.Status(context.Background(), api.ProjectFilter{})
 		if err != nil {
 			return connectErrMsg{err}
 		}
@@ -300,7 +304,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, Goto(SectionDashboard, "")
 		}
 		return m, func() tea.Msg {
-			st, err := m.svc.Status(context.Background())
+			st, err := m.svc.Status(context.Background(), api.ProjectFilter{})
 			return ticketDestinationMsg{id: msg.id, status: st, err: err}
 		}
 	case ticketDestinationMsg:
@@ -309,6 +313,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = msg.status
+		m = m.resyncProjectFilter()
 		return m, Goto(notificationDestination(msg.status, msg.id), msg.id)
 
 	case tea.WindowSizeMsg:
@@ -352,6 +357,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.status
 		m.attention = len(msg.status.Attention)
 		m.conn, m.connErr = connReady, nil
+		m = m.resyncProjectFilter()
 		if rang {
 			return m, tea.Batch(ringBell, m.refreshScreen())
 		}
@@ -500,6 +506,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case m.keys.Project.Matches(key):
 		m.projectIdx = m.nextProject()
+		m.projectID = ""
+		if m.projectIdx >= 0 {
+			m.projectID = m.status.Projects[m.projectIdx].Project.ID
+		}
 		return m, nil
 
 	case m.keys.AddProject.Matches(key):
@@ -521,14 +531,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // nextProject cycles all projects -> each project in turn -> all projects.
+//
+// Archived projects are skipped. The default snapshot leaves them out already, so this is the
+// belt to that braces: the frame never filters onto a repository that is finished, whatever a
+// snapshot taken with archived projects included happens to contain.
 func (m Model) nextProject() int {
-	if len(m.status.Projects) == 0 {
-		return -1
+	for i := m.projectIdx + 1; i < len(m.status.Projects); i++ {
+		if !m.status.Projects[i].Project.Archived {
+			return i
+		}
 	}
-	if m.projectIdx+1 >= len(m.status.Projects) {
-		return -1
-	}
-	return m.projectIdx + 1
+	return -1
 }
 
 // projectName is the active filter's name, empty when every project is shown.
@@ -537,6 +550,25 @@ func (m Model) projectName() string {
 		return ""
 	}
 	return m.status.Projects[m.projectIdx].Project.Name
+}
+
+// resyncProjectFilter re-points the filter at the project it was set on, and drops it when that
+// project has been archived or is no longer in the snapshot.
+//
+// Falling back to all projects is the right failure: a frame left filtered to a repository that
+// has left the working set shows screens that are empty for a reason none of them explains.
+func (m Model) resyncProjectFilter() Model {
+	if m.projectIdx < 0 {
+		return m
+	}
+	for i, ps := range m.status.Projects {
+		if ps.Project.ID == m.projectID && !ps.Project.Archived {
+			m.projectIdx = i
+			return m
+		}
+	}
+	m.projectIdx, m.projectID = -1, ""
+	return m
 }
 
 // View renders header, body and status bar into exactly the terminal's size.

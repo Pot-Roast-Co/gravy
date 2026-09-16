@@ -265,7 +265,18 @@ func writeResponse(w *bufio.Writer, resp *rpcResponse) error {
 func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	switch method {
 	case mListProjects:
-		return s.svc.ListProjects(ctx)
+		var p projectFilterParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ListProjects(ctx, p.Filter)
+
+	case mArchiveProject:
+		var p archiveProjectParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.ArchiveProject(ctx, p.ID, p.Archived)
 
 	case "SetupInfo":
 		return s.svc.SetupInfo(ctx)
@@ -459,7 +470,11 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return nil, s.svc.ResolveAttention(ctx, p.ID)
 
 	case mStatus:
-		return s.svc.Status(ctx)
+		var p projectFilterParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.Status(ctx, p.Filter)
 
 	case mExplainTicket:
 		var p ticketIDParams

@@ -108,9 +108,21 @@ func NewLocal(db *store.DB, sched *scheduler.Scheduler, hosts []host.Host, newID
 	return &Local{db: db, hosts: hosts, sched: sched, newID: newID, now: time.Now, events: newBroker()}
 }
 
-// ListProjects returns every registered project.
-func (l *Local) ListProjects(ctx context.Context) ([]core.Project, error) {
-	return l.db.ListProjects(ctx)
+// ListProjects returns the registered projects, archived ones only when asked for.
+func (l *Local) ListProjects(ctx context.Context, f ProjectFilter) ([]core.Project, error) {
+	return l.db.ListProjects(ctx, store.ProjectFilter{IncludeArchived: f.IncludeArchived})
+}
+
+// ArchiveProject takes a project out of the working set, or puts it back.
+//
+// Nothing in flight is touched. A ticket already running, awaiting review or landing finishes
+// its lifecycle: archiving says "queue no more work here", not "abandon what is happening".
+func (l *Local) ArchiveProject(ctx context.Context, id string, archived bool) error {
+	if err := l.db.SetProjectArchived(ctx, id, archived); err != nil {
+		return err
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: id})
+	return nil
 }
 
 // AddProject registers a repository after checking it is one.
@@ -251,7 +263,9 @@ func (l *Local) ListTickets(ctx context.Context, f TicketFilter) ([]core.Ticket,
 	case f.State != "":
 		return l.db.ListTicketsByState(ctx, f.State)
 	default:
-		projects, err := l.db.ListProjects(ctx)
+		// Every project, archived included: a ticket does not stop existing because the
+		// repository it belongs to left the working set.
+		projects, err := l.db.ListProjects(ctx, store.ProjectFilter{IncludeArchived: true})
 		if err != nil {
 			return nil, err
 		}
@@ -392,10 +406,14 @@ func (l *Local) ExplainTicket(ctx context.Context, ticketID string) (Explanation
 }
 
 // Status is the one-screen answer to "what is happening, what needs me".
-func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
+func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, error) {
 	var st SystemStatus
 
-	projects, err := l.db.ListProjects(ctx)
+	// Archived projects are read in either way, then left out of the Projects collection below.
+	// Reading only the working set would drop their in-flight tickets from Running and their
+	// rows from Needs You, making a ticket vanish mid-approval — exactly what archiving must
+	// not do.
+	projects, err := l.db.ListProjects(ctx, store.ProjectFilter{IncludeArchived: true})
 	if err != nil {
 		return st, err
 	}
@@ -420,8 +438,23 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 			}
 		}
 
+		// An archived project is out of the working set: it leaves the Projects collection
+		// every dashboard renders, and its queue leaves with it — those tickets are waiting on
+		// a repository nobody is working on, and the scheduler will not take them.
+		//
+		// What archiving must not do is strand work that was already in flight. Archiving is
+		// not a kill switch, so a ticket that was in Review when somebody archived its project
+		// keeps its row in Needs You (assembled from the attention queue below, which spans
+		// every project) and in Running, and stays approvable and landable until it reaches
+		// Done or Rejected. Hiding the project hides a line on a summary, never the work.
+		hidden := p.Archived && !f.IncludeArchived
+
 		// An idle queue is always explained, never merely idle.
-		if ps.Active != nil && !p.ParallelMode && ps.Counts[core.StateReady] > 0 {
+		switch {
+		case p.Archived && ps.Counts[core.StateReady] > 0:
+			// Not a fault: the repository is finished. Unarchiving starts the queue again.
+			ps.Blocked = "project archived"
+		case ps.Active != nil && !p.ParallelMode && ps.Counts[core.StateReady] > 0:
 			verb := "in flight"
 			if ps.Active.State == core.StateReview {
 				verb = "awaiting your review"
@@ -445,14 +478,16 @@ func (l *Local) Status(ctx context.Context) (SystemStatus, error) {
 					}
 				}
 				st.Running = append(st.Running, rt)
-			case t.State == core.StateReady:
+			case t.State == core.StateReady && !hidden:
 				// Held carries the project's explanation, so a ticket that will not start
 				// says why on its own row rather than being an unexplained absence.
 				st.Ready = append(st.Ready, QueuedTicket{Ticket: t, Project: p, Held: ps.Blocked})
 			}
 		}
 
-		st.Projects = append(st.Projects, ps)
+		if !hidden {
+			st.Projects = append(st.Projects, ps)
+		}
 	}
 
 	// Ready is fleet-wide and must be in the order the scheduler would take it, not grouped by

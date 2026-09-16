@@ -35,6 +35,9 @@ const (
 	projectNaming
 	projectEditingNotes
 	projectConfirmDelete
+	// projectConfirmArchive is a one-line y/n. Archiving is reversible with the same key, so
+	// it does not ask for the project's name the way deleting does.
+	projectConfirmArchive
 	// projectConfig browses a project's own settings; projectEditingField types into one.
 	projectConfig
 	projectEditingField
@@ -53,7 +56,12 @@ type projects struct {
 	counts map[string]map[core.State]int
 	err    error
 	loaded bool
+	// showArchived expands the collapsed group at the bottom. Collapsed by default: a finished
+	// repository is kept, not shown — that is what archiving it was for.
+	showArchived bool
 
+	// cursor indexes rows(), which is the working set, then the archived group's header, then
+	// the archived projects when it is expanded.
 	cursor int
 	mode   projectMode
 	input  string
@@ -81,6 +89,35 @@ func newProjects() *projects {
 	return &projects{counts: map[string]map[core.State]int{}}
 }
 
+// projectRow is one line of the list: a project, or the header of the archived group.
+type projectRow struct {
+	project core.Project
+	// group marks the "archived (N)" header, which is selectable so enter can expand it.
+	group bool
+	count int
+}
+
+// rows is what the list draws and what the cursor indexes: the working set, then the archived
+// group's header, then the archived projects themselves when the group is expanded.
+func (p *projects) rows() []projectRow {
+	var out, archived []projectRow
+	for _, pr := range p.projects {
+		if pr.Archived {
+			archived = append(archived, projectRow{project: pr})
+			continue
+		}
+		out = append(out, projectRow{project: pr})
+	}
+	if len(archived) == 0 {
+		return out
+	}
+	out = append(out, projectRow{group: true, count: len(archived)})
+	if p.showArchived {
+		out = append(out, archived...)
+	}
+	return out
+}
+
 // CapturesKeys takes the keyboard for every mode but browsing.
 //
 // Including projectConfig, which only browses fields: without it the frame claims esc for
@@ -91,7 +128,9 @@ func (p *projects) CapturesKeys() bool { return p.mode != projectBrowsing }
 func loadProjects(svc api.Service) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		list, err := svc.ListProjects(ctx)
+		// Archived ones too: this screen is where they are found and brought back, so it is
+		// the one place that asks for the whole list rather than the working set.
+		list, err := svc.ListProjects(ctx, api.ProjectFilter{IncludeArchived: true})
 		if err != nil {
 			return projectsLoadedMsg{err: err}
 		}
@@ -140,7 +179,7 @@ func (p *projects) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			}
 			p.counts[t.ProjectID][t.State]++
 		}
-		p.cursor = clamp(p.cursor, 0, max(0, len(p.projects)-1))
+		p.cursor = clamp(p.cursor, 0, max(0, len(p.rows())-1))
 		return p, nil
 
 	case projectDoneMsg:
@@ -211,6 +250,17 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 		return p, nil
 	}
 
+	if p.mode == projectConfirmArchive {
+		// One key, not a typed name: archiving keeps everything and the same key undoes it, so
+		// asking for the project's slug would be ceremony for a reversible act.
+		p.mode = projectBrowsing
+		if key == "y" || key == "Y" {
+			return p, p.archiveSelected(ctx)
+		}
+		p.notice = ""
+		return p, nil
+	}
+
 	if p.mode != projectBrowsing {
 		switch {
 		case key == "esc":
@@ -258,7 +308,24 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 		}
 		return p, nil
 
+	case "z":
+		// The same key both ways: archiving is a reversible move between the working set and
+		// the group at the bottom, not a state a second key has to undo.
+		if cur, ok := p.current(); ok {
+			verb := "archive"
+			if cur.Archived {
+				verb = "unarchive"
+			}
+			p.mode = projectConfirmArchive
+			p.notice = verb + " " + cur.Slug + "? y to confirm · any other key cancels"
+		}
+		return p, nil
+
 	case "enter":
+		if row, ok := p.currentRow(); ok && row.group {
+			p.showArchived = !p.showArchived
+			return p, nil
+		}
 		// Filtering the frame to this project and going to its backlog is what "see its
 		// tickets" means, rather than building a second ticket list here.
 		if cur, ok := p.current(); ok {
@@ -272,7 +339,7 @@ func (p *projects) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) 
 			p.scroll = 0
 		}
 	case "down", "j":
-		if p.cursor < len(p.projects)-1 {
+		if p.cursor < len(p.rows())-1 {
 			p.cursor++
 			p.scroll = 0
 		}
@@ -304,12 +371,47 @@ func (p *projects) leaveConfig(ctx ViewContext) tea.Cmd {
 	}
 }
 
-// current is the selected project.
+// currentRow is the selected line, which may be the archived group's header.
+func (p *projects) currentRow() (projectRow, bool) {
+	rows := p.rows()
+	if p.cursor < 0 || p.cursor >= len(rows) {
+		return projectRow{}, false
+	}
+	return rows[p.cursor], true
+}
+
+// current is the selected project. The archived group's header is not one, so the keys that act
+// on a project do nothing there rather than acting on whichever project is next to it.
 func (p *projects) current() (core.Project, bool) {
-	if p.cursor < 0 || p.cursor >= len(p.projects) {
+	row, ok := p.currentRow()
+	if !ok || row.group {
 		return core.Project{}, false
 	}
-	return p.projects[p.cursor], true
+	return row.project, true
+}
+
+// archiveSelected moves the selected project between the working set and the archived group.
+//
+// The group is expanded on archiving so the project does not appear to vanish: it went into a
+// collapsed group, which is a different thing from being deleted and has to look like it.
+func (p *projects) archiveSelected(ctx ViewContext) tea.Cmd {
+	cur, ok := p.current()
+	if !ok {
+		return nil
+	}
+	archived := !cur.Archived
+	verb := "archived "
+	if !archived {
+		verb = "unarchived "
+	}
+	p.showArchived = true
+	svc := ctx.Svc
+	return func() tea.Msg {
+		return projectDoneMsg{
+			verb: verb + cur.Slug,
+			err:  svc.ArchiveProject(context.Background(), cur.ID, archived),
+		}
+	}
 }
 
 // submit applies whatever was being typed.
@@ -376,7 +478,16 @@ func (p *projects) View(ctx ViewContext) string {
 		return th.Muted.Render("loading projects…")
 	}
 
-	lines := []string{th.Header.Render(fmt.Sprintf("Projects (%d)", len(p.projects)))}
+	rows := p.rows()
+	// The count is the working set. Archived projects are counted in their own group's header,
+	// because a heading that grows for work that is over is the problem this screen had.
+	active := 0
+	for _, pr := range p.projects {
+		if !pr.Archived {
+			active++
+		}
+	}
+	lines := []string{th.Header.Render(fmt.Sprintf("Projects (%d)", active))}
 
 	if len(p.projects) == 0 {
 		lines = append(lines,
@@ -389,19 +500,38 @@ func (p *projects) View(ctx ViewContext) string {
 		return p.scrolled(lines, ctx, th)
 	}
 
-	for i, pr := range p.projects {
+	for i, row := range rows {
 		marker, style := "  ", th.Text
 		if i == p.cursor {
 			marker, style = "▸ ", th.Accent
 		}
+		if row.group {
+			caret := "▸"
+			if p.showArchived {
+				caret = "▾"
+			}
+			lines = append(lines, "", style.Render(fmt.Sprintf(
+				"%s%s archived (%d)", marker, caret, row.count)))
+			continue
+		}
+		pr := row.project
 		where := pr.HostID
 		if where == "" {
 			where = "local"
 		}
+		// Muted rather than absent: an archived project is still a project, and the row has to
+		// say why it is sitting apart from the others.
+		summary := p.countSummary(pr.ID)
+		if pr.Archived {
+			summary = "archived · " + summary
+			if i != p.cursor {
+				style = th.Muted
+			}
+		}
 		lines = append(lines, style.Render(marker+columns(ctx.Width-2,
 			col{text: pr.Name, width: 22},
 			col{text: where, width: 10},
-			col{text: p.countSummary(pr.ID), flex: true},
+			col{text: summary, flex: true},
 		)))
 	}
 
@@ -416,7 +546,8 @@ func (p *projects) View(ctx ViewContext) string {
 		lines = append(lines, p.detail(cur, ctx, th)...)
 	}
 
-	if p.mode != projectBrowsing {
+	// The archive confirm asks its question in the footer: there is nothing to type.
+	if p.mode != projectBrowsing && p.mode != projectConfirmArchive {
 		label := "  name  "
 		switch p.mode {
 		case projectEditingNotes:
@@ -472,6 +603,13 @@ func (p *projects) configLines(ctx ViewContext, th Theme) []string {
 // detail renders the selected project.
 func (p *projects) detail(pr core.Project, ctx ViewContext, th Theme) []string {
 	var out []string
+
+	if pr.Archived {
+		// Said plainly, because a ready ticket here will sit ready forever and the queue
+		// screen's explanation is one screen away.
+		out = append(out, th.Muted.Render(
+			"    archived — nothing new starts here until z brings it back"))
+	}
 
 	if pr.RepoPath == "" {
 		// Said plainly rather than shown as a blank path: a project with no repository cannot
@@ -570,5 +708,5 @@ func (p *projects) footer(th Theme) string {
 		return th.Muted.Render("  tab completes · enter to accept · ctrl+u clear · esc to cancel")
 	}
 	return th.Muted.Render(
-		"  c settings · e notes · n new · D delete · enter its tickets · P add · j/k move")
+		"  c settings · e notes · n new · z archive · D delete · enter its tickets · P add · j/k move")
 }

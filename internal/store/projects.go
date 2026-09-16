@@ -10,7 +10,16 @@ import (
 )
 
 const projectColumns = `id, slug, name, repo_path, target_branch, merge_mode, requirements,
-	validation, allowlist, routes, parallel_mode, max_concurrency, created_at, host_id, notes`
+	validation, allowlist, routes, parallel_mode, max_concurrency, created_at, host_id, notes,
+	archived`
+
+// ProjectFilter narrows a project listing. The zero value is the working set: everything that
+// has not been archived.
+type ProjectFilter struct {
+	// IncludeArchived adds finished projects back in, for the screens and commands that are
+	// deliberately looking at history rather than at this week's work.
+	IncludeArchived bool
+}
 
 // CreateProject inserts a project.
 func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
@@ -32,10 +41,10 @@ func (d *DB) CreateProject(ctx context.Context, p core.Project) error {
 	}
 
 	_, err = d.exec(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Slug, p.Name, p.RepoPath, p.TargetBranch, string(p.MergeMode),
 		req, val, allow, routes, boolToInt(p.ParallelMode), p.MaxConcurrency,
-		unixOrZero(p.CreatedAt), p.HostID, p.Notes)
+		unixOrZero(p.CreatedAt), p.HostID, p.Notes, boolToInt(p.Archived))
 	if err != nil {
 		return fmt.Errorf("create project %q: %w", p.Slug, err)
 	}
@@ -62,9 +71,16 @@ func (d *DB) GetProjectBySlug(ctx context.Context, slug string) (core.Project, e
 	return p, err
 }
 
-// ListProjects returns all projects, ordered by slug for stable display.
-func (d *DB) ListProjects(ctx context.Context) ([]core.Project, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY slug`)
+// ListProjects returns projects ordered by slug for stable display.
+//
+// Archived projects are left out unless the filter asks for them: the default is the working
+// set, because a list that only ever grows stops being the answer to "what am I working on".
+func (d *DB) ListProjects(ctx context.Context, f ProjectFilter) ([]core.Project, error) {
+	where := ` WHERE archived = 0`
+	if f.IncludeArchived {
+		where = ``
+	}
+	rows, err := d.sql.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects`+where+` ORDER BY slug`)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -85,6 +101,9 @@ func (d *DB) ListProjects(ctx context.Context) ([]core.Project, error) {
 }
 
 // UpdateProject replaces a project's mutable fields.
+//
+// Deliberately not archived: taking a project out of the working set is its own recorded act
+// (SetProjectArchived), never a side effect of an edit that happened to carry a stale flag.
 func (d *DB) UpdateProject(ctx context.Context, p core.Project) error {
 	req, err := marshalJSON(p.Requirements)
 	if err != nil {
@@ -116,6 +135,18 @@ func (d *DB) UpdateProject(ctx context.Context, p core.Project) error {
 	return requireOneRow(res, "project", p.ID)
 }
 
+// SetProjectArchived takes a project out of the working set, or puts it back.
+//
+// Nothing else is touched: the project's tickets, runs, summaries and history stay exactly as
+// they are, which is the whole point of archiving rather than deleting.
+func (d *DB) SetProjectArchived(ctx context.Context, id string, archived bool) error {
+	res, err := d.exec(ctx, `UPDATE projects SET archived = ? WHERE id = ?`, boolToInt(archived), id)
+	if err != nil {
+		return fmt.Errorf("archive project %q: %w", id, err)
+	}
+	return requireOneRow(res, "project", id)
+}
+
 // DeleteProject removes a project. Its tickets, runs, summaries and attention rows go with it
 // via ON DELETE CASCADE.
 func (d *DB) DeleteProject(ctx context.Context, id string) error {
@@ -134,16 +165,17 @@ func scanProject(s scanner) (core.Project, error) {
 		p                       core.Project
 		mergeMode               string
 		req, val, allow, routes string
-		parallel                int
+		parallel, archived      int
 		createdAt               int64
 	)
 	if err := s.Scan(&p.ID, &p.Slug, &p.Name, &p.RepoPath, &p.TargetBranch, &mergeMode,
 		&req, &val, &allow, &routes, &parallel, &p.MaxConcurrency, &createdAt,
-		&p.HostID, &p.Notes); err != nil {
+		&p.HostID, &p.Notes, &archived); err != nil {
 		return core.Project{}, err
 	}
 	p.MergeMode = core.LandMode(mergeMode)
 	p.ParallelMode = parallel != 0
+	p.Archived = archived != 0
 	p.CreatedAt = timeOrZero(createdAt)
 
 	if err := unmarshalJSON(req, &p.Requirements); err != nil {

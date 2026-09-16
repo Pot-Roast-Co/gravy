@@ -49,13 +49,15 @@ type fakeService struct {
 	projects        []core.Project
 	savedProjects   []core.Project
 	deletedProjects []string
-	agentStatus     []api.AgentStatus
-	allTickets      []core.Ticket
-	queue           []api.TicketDetail
-	added           []api.AddProjectReq
-	planReply       api.PlanReply
-	planErr         error
-	planned         []api.PlanReq
+	// archived records the ArchiveProject calls the Projects screen made, as id -> flag.
+	archived    []archiveCall
+	agentStatus []api.AgentStatus
+	allTickets  []core.Ticket
+	queue       []api.TicketDetail
+	added       []api.AddProjectReq
+	planReply   api.PlanReply
+	planErr     error
+	planned     []api.PlanReq
 	// checkoutPath is what ReviewCheckout returns; the rest record what was asked for.
 	checkoutPath string
 	checkoutErr  error
@@ -87,11 +89,24 @@ func newFake() *fakeService {
 	}
 }
 
-func (f *fakeService) Status(context.Context) (api.SystemStatus, error) {
+func (f *fakeService) Status(_ context.Context, filter api.ProjectFilter) (api.SystemStatus, error) {
 	if f.statusE != nil {
 		return api.SystemStatus{}, f.statusE
 	}
-	return f.status, nil
+	if filter.IncludeArchived {
+		return f.status, nil
+	}
+	out := f.status
+	out.Projects = nil
+	for _, ps := range f.status.Projects {
+		// The same rule Local applies: archived, but still on the dashboard while it has work
+		// in flight.
+		if ps.Project.Archived && ps.Active == nil {
+			continue
+		}
+		out.Projects = append(out.Projects, ps)
+	}
+	return out, nil
 }
 
 func (f *fakeService) Events(context.Context) (<-chan api.Event, func(), error) {
@@ -160,8 +175,36 @@ func (f *fakeService) KillRun(_ context.Context, runID string) error {
 	return nil
 }
 
-func (f *fakeService) ListProjects(context.Context) ([]core.Project, error) {
-	return f.projects, nil
+// archiveCall is one ArchiveProject call, recorded so a test can assert what was asked for.
+type archiveCall struct {
+	id       string
+	archived bool
+}
+
+func (f *fakeService) ListProjects(_ context.Context, filter api.ProjectFilter) ([]core.Project, error) {
+	if filter.IncludeArchived {
+		return f.projects, nil
+	}
+	var out []core.Project
+	for _, p := range f.projects {
+		if !p.Archived {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeService) ArchiveProject(_ context.Context, id string, archived bool) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.archived = append(f.archived, archiveCall{id: id, archived: archived})
+	for i, p := range f.projects {
+		if p.ID == id {
+			f.projects[i].Archived = archived
+		}
+	}
+	return nil
 }
 func (f *fakeService) AddProject(_ context.Context, req api.AddProjectReq) (core.Project, error) {
 	if f.actionErr != nil {
