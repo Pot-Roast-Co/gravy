@@ -97,6 +97,7 @@ func (e *rpcError) toError() error {
 const (
 	mListProjects     = "ListProjects"
 	mAddProject       = "AddProject"
+	mArchiveProject   = "ArchiveProject"
 	mDeleteProject    = "DeleteProject"
 	mDetectAgents     = "DetectAgents"
 	mPlan             = "Plan"
@@ -182,6 +183,13 @@ type (
 	}
 	updateProjectParams struct {
 		Project core.Project `json:"project"`
+	}
+	archiveProjectParams struct {
+		ID       string `json:"id"`
+		Archived bool   `json:"archived"`
+	}
+	projectFilterParams struct {
+		Filter ProjectFilter `json:"filter"`
 	}
 	settingsParams struct {
 		Config config.Config `json:"config"`

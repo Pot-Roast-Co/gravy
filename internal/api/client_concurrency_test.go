@@ -20,7 +20,7 @@ type blockingService struct {
 	release chan struct{}
 }
 
-func (b *blockingService) ListProjects(context.Context) ([]core.Project, error) {
+func (b *blockingService) ListProjects(context.Context, ProjectFilter) ([]core.Project, error) {
 	close(b.started)
 	<-b.release
 	return nil, nil
@@ -60,7 +60,7 @@ func TestASlowCallDoesNotBlockTheNextOne(t *testing.T) {
 	t.Cleanup(func() { c.Close() })
 
 	slow := make(chan error, 1)
-	go func() { _, err := c.ListProjects(context.Background()); slow <- err }()
+	go func() { _, err := c.ListProjects(context.Background(), ProjectFilter{}); slow <- err }()
 	<-svc.started
 
 	// The second call must complete while the first is still in flight.

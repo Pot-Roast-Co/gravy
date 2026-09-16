@@ -37,6 +37,14 @@ type Project struct {
 	// Routes overrides the global route table for this project.
 	Routes map[Route][]Choice
 
+	// Archived takes a finished repository out of the working set without throwing away what
+	// it holds. Its tickets, runs and summaries stay readable; the scheduler stops picking its
+	// work up, and the screens that show what to do this week leave it out.
+	//
+	// It is not a kill switch: work already in flight when a project is archived finishes its
+	// lifecycle, review and landing included.
+	Archived bool
+
 	// ParallelMode opts this project out of the conservative default of one ticket in flight
 	// through merge. Conflicts become possible and are the human's to handle.
 	ParallelMode bool

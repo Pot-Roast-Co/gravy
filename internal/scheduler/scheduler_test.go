@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -62,12 +63,12 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (core.Project, erro
 	return p, nil
 }
 
-func (f *fakeStore) ListProjects(context.Context) ([]core.Project, error) {
-	out := make([]core.Project, 0, len(f.projects))
-	for _, p := range f.projects {
-		out = append(out, p)
-	}
-	return out, nil
+// setArchived takes a project out of the working set, or puts it back, the way ArchiveProject
+// does — without touching anything else about it.
+func (f *fakeStore) setArchived(id string, archived bool) {
+	p := f.projects[id]
+	p.Archived = archived
+	f.projects[id] = p
 }
 
 func (f *fakeStore) CountActiveTickets(_ context.Context, projectID string) (int, error) {
@@ -824,5 +825,77 @@ func TestProjectRoutesReachTheRouter(t *testing.T) {
 	}
 	if rr.got.HostID != "m1" {
 		t.Errorf("HostID = %q, want the chosen host m1", rr.got.HostID)
+	}
+}
+
+// TestArchivedProjectQueuesNothingAndSaysSo: archiving takes a repository out of the working set
+// without touching what is in it.
+//
+// The adversarial case is the one that would make archiving a destructive act: the project's
+// Ready tickets must still be Ready, holding no worker and losing no position, so that
+// unarchiving is all it takes for the next tick to pick them up. A held ticket that cannot say
+// why it is held is the other half — an idle queue is always explained.
+func TestArchivedProjectQueuesNothingAndSaysSo(t *testing.T) {
+	st := newStore().addProject(parallelProject("p1", "repo", 10))
+	st.addTicket(ticket("t1", "p1", core.StateReady, 1))
+	st.addTicket(ticket("t2", "p1", core.StateReady, 2))
+	st.setArchived("p1", true)
+
+	sched := newScheduler(st, newPool(mac("m1", 8)))
+	got, err := sched.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("assigned %v in an archived project", assignedIDs(got))
+	}
+	for _, id := range []string{"t1", "t2"} {
+		if s := st.tickets[id].State; s != core.StateReady {
+			t.Errorf("%s = %s after a tick, want it left Ready — archiving is not a state change", id, s)
+		}
+		ex, err := sched.Explain(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ex.Eligible {
+			t.Errorf("Explain reports %s as eligible in an archived project", id)
+		}
+		if ex.Reason != "project archived" {
+			t.Errorf("reason = %q, want %q", ex.Reason, "project archived")
+		}
+	}
+
+	// Unarchiving is the whole undo: no other change, and the next tick picks the queue up.
+	st.setArchived("p1", false)
+	got, err = sched.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"t1", "t2"}; !reflect.DeepEqual(assignedIDs(got), want) {
+		t.Errorf("after unarchiving, assigned %v, want %v", assignedIDs(got), want)
+	}
+}
+
+// TestArchivingDoesNotTouchWorkInFlight: archiving is not a kill switch.
+//
+// The scheduler only ever considers Ready tickets, so a ticket already in flight is simply not
+// its business — but a future "skip archived projects" that read the project table earlier, or
+// filtered its ticket listing, could quietly start cancelling work. This pins the behaviour.
+func TestArchivingDoesNotTouchWorkInFlight(t *testing.T) {
+	for _, state := range []core.State{
+		core.StateRunning, core.StateReview, core.StateLanding, core.StateNeedsYou,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			st := newStore().addProject(parallelProject("p1", "repo", 10))
+			st.addTicket(ticket("busy", "p1", state, 1))
+			st.setArchived("p1", true)
+
+			if _, err := newScheduler(st, newPool(mac("m1", 8))).Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.tickets["busy"].State; got != state {
+				t.Errorf("in-flight ticket moved %s -> %s when its project was archived", state, got)
+			}
+		})
 	}
 }
