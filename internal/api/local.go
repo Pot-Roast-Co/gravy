@@ -657,11 +657,26 @@ func checkGitRepo(ctx context.Context, h host.Host, path string) error {
 	return nil
 }
 
-// resolveTargetBranch reads the default branch from the remote's HEAD.
+// resolveTargetBranch reads the default branch from the remote.
 //
-// A repository with no remote is accepted and falls back to the current branch: a local-only
-// project is a legitimate thing to run agents against, and refusing it would block the very
-// scratch repositories used to try Gravy out.
+// Landing merges into this branch, so a wrong answer here is not a mild inconvenience: approved
+// work is carried onto whatever branch happened to be checked out the day the project was
+// registered, the push succeeds, the ticket goes green, and nobody notices until they go looking
+// for the merge on main and find it two days stale. That is a real case, not a hypothetical one —
+// it is why the fallback below is as narrow as it is.
+//
+// The order:
+//
+//  1. refs/remotes/origin/HEAD. A clone sets it, and reading it costs nothing.
+//  2. The remote itself. A repository created with `git init` and pushed never gets a local
+//     origin/HEAD, which is precisely the case step 1 misses and precisely where the old
+//     current-branch fallback did its damage.
+//  3. The current branch, but only when there is no origin at all. A local-only project is a
+//     legitimate thing to run agents against, and refusing it would block the very scratch
+//     repositories used to try Gravy out.
+//
+// A repository that has an origin whose default branch cannot be read is an error, not a guess.
+// Being asked for --target-branch is a smaller cost than merging into the wrong branch quietly.
 func resolveTargetBranch(ctx context.Context, h host.Host, path string) (string, error) {
 	out, code, err := runGit(ctx, h, path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err != nil {
@@ -673,6 +688,27 @@ func resolveTargetBranch(ctx context.Context, h host.Host, path string) (string,
 		}
 	}
 
+	// GIT_TERMINAL_PROMPT=0 and runGit's timeout are what make asking the remote safe here: an
+	// unreachable or credential-gated origin fails rather than blocking project registration on
+	// a password prompt nobody can see.
+	_, code, err = runGit(ctx, h, path, "remote", "get-url", "origin")
+	if err != nil {
+		return "", err
+	}
+	if code == 0 {
+		out, code, err = runGit(ctx, h, path, "ls-remote", "--symref", "origin", "HEAD")
+		if err != nil {
+			return "", err
+		}
+		if code == 0 {
+			if branch := symrefHead(out); branch != "" {
+				return branch, nil
+			}
+		}
+		return "", fmt.Errorf(
+			"%s: origin's default branch could not be read; pass --target-branch", path)
+	}
+
 	out, code, err = runGit(ctx, h, path, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", err
@@ -681,6 +717,26 @@ func resolveTargetBranch(ctx context.Context, h host.Host, path string) (string,
 		return "", fmt.Errorf("%s: cannot determine a target branch; pass --target-branch", path)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// symrefHead pulls the branch out of `git ls-remote --symref origin HEAD`, whose first line is
+// "ref: refs/heads/main\tHEAD". Returns "" when the remote reports no symref, which an empty
+// repository does.
+func symrefHead(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ref:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		if branch := strings.TrimPrefix(fields[0], "refs/heads/"); branch != fields[0] {
+			return branch
+		}
+	}
+	return ""
 }
 
 func runGit(ctx context.Context, h host.Host, dir string, args ...string) (string, int, error) {
