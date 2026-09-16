@@ -64,10 +64,24 @@ func TestPreviewServicesCancelBothAndTheirChildren(t *testing.T) {
 		t.Fatal("preview cancellation hung")
 	}
 	for _, pid := range pids {
-		// A killed child can briefly remain a zombie until the system reaps it.
-		data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
-		if err == nil && !strings.Contains(string(data), ") Z ") {
-			t.Fatalf("child %d survived", pid)
+		// Cancellation returning does not mean the kernel has finished with the grandchild.
+		// The signal still has to be delivered and the process torn down, so the state right
+		// after cancel() is "dying", not "dead" — and on a loaded machine that window is wide
+		// enough to lose. Poll it rather than reading /proc once and calling a live pid a
+		// survivor: that read used to fail this test at random in CI and nowhere else.
+		//
+		// Gone or a zombie both count. A killed child stays a zombie until its parent is
+		// reaped too, which is not something this test gets to wait for.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+			if err != nil || strings.Contains(string(data), ") Z ") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("child %d survived", pid)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	for _, want := range []string{"[Backend] loaded value", "[Frontend] frontend-ready"} {
