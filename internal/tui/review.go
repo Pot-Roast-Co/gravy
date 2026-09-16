@@ -422,7 +422,7 @@ func (r *review) View(ctx ViewContext) string {
 	lines := []string{
 		th.Header.Render(fmt.Sprintf("%s  %s", shortID(b.Ticket.ID), b.Ticket.Title)),
 		th.Muted.Render(fmt.Sprintf("  %s · %s · %s",
-			projectName(b.Project), branchName(b.Ticket.Branch), b.Ticket.State)),
+			projectName(b.Project), mergePath(b.Project, b.Ticket), b.Ticket.State)),
 		"",
 	}
 
@@ -608,6 +608,23 @@ func patchLines(patch string, th Theme) []string {
 			"      … truncated at %d lines — open the worktree for the rest", maxPatchLines)))
 	}
 	return out
+}
+
+// mergePath renders "branch → target", the second half being where "a" on this screen sends the
+// work.
+//
+// It is on the card because a target branch resolved wrong at registration stays wrong in
+// silence: every approval reports success, pushes, and merges somewhere nobody meant. The moment
+// before approval is the last cheap chance to notice, and it used to say nothing at all.
+//
+// A project with no target branch renders as the branch alone rather than an arrow pointing at
+// nothing.
+func mergePath(p core.Project, t core.Ticket) string {
+	branch := branchName(t.Branch)
+	if strings.TrimSpace(p.TargetBranch) == "" {
+		return branch
+	}
+	return branch + " → " + branchName(p.TargetBranch)
 }
 
 func firstLine(s string) string {

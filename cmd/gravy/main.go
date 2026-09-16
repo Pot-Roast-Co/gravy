@@ -90,6 +90,8 @@ func usage() {
 
   gravy project add <path>     register a repository
   gravy project list           what is registered
+  gravy project set-target <slug> <branch>
+                               change the branch approved work merges into
   gravy project archive <slug> take a finished repository out of the working set
   gravy ticket add "<title>"   write a ticket and queue it
   gravy ticket list            what is in the queue

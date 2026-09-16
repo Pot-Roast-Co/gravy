@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	projGravy = core.Project{ID: "p1", Name: "gravy", Slug: "gravy"}
+	projGravy = core.Project{ID: "p1", Name: "gravy", Slug: "gravy", TargetBranch: "main"}
 	projMojo  = core.Project{ID: "p2", Name: "mojo", Slug: "mojo"}
 	projHerdr = core.Project{ID: "p3", Name: "herdr", Slug: "herdr"}
 )

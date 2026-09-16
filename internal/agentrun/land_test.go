@@ -48,6 +48,11 @@ func TestLandCleanCase(t *testing.T) {
 	if land.MergeCommit == "" {
 		t.Error("no merge commit recorded")
 	}
+	// Where it went, not just that it went. A caller that can only say "merged" cannot tell a
+	// landing on main from one on a stale feature branch, and both report success.
+	if land.Target != "main" {
+		t.Errorf("Target = %q, want main", land.Target)
+	}
 	if !land.Pushed {
 		t.Error("the work was not pushed to the remote")
 	}
