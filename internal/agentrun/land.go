@@ -28,6 +28,10 @@ type LandResult struct {
 	TicketID string
 	// State is the ticket's state afterwards: Done, or NeedsYou when a human is required.
 	State core.State
+	// Target is the branch the work merged into, carried so callers can say where it went.
+	// A landing that reports only "merged" is indistinguishable from one that merged
+	// somewhere nobody meant, which is a failure that reports success.
+	Target string
 	// MergeCommit is the squash commit on the target branch.
 	MergeCommit string
 	Pushed      bool
@@ -81,6 +85,7 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 	}
 
 	wt := git.Worktree{Path: ticket.WorktreePath, Branch: ticket.Branch, Base: project.TargetBranch}
+	res.Target = project.TargetBranch
 
 	state, err := l.land(ctx, &res, ticket, project, repo, wt, h)
 	res.State = state

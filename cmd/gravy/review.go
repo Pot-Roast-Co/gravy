@@ -66,6 +66,7 @@ func showReview(ctx context.Context, a *app, ticketID string, full bool) error {
 
 	fmt.Printf("%s  %s\n", t.ID, t.Title)
 	fmt.Printf("  project %s, branch %s, state %s\n", project.Slug, t.Branch, t.State)
+	fmt.Printf("  merges into %s\n", project.TargetBranch)
 	if strings.TrimSpace(t.Body) != "" {
 		fmt.Printf("\n  %s\n", strings.ReplaceAll(strings.TrimSpace(t.Body), "\n", "\n  "))
 	}
@@ -121,7 +122,7 @@ func showReview(ctx context.Context, a *app, ticketID string, full bool) error {
 		fmt.Println("\n  full patch: gravy review -diff " + t.ID)
 	}
 
-	fmt.Printf("\n  approve: gravy approve %s\n", t.ID)
+	fmt.Printf("\n  approve: gravy approve %s  (merges into %s)\n", t.ID, project.TargetBranch)
 	fmt.Printf("  reject:  gravy reject %s\n", t.ID)
 	fmt.Printf("  worktree: %s\n", t.WorktreePath)
 	return nil
@@ -138,7 +139,17 @@ func runApprove(ctx context.Context, args []string) error {
 	}
 	defer a.Close()
 
-	fmt.Printf("approving %s\n", args[0])
+	// Named before the merge, not only after it. Approval is the last point at which a wrong
+	// target branch is cheap to notice, and "approving <id>" alone never showed one.
+	if t, err := a.db.GetTicket(ctx, args[0]); err == nil {
+		if p, err := a.db.GetProject(ctx, t.ProjectID); err == nil {
+			fmt.Printf("approving %s — merges into %s\n", args[0], p.TargetBranch)
+		} else {
+			fmt.Printf("approving %s\n", args[0])
+		}
+	} else {
+		fmt.Printf("approving %s\n", args[0])
+	}
 	res, err := a.orch.Land().Approve(ctx, args[0])
 	return reportLanding(res, err)
 }
@@ -166,6 +177,9 @@ func reportLanding(res agentrun.LandResult, err error) error {
 	switch res.State {
 	case core.StateDone:
 		fmt.Printf("  merged as %s", shortHash(res.MergeCommit))
+		if res.Target != "" {
+			fmt.Printf(" into %s", res.Target)
+		}
 		if res.Pushed {
 			fmt.Print(", pushed")
 		}

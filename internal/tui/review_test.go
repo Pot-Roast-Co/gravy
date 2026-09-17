@@ -699,3 +699,35 @@ func TestRequestChangesIsEmptyWithoutFindings(t *testing.T) {
 		t.Errorf("seeded %q from a passing verdict", scr.feedback)
 	}
 }
+
+// TestReviewCardNamesTheMergeTarget is the regression for work that landed on the wrong branch.
+//
+// The gravy project carried a feature branch as its target for six days. Every approval rebased,
+// validated, squash-merged and pushed onto it, reported success, and left main untouched. Nothing
+// on this screen — the screen where "a" performs that merge — ever said where the work was going.
+func TestReviewCardNamesTheMergeTarget(t *testing.T) {
+	f := reviewFixture()
+	f.review.Project.TargetBranch = "feat/planning-projects-and-remote-hosts"
+	view := openReview(t, f, 140, 30).View()
+
+	if !strings.Contains(view, "feat/planning-projects-and-remote-hosts") {
+		t.Errorf("the card does not say where approval sends the work:\n%s", view)
+	}
+	if !strings.Contains(view, "→") {
+		t.Errorf("no branch → target on the card:\n%s", view)
+	}
+}
+
+// A project with no target branch renders the source branch alone, not an arrow pointing nowhere.
+func TestReviewCardWithoutATargetOmitsTheArrow(t *testing.T) {
+	f := reviewFixture()
+	f.review.Project.TargetBranch = ""
+	view := openReview(t, f, 140, 30).View()
+
+	if strings.Contains(view, "→") {
+		t.Errorf("rendered an arrow with no target:\n%s", view)
+	}
+	if !strings.Contains(view, "8ecd21bc-add-multiply") {
+		t.Errorf("lost the branch entirely:\n%s", view)
+	}
+}
