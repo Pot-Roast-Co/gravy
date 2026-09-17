@@ -200,8 +200,15 @@ func TestProjectsEnterOpensItsTickets(t *testing.T) {
 	if m.projectName() != "gravy" || m.filter != "" {
 		t.Fatalf("wrong filters: project %q, text %q", m.projectName(), m.filter)
 	}
-	q := newQueue(core.StateBacklog)
-	q.items = []api.TicketDetail{{Project: core.Project{Name: "gravy"}, Ticket: core.Ticket{Title: "Archive projects"}}, {Project: core.Project{Name: "pocket-blooms"}, Ticket: core.Ticket{Title: "Other work"}}}
+	// The destination filters on its own selection, which is the one that outlives the trip.
+	q := m.screens[SectionBacklog].(*queue)
+	if q.projectFilter != "p1" {
+		t.Fatalf("backlog project filter = %q, want the chosen project", q.projectFilter)
+	}
+	q.items = []api.TicketDetail{
+		{Project: core.Project{ID: "p1", Name: "gravy"}, Ticket: core.Ticket{Title: "Archive projects"}},
+		{Project: core.Project{ID: "p2", Name: "mojo"}, Ticket: core.Ticket{Title: "Other work"}},
+	}
 	if visible := q.visible(m.viewContext()); len(visible) != 1 || visible[0].Ticket.Title != "Archive projects" {
 		t.Fatalf("visible %+v", visible)
 	}
