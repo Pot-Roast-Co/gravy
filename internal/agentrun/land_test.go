@@ -2,6 +2,7 @@ package agentrun_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -504,5 +505,26 @@ func TestLandValidatesOnTheWorktreesHost(t *testing.T) {
 		if n := l.execs.Load(); n != 0 {
 			t.Errorf("host %s ran %d command(s); the worktree is not there", l.id, n)
 		}
+	}
+}
+
+// A second approval of work already landing or landed is a duplicate press, not a failure, and
+// says so in a way a caller can test for. The state machine still refuses it: two landings of one
+// ticket is the thing it exists to prevent.
+func TestApproveTwiceIsADuplicateNotAFailure(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+	landReady(t, h, "feature.txt", "the work\n")
+
+	if _, err := h.orch.Land().Approve(context.Background(), "GR-100"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	_, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	if err == nil {
+		t.Fatal("a second approval was accepted; one ticket must not land twice")
+	}
+	if !errors.Is(err, core.ErrAlreadyLanded) {
+		t.Fatalf("second approval did not report a duplicate: %v", err)
 	}
 }

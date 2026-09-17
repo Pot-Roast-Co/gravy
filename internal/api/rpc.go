@@ -58,13 +58,19 @@ const (
 )
 
 // Error kinds that survive the wire.
-const kindNotFound = "not_found"
+const (
+	kindNotFound      = "not_found"
+	kindAlreadyLanded = "already_landed"
+)
 
 // toRPCError classifies an error for transport.
 func toRPCError(err error) *rpcError {
 	e := &rpcError{Code: codeApplication, Message: err.Error()}
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		e.Kind = kindNotFound
+	case errors.Is(err, core.ErrAlreadyLanded):
+		e.Kind = kindAlreadyLanded
 	}
 	return e
 }
@@ -79,8 +85,11 @@ func (e *wireError) Error() string { return e.msg }
 
 // Unwrap returns the sentinel a caller is likely to test for.
 func (e *wireError) Unwrap() error {
-	if e.kind == kindNotFound {
+	switch e.kind {
+	case kindNotFound:
 		return store.ErrNotFound
+	case kindAlreadyLanded:
+		return core.ErrAlreadyLanded
 	}
 	return nil
 }

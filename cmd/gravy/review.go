@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -172,6 +173,13 @@ func runContinue(ctx context.Context, args []string) error {
 
 func reportLanding(res agentrun.LandResult, err error) error {
 	if err != nil {
+		// Same rule as the review screen: a duplicate approval is not a failed one, and
+		// exiting non-zero over a merge that succeeded is how a correct refusal becomes a
+		// bug report — or a retry that does real damage in a script.
+		if errors.Is(err, core.ErrAlreadyLanded) {
+			fmt.Printf("  already landed; nothing to do\n")
+			return nil
+		}
 		return err
 	}
 	switch res.State {

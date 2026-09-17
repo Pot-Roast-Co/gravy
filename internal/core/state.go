@@ -114,6 +114,15 @@ const (
 // transitions are always errors; they are never silently ignored.
 var ErrIllegalTransition = errors.New("illegal state transition")
 
+// ErrAlreadyLanded marks an approval of work that is already landing or landed.
+//
+// It is a duplicate press, not a failure. Landing rebases, re-validates and pushes, which takes
+// minutes on a real project, and a second approval arriving in that window is the ordinary
+// consequence of a human seeing nothing happen. The state machine is right to refuse it — two
+// landings of one ticket is the thing it exists to prevent — but a caller that reports the
+// refusal as "approval failed" says the opposite of what happened to a merge that succeeded.
+var ErrAlreadyLanded = errors.New("the ticket has already landed")
+
 // TransitionError describes a rejected transition. It wraps ErrIllegalTransition so callers can
 // test with errors.Is while still reporting precisely what was attempted.
 type TransitionError struct {
