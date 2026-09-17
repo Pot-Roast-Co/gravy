@@ -56,6 +56,11 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 		return res, fmt.Errorf("land: %w", err)
 	}
 	if ticket.State != core.StateReview {
+		// A second approval of work already on its way is a duplicate press, and is reported
+		// as one. Every other wrong state is a genuine mistake and keeps the blunt message.
+		if ticket.State == core.StateLanding || ticket.State == core.StateDone {
+			return res, fmt.Errorf("land: %s is %s: %w", ticketID, ticket.State, core.ErrAlreadyLanded)
+		}
 		return res, fmt.Errorf("land: ticket %s is %s, not awaiting review", ticketID, ticket.State)
 	}
 	project, err := o.store.GetProject(ctx, ticket.ProjectID)

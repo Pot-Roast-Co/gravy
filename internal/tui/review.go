@@ -27,6 +27,11 @@ const (
 	reviewTry
 	reviewPreviewCommand
 	reviewTrySaving
+	// reviewLanding is the window between pressing "a" and the merge finishing. It exists
+	// because that window is minutes long — rebase, re-validation, push — and the screen used
+	// to spend all of it looking untouched, which invites a second press the state machine
+	// then refuses.
+	reviewLanding
 )
 
 // maxPatchLines caps an inline diff.
@@ -76,7 +81,12 @@ func newReview() *review { return &review{expanded: map[string]bool{}} }
 
 // CapturesKeys is true while a prompt is open or a sweep is running, both of which bind keys the
 // global keymap also claims.
-func (r *review) CapturesKeys() bool { return r.mode != reviewBrowsing || len(r.sweep) > 0 }
+func (r *review) CapturesKeys() bool {
+	// Landing is deliberately not key-capturing. It runs in the daemon and outlives this
+	// screen, so holding the human here for the minutes it takes would be a worse bargain than
+	// letting them go and look at something else.
+	return (r.mode != reviewBrowsing && r.mode != reviewLanding) || len(r.sweep) > 0
+}
 
 // Messages the screen raises for itself.
 type (
@@ -199,7 +209,15 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, nil
 
 	case reviewActedMsg:
+		r.mode = reviewBrowsing
 		if msg.err != nil {
+			// A duplicate approval is not a failed one. The work is landing or landed, and
+			// saying "failed" over a merge that succeeded is how a correct refusal becomes a
+			// bug report.
+			if errors.Is(msg.err, core.ErrAlreadyLanded) {
+				r.notice = "already landing — the first approval is still going"
+				return r, nil
+			}
 			r.notice = fmt.Sprintf("%s failed: %v", msg.verb, msg.err)
 			return r, nil
 		}
@@ -221,6 +239,17 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 
 func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	key := msg.String()
+
+	// While a landing is in flight the decisions have already been made, so the keys that make
+	// one are refused rather than queued. This is the actual fix for the double press: the
+	// second "a" never reaches the daemon, so the daemon never has to refuse it.
+	if r.mode == reviewLanding {
+		switch key {
+		case "a", "r", "x", "v", "T", "s":
+			r.notice = "landing — this takes a few minutes; it finishes even if you leave"
+			return r, nil
+		}
+	}
 
 	switch r.mode {
 	case reviewTry, reviewPreviewCommand, reviewTrySaving:
@@ -329,6 +358,7 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		}
 	case "a":
 		id := r.ticketID
+		r.mode, r.notice = reviewLanding, "landing — rebasing, re-validating and pushing"
 		return r, func() tea.Msg {
 			err := ctx.Svc.Approve(context.Background(), id)
 			return reviewActedMsg{verb: "approved and landed", err: err}
@@ -558,6 +588,9 @@ func (r *review) footer(th Theme, width int) string {
 	case reviewConfirmReject:
 		return th.Danger.Render("reject this ticket and delete its worktree? ") +
 			th.Muted.Render("y / n")
+	}
+	if r.mode == reviewLanding {
+		return th.Accent.Render(trunc(r.notice, width))
 	}
 	withNotice := func(actions string) string {
 		if r.notice == "" {
