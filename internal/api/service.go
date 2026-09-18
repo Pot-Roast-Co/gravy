@@ -74,7 +74,10 @@ type Service interface {
 
 	// review
 	GetReview(ctx context.Context, ticketID string) (ReviewBundle, error)
-	Approve(ctx context.Context, ticketID string) error
+	// Approve lands reviewed work and returns the state it reached: Done when it merged,
+	// NeedsYou when it parked. Parking is not an error, so the state is the only honest
+	// answer to "did it land".
+	Approve(ctx context.Context, ticketID string) (core.State, error)
 	RequestChanges(ctx context.Context, ticketID, feedback string) error
 
 	// change discussion — the agreement step in front of RequestChanges.
@@ -88,7 +91,7 @@ type Service interface {
 	SendChanges(ctx context.Context, req SendChangesReq) error
 	CancelDiscussion(ctx context.Context, ticketID string) error
 	// Continue retries a landing after a human resolved a conflict in the preserved worktree.
-	Continue(ctx context.Context, ticketID string) error
+	Continue(ctx context.Context, ticketID string) (core.State, error)
 	Reject(ctx context.Context, ticketID string) error
 
 	// attention

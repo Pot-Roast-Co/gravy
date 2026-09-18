@@ -97,6 +97,9 @@ type (
 	reviewActedMsg  struct {
 		verb string
 		err  error
+		// state is what the ticket reached, for actions that have more than one non-error
+		// outcome. Landing can park instead of merging, and parking reports no error.
+		state core.State
 	}
 )
 
@@ -241,6 +244,18 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			r.notice = fmt.Sprintf("%s failed: %v", msg.verb, msg.err)
 			return r, nil
 		}
+		// A landing that parked did not land, and saying it did is how a human learns their
+		// work merged when it is sitting in Needs You with a failed validation. Parking is
+		// not an error, so only the state can tell these apart.
+		if msg.state == core.StateNeedsYou {
+			r.notice = shortID(r.ticketID) + " did not land — parked for you, see Needs You (8)"
+			r.ticketID, r.loaded = "", false
+			if len(r.sweep) > 0 {
+				r.swept++
+				return r, r.advance(ctx)
+			}
+			return r, nil
+		}
 		// The ticket has left the review queue, so the screen must stop showing work that is
 		// already decided.
 		r.notice = fmt.Sprintf("%s %s", shortID(r.ticketID), msg.verb)
@@ -353,8 +368,8 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		id := r.ticketID
 		r.mode, r.notice = reviewLanding, "landing — rebasing, re-validating and pushing"
 		return r, func() tea.Msg {
-			err := ctx.Svc.Approve(context.Background(), id)
-			return reviewActedMsg{verb: "approved and landed", err: err}
+			state, err := ctx.Svc.Approve(context.Background(), id)
+			return reviewActedMsg{verb: "approved and landed", err: err, state: state}
 		}
 	case "r":
 		// Request changes opens a conversation, not a send. Nothing is queued and nothing is

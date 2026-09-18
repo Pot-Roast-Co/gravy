@@ -95,7 +95,14 @@ func actContinueLanding() reasonAction {
 	return reasonAction{Key: "c", Help: "retry the land", Run: func(_ *needsYou, item api.AttentionItem, ctx ViewContext) tea.Cmd {
 		id := item.Attention.TicketID
 		return func() tea.Msg {
-			return attentionActedMsg{verb: "landing retried", err: ctx.Svc.Continue(context.Background(), id)}
+			// A retry that parks again has not landed either, and the row it reopens is
+			// the only thing that would otherwise say so.
+			state, err := ctx.Svc.Continue(context.Background(), id)
+			verb := "landed"
+			if state == core.StateNeedsYou {
+				verb = "still did not land — see the reopened row"
+			}
+			return attentionActedMsg{verb: verb, err: err}
 		}
 	}}
 }

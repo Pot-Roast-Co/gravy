@@ -436,7 +436,7 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		if err := unmarshalParams(raw, &p); err != nil {
 			return nil, err
 		}
-		return nil, s.svc.Approve(ctx, p.TicketID)
+		return s.svc.Approve(ctx, p.TicketID)
 
 	case mRequestChanges:
 		var p requestChangesParams
@@ -485,7 +485,7 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		if err := unmarshalParams(raw, &p); err != nil {
 			return nil, err
 		}
-		return nil, s.svc.Continue(ctx, p.TicketID)
+		return s.svc.Continue(ctx, p.TicketID)
 
 	case mReject:
 		var p ticketIDParams

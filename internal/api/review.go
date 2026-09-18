@@ -36,11 +36,16 @@ type ReviewBundle struct {
 // An interface so api says what it needs rather than depending on how landing works, and so a
 // client can exist without one — a read-only status client has no business being able to merge.
 type Lander interface {
-	Approve(ctx context.Context, ticketID string) error
+	// Approve returns the state the ticket reached. A landing that parks — validation failed,
+	// a merge conflict, a dirty checkout — is not an error, so an error alone cannot tell a
+	// caller whether the work merged.
+	Approve(ctx context.Context, ticketID string) (core.State, error)
 	// Continue retries a landing after a human has resolved a conflict in the preserved
 	// worktree. It goes back through the gate, because the resolution changed the code that
 	// was approved.
-	Continue(ctx context.Context, ticketID string) error
+	// Continue retries a landing and, like Approve, returns the state it reached: a retry can
+	// park again, and reporting that as success is the same lie one step later.
+	Continue(ctx context.Context, ticketID string) (core.State, error)
 }
 
 // GetReview assembles the evidence for one ticket awaiting judgement.
@@ -103,12 +108,13 @@ func (l *Local) GetReview(ctx context.Context, ticketID string) (ReviewBundle, e
 //
 // It delegates to the lander, which owns the gate. There is no path to a target branch that does
 // not pass through here, and no configuration that skips it.
-func (l *Local) Approve(ctx context.Context, ticketID string) error {
+func (l *Local) Approve(ctx context.Context, ticketID string) (core.State, error) {
 	if l.lander == nil {
-		return fmt.Errorf("this client cannot land work")
+		return "", fmt.Errorf("this client cannot land work")
 	}
-	if err := l.lander.Approve(ctx, ticketID); err != nil {
-		return err
+	state, err := l.lander.Approve(ctx, ticketID)
+	if err != nil {
+		return state, err
 	}
 	// The review checkout is a view of work that is now decided, so it goes. Left behind, one
 	// accumulates per reviewed ticket and never gets cleaned up by anything.
@@ -116,7 +122,7 @@ func (l *Local) Approve(ctx context.Context, ticketID string) error {
 
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
-	return nil
+	return state, nil
 }
 
 // RequestChanges sends work back for another attempt, carrying the reviewer's note.
@@ -166,16 +172,17 @@ func (l *Local) requestChanges(ctx context.Context, ticketID, feedback string) e
 }
 
 // Continue retries a landing after a human has resolved a conflict.
-func (l *Local) Continue(ctx context.Context, ticketID string) error {
+func (l *Local) Continue(ctx context.Context, ticketID string) (core.State, error) {
 	if l.lander == nil {
-		return fmt.Errorf("this client cannot land work")
+		return "", fmt.Errorf("this client cannot land work")
 	}
-	if err := l.lander.Continue(ctx, ticketID); err != nil {
-		return err
+	state, err := l.lander.Continue(ctx, ticketID)
+	if err != nil {
+		return state, err
 	}
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
-	return nil
+	return state, nil
 }
 
 // Reject abandons a ticket and removes its worktree.

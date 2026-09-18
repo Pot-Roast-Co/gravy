@@ -31,12 +31,14 @@ type fakeService struct {
 
 	// review is what GetReview returns; the rest record what the screen asked for, which is
 	// what the approve/request-changes/reject assertions check.
-	review    api.ReviewBundle
-	reviewErr error
-	actionErr error
-	approved  []string
-	rejected  []string
-	changes   map[string]string
+	review        api.ReviewBundle
+	reviewErr     error
+	actionErr     error
+	approveState  core.State
+	continueState core.State
+	approved      []string
+	rejected      []string
+	changes       map[string]string
 
 	// The change discussion. talk is what the service hands back; said, drafts, sent and
 	// canceled record what the screen asked for, which is how "a message starts no work" is
@@ -154,12 +156,15 @@ func (f *fakeService) GetReview(_ context.Context, id string) (api.ReviewBundle,
 	return f.review, nil
 }
 
-func (f *fakeService) Approve(_ context.Context, id string) error {
+func (f *fakeService) Approve(_ context.Context, id string) (core.State, error) {
 	if f.actionErr != nil {
-		return f.actionErr
+		return "", f.actionErr
 	}
 	f.approved = append(f.approved, id)
-	return nil
+	if f.approveState != "" {
+		return f.approveState, nil
+	}
+	return core.StateDone, nil
 }
 
 func (f *fakeService) Reject(_ context.Context, id string) error {
@@ -236,12 +241,15 @@ func (f *fakeService) StreamLogs(ctx context.Context, runID string) (<-chan api.
 	return ch, func() {}, nil
 }
 
-func (f *fakeService) Continue(_ context.Context, ticketID string) error {
+func (f *fakeService) Continue(_ context.Context, ticketID string) (core.State, error) {
 	if f.actionErr != nil {
-		return f.actionErr
+		return "", f.actionErr
 	}
 	f.continued = append(f.continued, ticketID)
-	return nil
+	if f.continueState != "" {
+		return f.continueState, nil
+	}
+	return core.StateDone, nil
 }
 
 func (f *fakeService) KillRun(_ context.Context, runID string) error {
