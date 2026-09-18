@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/contextbuild"
 	"path/filepath"
 	"strings"
 	"time"
@@ -226,6 +227,12 @@ func discussionPrompt(turn core.DiscussionTurn, ask string) string {
 	b.WriteString("You are helping a human decide on one correction to work that is awaiting " +
 		"their approval. You are not implementing anything on this turn, and nothing you say " +
 		"starts any work: the human edits your proposal and sends it themselves.\n\n")
+
+	// Deciding whether a correction is right needs to know what the project is for, not only
+	// what the ticket said.
+	if notes := contextbuild.RenderNotes(turn.Project.Notes); notes != "" {
+		b.WriteString(notes + "\n")
+	}
 
 	fmt.Fprintf(&b, "# The ticket — %s: %s\n\n", turn.Ticket.ID, turn.Ticket.Title)
 	if body := strings.TrimSpace(turn.Ticket.Body); body != "" {

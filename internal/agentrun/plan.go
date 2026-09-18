@@ -303,6 +303,14 @@ func (p *Planner) prompt(h host.Host, project core.Project, backlog []core.Ticke
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are helping plan work for the project %q.\n\n", project.Name)
 
+	// Before the documents, because the notes say what the project is for and the documents
+	// say how it is built. A project with no repository has no documents at all, and the notes
+	// are then the only thing standing between the planner and a project name.
+	if notes := contextbuild.RenderNotes(project.Notes); notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+	}
+
 	if docs := contextbuild.RenderDocs(
 		contextbuild.ProjectDocs(h.FS(), project.RepoPath, p.docBudget),
 	); docs != "" {
