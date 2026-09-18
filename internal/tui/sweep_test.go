@@ -87,7 +87,8 @@ func TestSweepVisitsEveryReviewOnceAndExits(t *testing.T) {
 		if want := fmt.Sprintf("sweep %d of 5", i+1); !strings.Contains(m.View(), want) {
 			t.Fatalf("at step %d the indicator is wrong:\n%s", i+1, m.View())
 		}
-		m, cmd := sendCmd(t, m, key("a"))
+		m, _ = sendCmd(t, m, key("a"))
+		m, cmd := sendCmd(t, m, key("enter"))
 		if cmd == nil {
 			t.Fatalf("approve produced no command at step %d", i+1)
 		}
@@ -125,7 +126,8 @@ func TestSweepApprovesThroughTheSameCodePath(t *testing.T) {
 	direct = send(t, direct, key(SectionReview.Key()))
 	direct = send(t, direct, enteredMsg{focus: "m1"})
 	direct = send(t, direct, reviewLoadedMsg{bundle: bundleFor(f, "m1")})
-	_, dcmd := sendCmd(t, direct, key("a"))
+	direct, _ = sendCmd(t, direct, key("a"))
+	_, dcmd := sendCmd(t, direct, key("enter"))
 	if dcmd == nil {
 		t.Fatal("approve from the review screen produced no command")
 	}
@@ -135,7 +137,8 @@ func TestSweepApprovesThroughTheSameCodePath(t *testing.T) {
 	// And from inside a sweep.
 	f.approved = nil
 	m := startSweep(t, f)
-	_, scmd := sendCmd(t, m, key("a"))
+	m, _ = sendCmd(t, m, key("a"))
+	_, scmd := sendCmd(t, m, key("enter"))
 	if scmd == nil {
 		t.Fatal("approve inside the sweep produced no command")
 	}
@@ -166,7 +169,8 @@ func TestExitingMidSweepLeavesTheRestUntouched(t *testing.T) {
 	f := sweepFixture()
 	m := startSweep(t, f)
 
-	m, cmd := sendCmd(t, m, key("a"))
+	m, _ = sendCmd(t, m, key("a"))
+	m, cmd := sendCmd(t, m, key("enter"))
 	m = send(t, m, cmd())
 	m = send(t, m, reviewLoadedMsg{bundle: bundleFor(f, "m2")})
 
@@ -203,7 +207,8 @@ func TestNoBulkApproveAffordance(t *testing.T) {
 	f := sweepFixture()
 	m := startSweep(t, f)
 
-	m, cmd := sendCmd(t, m, key("a"))
+	m, _ = sendCmd(t, m, key("a"))
+	m, cmd := sendCmd(t, m, key("enter"))
 	m = send(t, m, cmd())
 	if len(f.approved) != 1 {
 		t.Fatalf("one keystroke approved %d tickets", len(f.approved))

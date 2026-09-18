@@ -81,7 +81,9 @@ type Service interface {
 	// Approve lands reviewed work and returns the state it reached: Done when it merged,
 	// NeedsYou when it parked. Parking is not an error, so the state is the only honest
 	// answer to "did it land".
-	Approve(ctx context.Context, ticketID string) (core.State, error)
+	// Approve lands reviewed work the way the human chose and returns the state it reached:
+	// Done when it merged, HandedOff when they took it over, NeedsYou when it parked.
+	Approve(ctx context.Context, ticketID string, how core.Approval) (core.State, error)
 	RequestChanges(ctx context.Context, ticketID, feedback string) error
 
 	// change discussion — the agreement step in front of RequestChanges.
@@ -95,7 +97,10 @@ type Service interface {
 	SendChanges(ctx context.Context, req SendChangesReq) error
 	CancelDiscussion(ctx context.Context, ticketID string) error
 	// Continue retries a landing after a human resolved a conflict in the preserved worktree.
-	Continue(ctx context.Context, ticketID string) (core.State, error)
+	Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error)
+	// MarkMerged records that a human merged a handed-off ticket themselves. It is the only
+	// way such a ticket reaches Done, and therefore the only way its dependents start.
+	MarkMerged(ctx context.Context, ticketID string) (core.State, error)
 	Reject(ctx context.Context, ticketID string) error
 
 	// attention

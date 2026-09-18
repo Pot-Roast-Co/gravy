@@ -913,7 +913,7 @@ func TestSquashMergePreservesDirtyMainCheckout(t *testing.T) {
 			}
 			before := git(t, main, "rev-parse", "HEAD")
 			status := git(t, main, "status", "--porcelain")
-			_, err = r.SquashMerge(ctx, wt, "main", "land")
+			_, err = r.SquashMerge(ctx, wt, "main", "land", true)
 			if err == nil {
 				t.Fatal("merged dirty checkout")
 			}
@@ -955,7 +955,7 @@ func TestSquashMergeIgnoresUntrackedInMainCheckout(t *testing.T) {
 	}
 	writeFile(t, main, "erl_crash.dump", "junk\n")
 
-	res, err := r.SquashMerge(ctx, wt, "main", "land")
+	res, err := r.SquashMerge(ctx, wt, "main", "land", true)
 	if err != nil {
 		t.Fatalf("SquashMerge: %v", err)
 	}

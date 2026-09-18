@@ -38,7 +38,7 @@ func TestLandCleanCase(t *testing.T) {
 	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
 	res := landReady(t, h, "feature.txt", "the work\n")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestReplayedRebaseRevalidates(t *testing.T) {
 		}
 	}, "remove the contract")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestReplayedRebaseRevalidates(t *testing.T) {
 	}
 	// Repeating approval must not turn the same failing tree into a successful merge.
 	for i := 0; i < 2; i++ {
-		again, err := h.orch.Land().Continue(context.Background(), "GR-100")
+		again, err := h.orch.Land().Continue(context.Background(), "GR-100", core.ApprovePush)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +163,7 @@ func TestReplayedRebaseThatStaysGreenMerges(t *testing.T) {
 		writeFile(t, dir, "unrelated.txt", "someone else's work\n")
 	}, "unrelated change")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestConflictPreservesWorktree(t *testing.T) {
 		writeFile(t, dir, "README.md", "someone else's version of the readme\n")
 	}, "conflicting change")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestDirtyMainCheckoutParksAsCheckoutDirty(t *testing.T) {
 	// The human's own edit, sitting in the main checkout since before the ticket existed.
 	writeFile(t, h.repoPath, "README.md", "a change the human has not committed\n")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestDirtyMainCheckoutParksAsCheckoutDirty(t *testing.T) {
 
 	// Clearing the checkout is the whole fix: continue then lands, with no agent involved.
 	gitCmd(t, h.h, h.repoPath, "checkout", "--", "README.md")
-	again, err := h.orch.Land().Continue(context.Background(), "GR-100")
+	again, err := h.orch.Land().Continue(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Continue: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestResolveThenContinue(t *testing.T) {
 		writeFile(t, dir, "README.md", "someone else's version\n")
 	}, "conflicting change")
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestResolveThenContinue(t *testing.T) {
 	gitCmd(t, h.h, res.Worktree.Path, "add", "README.md")
 	gitCmd(t, h.h, res.Worktree.Path, "rebase", "--continue")
 
-	again, err := h.orch.Land().Continue(context.Background(), "GR-100")
+	again, err := h.orch.Land().Continue(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Continue: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestNothingMergesWithoutApproval(t *testing.T) {
 			}
 
 			before := gitCmd(t, h.h, h.repoPath, "rev-parse", "main")
-			_, err := h.orch.Land().Approve(context.Background(), "GR-100")
+			_, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 			if err == nil {
 				t.Fatalf("a ticket in %s was landed without passing through review", state)
 			}
@@ -378,7 +378,7 @@ func TestApproveRequiresReview(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	h.seed(nil)
 
-	_, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	_, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err == nil {
 		t.Fatal("a Ready ticket was approved")
 	}
@@ -419,7 +419,7 @@ func TestDependentBecomesEligibleOnlyAfterDone(t *testing.T) {
 		t.Fatal("the dependency reached Done before it was approved")
 	}
 
-	if _, err := h.orch.Land().Approve(ctx, "GR-100"); err != nil {
+	if _, err := h.orch.Land().Approve(ctx, "GR-100", core.ApprovePush); err != nil {
 		t.Fatal(err)
 	}
 	blocker, _ = h.db.GetTicket(ctx, "GR-100")
@@ -448,7 +448,7 @@ func TestApproveClearsTheQueue(t *testing.T) {
 		t.Fatalf("before approval the queue = %+v, want one review_pending", open)
 	}
 
-	if _, err := h.orch.Land().Approve(ctx, "GR-100"); err != nil {
+	if _, err := h.orch.Land().Approve(ctx, "GR-100", core.ApprovePush); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 
@@ -494,7 +494,7 @@ func TestLandValidatesOnTheWorktreesHost(t *testing.T) {
 		h.orch.RegisterHost(l)
 	}
 
-	land, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
@@ -516,15 +516,86 @@ func TestApproveTwiceIsADuplicateNotAFailure(t *testing.T) {
 	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
 	landReady(t, h, "feature.txt", "the work\n")
 
-	if _, err := h.orch.Land().Approve(context.Background(), "GR-100"); err != nil {
+	if _, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 
-	_, err := h.orch.Land().Approve(context.Background(), "GR-100")
+	_, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApprovePush)
 	if err == nil {
 		t.Fatal("a second approval was accepted; one ticket must not land twice")
 	}
 	if !errors.Is(err, core.ErrAlreadyLanded) {
 		t.Fatalf("second approval did not report a duplicate: %v", err)
+	}
+}
+
+// TestApproveHandOffMergesNothing is the hand-off outcome.
+//
+// Approving with hand-off does the expensive half — rebase onto the current target and validate
+// against it — and then stops. The target branch is untouched, and the branch and worktree
+// survive, because they are the thing being handed over.
+func TestApproveHandOffMergesNothing(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+	res := landReady(t, h, "feature.txt", "the work\n")
+
+	before := gitCmd(t, h.h, h.repoPath, "rev-parse", "main")
+
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApproveHandOff)
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if land.State != core.StateHandedOff {
+		t.Fatalf("state = %s, want handed_off", land.State)
+	}
+	if land.MergeCommit != "" || land.Pushed {
+		t.Errorf("hand-off merged or pushed: %+v", land)
+	}
+	if after := gitCmd(t, h.h, h.repoPath, "rev-parse", "main"); after != before {
+		t.Errorf("the target branch moved: %s -> %s", before, after)
+	}
+	// The branch and its worktree are the hand-off.
+	if _, err := os.Stat(res.Worktree.Path); err != nil {
+		t.Errorf("the worktree a human was handed is gone: %v", err)
+	}
+	branches := gitCmd(t, h.h, h.repoPath, "branch", "--list", res.Worktree.Branch)
+	if !strings.Contains(branches, res.Worktree.Branch) {
+		t.Errorf("the branch was deleted: %q", branches)
+	}
+	// It was still validated: that is the half a human cannot easily redo.
+	if !land.Revalidated {
+		t.Error("handed off without re-validating")
+	}
+}
+
+// TestApproveLocalMergesWithoutPushing keeps the merge off the remote.
+func TestApproveLocalMergesWithoutPushing(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
+	landReady(t, h, "feature.txt", "the work\n")
+
+	remoteBefore := h.targetLog("--oneline", "-1", "main")
+
+	land, err := h.orch.Land().Approve(context.Background(), "GR-100", core.ApproveLocal)
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if land.State != core.StateDone {
+		t.Fatalf("state = %s, want done: the work merged, it just did not travel", land.State)
+	}
+	if land.MergeCommit == "" {
+		t.Error("nothing merged")
+	}
+	if land.Pushed {
+		t.Error("pushed despite being asked not to")
+	}
+
+	// Local target carries it; the remote does not.
+	local := gitCmd(t, h.h, h.repoPath, "log", "--oneline", "-1", "main")
+	if !strings.Contains(local, "do the thing") {
+		t.Errorf("the local target does not carry the squash: %s", local)
+	}
+	if after := h.targetLog("--oneline", "-1", "main"); after != remoteBefore {
+		t.Errorf("the remote moved: %q -> %q", remoteBefore, after)
 	}
 }

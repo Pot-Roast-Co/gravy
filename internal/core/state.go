@@ -24,6 +24,11 @@ const (
 	StateBlocked    State = "blocked"
 	StateNeedsYou   State = "needs_you"
 	StateRejected   State = "rejected"
+	// StateHandedOff is work the human accepted and took over: validated, rebased, its branch
+	// and worktree preserved, and the target branch untouched. Terminal, and deliberately not
+	// Done — nothing merged, and a state that claimed otherwise would be the same lie as a
+	// landing that parked and reported success.
+	StateHandedOff State = "handed_off"
 )
 
 // AllStates lists every state, in lifecycle order. Used by the store's validation and by tests
@@ -31,7 +36,7 @@ const (
 var AllStates = []State{
 	StateDraft, StateBacklog, StateReady, StateAssigned, StateRunning, StateValidating,
 	StateReviewing, StateReview, StateLanding, StateDone, StateBlocked, StateNeedsYou,
-	StateRejected,
+	StateRejected, StateHandedOff,
 }
 
 // Valid reports whether s is a known state.
@@ -89,6 +94,9 @@ const (
 	// EventLandFailed is a merge conflict or a red re-validation after the target moved. The
 	// worktree is preserved for the human.
 	EventLandFailed Event = "land_failed"
+	// EventHandedOff is an approval the human took over: validated and rebased, but merged by
+	// them rather than by gravy. The branch and worktree survive it.
+	EventHandedOff Event = "handed_off"
 	// EventAnswer is the human answering a question or granting a permission. The ticket
 	// returns to Ready and resumes its prior session rather than starting fresh.
 	EventAnswer Event = "answer"
@@ -197,6 +205,14 @@ var transitions = map[State]map[Event]State{
 	StateLanding: {
 		EventLanded:     StateDone,
 		EventLandFailed: StateNeedsYou,
+		EventHandedOff:  StateHandedOff,
+	},
+	// Handing off is terminal in gravy, but it is not the end of the work: the human merges
+	// the branch themselves and says so. Without this edge a handed-off ticket would block
+	// every ticket depending on it forever, because dependencies require Done and nothing
+	// could ever make it Done.
+	StateHandedOff: {
+		EventLanded: StateDone,
 	},
 	StateBlocked: {
 		EventAnswer: StateReady,
@@ -239,6 +255,10 @@ func Events(from State) []Event {
 
 // IsTerminal reports whether a ticket in this state will never move again.
 func IsTerminal(s State) bool {
+	// Handed off is deliberately not here. It looks like an end — gravy will do nothing more
+	// with the ticket — but the work is not finished, it is somebody else's: they merge the
+	// branch and record it, which is the edge to Done. Terminal states have no exits, and a
+	// handed-off ticket has exactly one.
 	return s == StateDone || s == StateRejected
 }
 

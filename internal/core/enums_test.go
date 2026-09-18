@@ -124,8 +124,8 @@ func TestEnumValidity(t *testing.T) {
 	})
 
 	t.Run("states", func(t *testing.T) {
-		if len(AllStates) != 13 {
-			t.Errorf("got %d states, want 13", len(AllStates))
+		if len(AllStates) != 14 {
+			t.Errorf("got %d states, want 14", len(AllStates))
 		}
 		for _, s := range AllStates {
 			if !s.Valid() {

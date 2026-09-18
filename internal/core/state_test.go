@@ -333,6 +333,9 @@ func TestClassification(t *testing.T) {
 		{"needs you", StateNeedsYou, false, true, true},
 		{"done", StateDone, true, false, false},
 		{"rejected", StateRejected, true, false, false},
+		// Not terminal: the human still has to merge it and say so. Not active either, which
+		// is the point — the queue moves on. And not awaiting gravy's attention.
+		{"handed off", StateHandedOff, false, false, false},
 	}
 	if len(tests) != len(AllStates) {
 		t.Fatalf("classification table covers %d states, AllStates has %d", len(tests), len(AllStates))

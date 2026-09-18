@@ -35,6 +35,8 @@ type LandResult struct {
 	// MergeCommit is the squash commit on the target branch.
 	MergeCommit string
 	Pushed      bool
+	// Approval is what the human chose this approval to do.
+	Approval core.Approval
 	// Revalidated reports whether configured validation was run before merging.
 	Revalidated bool
 	// ConflictFiles is populated when the rebase could not be replayed.
@@ -47,9 +49,13 @@ type LandResult struct {
 //
 // Nothing reaches a target branch except through here, and this is only reachable from Review by
 // an explicit human action. There is no configuration flag that skips it.
-func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, error) {
+func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval) (LandResult, error) {
 	o := l.orch
-	res := LandResult{TicketID: ticketID}
+	how = how.OrDefault()
+	if !how.Valid() {
+		return LandResult{TicketID: ticketID}, fmt.Errorf("land: %q is not an approval", how)
+	}
+	res := LandResult{TicketID: ticketID, Approval: how}
 
 	ticket, err := o.store.GetTicket(ctx, ticketID)
 	if err != nil {
@@ -92,13 +98,13 @@ func (l *Lander) Approve(ctx context.Context, ticketID string) (LandResult, erro
 	wt := git.Worktree{Path: ticket.WorktreePath, Branch: ticket.Branch, Base: project.TargetBranch}
 	res.Target = project.TargetBranch
 
-	state, err := l.land(ctx, &res, ticket, project, repo, wt, h)
+	state, err := l.land(ctx, &res, ticket, project, repo, wt, h, how)
 	res.State = state
 	return res, err
 }
 
 // Continue retries landing after a human has resolved a conflict in the worktree.
-func (l *Lander) Continue(ctx context.Context, ticketID string) (LandResult, error) {
+func (l *Lander) Continue(ctx context.Context, ticketID string, how core.Approval) (LandResult, error) {
 	o := l.orch
 	res := LandResult{TicketID: ticketID}
 
@@ -114,11 +120,11 @@ func (l *Lander) Continue(ctx context.Context, ticketID string) (LandResult, err
 	if _, err := o.store.SetTicketState(ctx, ticketID, core.EventReturnToReview); err != nil {
 		return res, fmt.Errorf("land: %w", err)
 	}
-	return l.Approve(ctx, ticketID)
+	return l.Approve(ctx, ticketID, how)
 }
 
 // land performs fetch, rebase, validation, squash-merge and cleanup.
-func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, project core.Project, repo Repo, wt git.Worktree, h host.Host) (core.State, error) {
+func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, project core.Project, repo Repo, wt git.Worktree, h host.Host, how core.Approval) (core.State, error) {
 	o := l.orch
 
 	lander, ok := repo.(landRepo)
@@ -197,8 +203,19 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		}
 	}
 
+	// Hand-off stops here, and stops having done the expensive half: the branch is rebased onto
+	// the current target and green against it, which is the part a human cannot easily redo.
+	// The worktree and branch survive on purpose — they are the thing being handed over.
+	if !how.Merges() {
+		state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventHandedOff)
+		if err != nil {
+			return "", fmt.Errorf("land: %w", err)
+		}
+		return state, nil
+	}
+
 	message := fmt.Sprintf("%s\n\nLanded by gravy from %s.", ticket.Title, wt.Branch)
-	merged, err := lander.SquashMerge(ctx, wt, project.TargetBranch, message)
+	merged, err := lander.SquashMerge(ctx, wt, project.TargetBranch, message, how.Pushes())
 	if err != nil {
 		// Same refusal-is-not-a-conflict rule as the rebase above, one step later. The squash
 		// happens in the main checkout, so that is where the uncommitted changes are — and a
@@ -271,6 +288,6 @@ type landRepo interface {
 	Rebase(ctx context.Context, w git.Worktree, onto string) (git.RebaseResult, error)
 	// DirtyFiles lists uncommitted changes, checked before a rebase that would refuse them.
 	DirtyFiles(ctx context.Context, w git.Worktree) ([]string, error)
-	SquashMerge(ctx context.Context, w git.Worktree, target, message string) (git.LandResult, error)
+	SquashMerge(ctx context.Context, w git.Worktree, target, message string, push bool) (git.LandResult, error)
 	DeleteBranch(ctx context.Context, branch string) error
 }

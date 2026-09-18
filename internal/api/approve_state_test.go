@@ -11,11 +11,11 @@ import (
 // returns no error, because parking is not one.
 type parkingLander struct{ state core.State }
 
-func (l parkingLander) Approve(context.Context, string) (core.State, error) {
+func (l parkingLander) Approve(context.Context, string, core.Approval) (core.State, error) {
 	return l.state, nil
 }
 
-func (l parkingLander) Continue(context.Context, string) (core.State, error) {
+func (l parkingLander) Continue(context.Context, string, core.Approval) (core.State, error) {
 	return l.state, nil
 }
 
@@ -29,7 +29,7 @@ func TestApproveReportsParkedRatherThanNil(t *testing.T) {
 	svc, _ := atReview(t)
 	svc = svc.WithLander(parkingLander{state: core.StateNeedsYou})
 
-	state, err := svc.Approve(context.Background(), "GR-1")
+	state, err := svc.Approve(context.Background(), "GR-1", core.ApprovePush)
 	if err != nil {
 		t.Fatalf("parking is not an error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestApproveReportsDoneWhenItLands(t *testing.T) {
 	svc, _ := atReview(t)
 	svc = svc.WithLander(parkingLander{state: core.StateDone})
 
-	state, err := svc.Approve(context.Background(), "GR-1")
+	state, err := svc.Approve(context.Background(), "GR-1", core.ApprovePush)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestContinueReportsParked(t *testing.T) {
 	svc, _ := atReview(t)
 	svc = svc.WithLander(parkingLander{state: core.StateNeedsYou})
 
-	state, err := svc.Continue(context.Background(), "GR-1")
+	state, err := svc.Continue(context.Background(), "GR-1", core.ApprovePush)
 	if err != nil {
 		t.Fatal(err)
 	}

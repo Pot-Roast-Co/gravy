@@ -131,8 +131,33 @@ func showReview(ctx context.Context, a *app, ticketID string, full bool) error {
 
 // runApprove records approval and lands the work.
 func runApprove(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy approve", flag.ContinueOnError)
+	noPush := fs.Bool("no-push", false, "squash onto the target branch but do not push it")
+	handOff := fs.Bool("hand-off", false, "merge nothing; keep the branch and worktree for you")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy approve [flags] <ticket-id>")
+		fmt.Fprintln(os.Stderr, "\nApproves reviewed work. With no flags it squashes onto the")
+		fmt.Fprintln(os.Stderr, "target branch and pushes, which is what approving has always meant.")
+		fmt.Fprintln(os.Stderr, "\nflags:")
+		fs.PrintDefaults()
+	}
+	args, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
 	if len(args) != 1 {
-		return fmt.Errorf("usage: gravy approve <ticket-id>")
+		fs.Usage()
+		return fmt.Errorf("expected exactly one ticket")
+	}
+	if *noPush && *handOff {
+		return fmt.Errorf("-no-push and -hand-off are different outcomes; pick one")
+	}
+	how := core.ApprovePush
+	switch {
+	case *handOff:
+		how = core.ApproveHandOff
+	case *noPush:
+		how = core.ApproveLocal
 	}
 	a, err := newApp(ctx)
 	if err != nil {
@@ -144,14 +169,21 @@ func runApprove(ctx context.Context, args []string) error {
 	// target branch is cheap to notice, and "approving <id>" alone never showed one.
 	if t, err := a.db.GetTicket(ctx, args[0]); err == nil {
 		if p, err := a.db.GetProject(ctx, t.ProjectID); err == nil {
-			fmt.Printf("approving %s — merges into %s\n", args[0], p.TargetBranch)
+			switch how {
+			case core.ApproveHandOff:
+				fmt.Printf("approving %s — %s untouched, the branch stays yours\n", args[0], p.TargetBranch)
+			case core.ApproveLocal:
+				fmt.Printf("approving %s — merges into %s, no push\n", args[0], p.TargetBranch)
+			default:
+				fmt.Printf("approving %s — merges into %s\n", args[0], p.TargetBranch)
+			}
 		} else {
 			fmt.Printf("approving %s\n", args[0])
 		}
 	} else {
 		fmt.Printf("approving %s\n", args[0])
 	}
-	res, err := a.orch.Land().Approve(ctx, args[0])
+	res, err := a.orch.Land().Approve(ctx, args[0], how)
 	return reportLanding(res, err)
 }
 
@@ -167,7 +199,7 @@ func runContinue(ctx context.Context, args []string) error {
 	defer a.Close()
 
 	fmt.Printf("retrying the landing of %s\n", args[0])
-	res, err := a.orch.Land().Continue(ctx, args[0])
+	res, err := a.orch.Land().Continue(ctx, args[0], core.ApprovePush)
 	return reportLanding(res, err)
 }
 
@@ -183,6 +215,10 @@ func reportLanding(res agentrun.LandResult, err error) error {
 		return err
 	}
 	switch res.State {
+	case core.StateHandedOff:
+		fmt.Printf("  %s is yours: nothing merged\n", res.TicketID)
+		fmt.Println("  the branch is rebased onto the target and green against it,")
+		fmt.Println("  and its worktree is kept so you can merge it however you like")
 	case core.StateDone:
 		fmt.Printf("  merged as %s", shortHash(res.MergeCommit))
 		if res.Target != "" {
@@ -190,6 +226,8 @@ func reportLanding(res agentrun.LandResult, err error) error {
 		}
 		if res.Pushed {
 			fmt.Print(", pushed")
+		} else if res.Approval == core.ApproveLocal {
+			fmt.Printf(", not pushed — `git -C . push origin %s` when you are ready", res.Target)
 		}
 		fmt.Println()
 		if res.Revalidated {
@@ -215,6 +253,25 @@ func reportLanding(res agentrun.LandResult, err error) error {
 	default:
 		fmt.Printf("  ended in %s\n", res.State)
 	}
+	return nil
+}
+
+// runMarkMerged records that a human merged a handed-off ticket themselves.
+func runMarkMerged(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: gravy done <ticket-id>")
+	}
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	state, err := a.svc.MarkMerged(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s is %s — anything waiting on it can start now\n", args[0], state)
 	return nil
 }
 

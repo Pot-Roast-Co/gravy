@@ -439,11 +439,11 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return s.svc.GetReview(ctx, p.TicketID)
 
 	case mApprove:
-		var p ticketIDParams
+		var p approveParams
 		if err := unmarshalParams(raw, &p); err != nil {
 			return nil, err
 		}
-		return s.svc.Approve(ctx, p.TicketID)
+		return s.svc.Approve(ctx, p.TicketID, p.How)
 
 	case mRequestChanges:
 		var p requestChangesParams
@@ -487,12 +487,19 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.CancelDiscussion(ctx, p.TicketID)
 
-	case mContinue:
+	case mMarkMerged:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {
 			return nil, err
 		}
-		return s.svc.Continue(ctx, p.TicketID)
+		return s.svc.MarkMerged(ctx, p.TicketID)
+
+	case mContinue:
+		var p approveParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.Continue(ctx, p.TicketID, p.How)
 
 	case mReject:
 		var p ticketIDParams

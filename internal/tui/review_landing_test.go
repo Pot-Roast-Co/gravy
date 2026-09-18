@@ -27,20 +27,31 @@ func landingReview(t *testing.T) (*review, *fakeService, ViewContext) {
 func TestApproveTwiceSendsOneApproval(t *testing.T) {
 	r, f, ctx := landingReview(t)
 
-	screen, first := r.handleKey(key("a"), ctx)
+	// "a" opens the chooser; "enter" is the default outcome, squash and push.
+	screen, chooser := r.handleKey(key("a"), ctx)
 	rv := screen.(*review)
+	if chooser != nil {
+		t.Fatal("opening the chooser started work")
+	}
+	if rv.mode != reviewApproving {
+		t.Fatalf("mode = %v after a, want reviewApproving", rv.mode)
+	}
+	screen, first := rv.handleKey(key("enter"), ctx)
+	rv = screen.(*review)
 	if first == nil {
-		t.Fatal("the first press produced no approval")
+		t.Fatal("choosing an outcome produced no approval")
 	}
 	if rv.mode != reviewLanding {
 		t.Fatalf("mode = %v after approving, want reviewLanding", rv.mode)
 	}
 
 	for i := 0; i < 3; i++ {
-		screen, again := rv.handleKey(key("a"), ctx)
-		rv = screen.(*review)
-		if again != nil {
-			t.Fatalf("press %d produced a second approval", i+2)
+		for _, k := range []string{"a", "enter"} {
+			screen, again := rv.handleKey(key(k), ctx)
+			rv = screen.(*review)
+			if again != nil {
+				t.Fatalf("press %d (%q) produced a second approval", i+2, k)
+			}
 		}
 	}
 
@@ -55,6 +66,7 @@ func TestApproveTwiceSendsOneApproval(t *testing.T) {
 func TestLandingRefusesTheOtherDecisions(t *testing.T) {
 	r, f, ctx := landingReview(t)
 	screen, _ := r.handleKey(key("a"), ctx)
+	screen, _ = screen.(*review).handleKey(key("enter"), ctx)
 	rv := screen.(*review)
 
 	for _, k := range []string{"r", "x", "v", "T", "s"} {

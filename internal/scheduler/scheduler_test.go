@@ -899,3 +899,75 @@ func TestArchivingDoesNotTouchWorkInFlight(t *testing.T) {
 		})
 	}
 }
+
+// TestHandedOffDoesNotUnblockDependents is the rule hand-off turns on.
+//
+// A dependent branches from the target, so a dependency that was handed off rather than merged
+// is not in the branch it would start from. Letting it run would build against code that is not
+// there and silently redo the work — which is worse than waiting, because it looks like progress.
+func TestHandedOffDoesNotUnblockDependents(t *testing.T) {
+	st := newStore().addProject(parallelProject("p1", "repo", 5))
+	st.addTicket(ticket("dep", "p1", core.StateHandedOff, 1))
+	st.addTicket(ticket("dependent", "p1", core.StateReady, 2))
+	st.deps["dependent"] = []string{"dep"}
+
+	sched := newScheduler(st, newPool(mac("m1", 8)))
+	got, err := sched.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range got {
+		if a.TicketID == "dependent" {
+			t.Fatal("a dependent started against work that was never merged")
+		}
+	}
+
+	// And the wait is explained as the different thing it is: nothing in gravy will finish it.
+	ex, _ := sched.Explain(context.Background(), "dependent")
+	if !strings.Contains(ex.Reason, "took over") {
+		t.Errorf("reason %q does not say the dependency was handed over", ex.Reason)
+	}
+	if !strings.Contains(ex.Reason, "gravy done") {
+		t.Errorf("reason %q does not say how to unblock it", ex.Reason)
+	}
+
+	// Recording the merge is what releases it.
+	st.setState("dep", core.StateDone)
+	got, err = sched.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, a := range got {
+		if a.TicketID == "dependent" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("recording the merge did not release the dependent")
+	}
+}
+
+// Handing off frees the project's queue for work that does not depend on it. That is the whole
+// point: gravy stops holding the serial slot for a ticket it is no longer working on.
+func TestHandedOffFreesTheSerialQueue(t *testing.T) {
+	st := newStore().addProject(project("p1", "repo"))
+	st.addTicket(ticket("handed", "p1", core.StateHandedOff, 1))
+	st.addTicket(ticket("next", "p1", core.StateReady, 2))
+
+	sched := newScheduler(st, newPool(mac("m1", 8)))
+	got, err := sched.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, a := range got {
+		if a.TicketID == "next" {
+			found = true
+		}
+	}
+	if !found {
+		ex, _ := sched.Explain(context.Background(), "next")
+		t.Fatalf("a handed-off ticket is still holding the serial queue: %s", ex.Reason)
+	}
+}

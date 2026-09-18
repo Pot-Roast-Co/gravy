@@ -97,7 +97,7 @@ func actContinueLanding() reasonAction {
 		return func() tea.Msg {
 			// A retry that parks again has not landed either, and the row it reopens is
 			// the only thing that would otherwise say so.
-			state, err := ctx.Svc.Continue(context.Background(), id)
+			state, err := ctx.Svc.Continue(context.Background(), id, core.ApprovePush)
 			verb := "landed"
 			if state == core.StateNeedsYou {
 				verb = "still did not land — see the reopened row"

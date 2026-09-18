@@ -229,9 +229,9 @@ func (c *Client) GetReview(ctx context.Context, ticketID string) (ReviewBundle, 
 	return out, c.call(ctx, mGetReview, ticketIDParams{TicketID: ticketID}, &out)
 }
 
-func (c *Client) Approve(ctx context.Context, ticketID string) (core.State, error) {
+func (c *Client) Approve(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
 	var out core.State
-	return out, c.call(ctx, mApprove, ticketIDParams{TicketID: ticketID}, &out)
+	return out, c.call(ctx, mApprove, approveParams{TicketID: ticketID, How: how}, &out)
 }
 
 func (c *Client) RequestChanges(ctx context.Context, ticketID, feedback string) error {
@@ -262,9 +262,14 @@ func (c *Client) CancelDiscussion(ctx context.Context, ticketID string) error {
 	return c.call(ctx, mCancelDiscussion, ticketIDParams{TicketID: ticketID}, nil)
 }
 
-func (c *Client) Continue(ctx context.Context, ticketID string) (core.State, error) {
+func (c *Client) MarkMerged(ctx context.Context, ticketID string) (core.State, error) {
 	var out core.State
-	return out, c.call(ctx, mContinue, ticketIDParams{TicketID: ticketID}, &out)
+	return out, c.call(ctx, mMarkMerged, ticketIDParams{TicketID: ticketID}, &out)
+}
+
+func (c *Client) Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
+	var out core.State
+	return out, c.call(ctx, mContinue, approveParams{TicketID: ticketID, How: how}, &out)
 }
 
 func (c *Client) Reject(ctx context.Context, ticketID string) error {
