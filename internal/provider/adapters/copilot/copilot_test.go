@@ -126,12 +126,12 @@ func TestRunAndResumePreservePermissions(t *testing.T) {
 	if !strings.Contains(strings.Join(h.specs[1].Args, " "), "--resume=session-1") {
 		t.Fatal(h.specs[1].Args)
 	}
-	args, _ := runArgs(provider.AgentTask{Model: DefaultModel})
+	args, _, _ := runArgs(provider.AgentTask{Model: DefaultModel})
 	if strings.Contains(strings.Join(args, " "), "--model") {
 		t.Fatal("default passed as a model name")
 	}
 	for _, bad := range []string{"^go.*", "go),shell(*)"} {
-		if _, err := runArgs(provider.AgentTask{Allowlist: core.Allowlist{Commands: []core.Pattern{{Match: bad}}}}); err == nil {
+		if _, _, err := runArgs(provider.AgentTask{Allowlist: core.Allowlist{Commands: []core.Pattern{{Match: bad}}}}); err == nil {
 			t.Fatalf("unsafe pattern accepted %q", bad)
 		}
 	}

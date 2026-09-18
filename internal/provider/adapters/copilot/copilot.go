@@ -163,11 +163,11 @@ func (p *Provider) Run(ctx context.Context, h host.Host, task provider.AgentTask
 	if task.WorktreePath == "" {
 		return nil, errors.New("copilot: no worktree path")
 	}
-	args, err := runArgs(task)
+	args, cleanup, err := runArgs(task)
 	if err != nil {
 		return nil, err
 	}
-	return p.launch(ctx, h, task, args, "")
+	return p.launch(ctx, h, task, args, "", cleanup)
 }
 
 // Resume continues an explicit session with the same worktree and permission settings.
@@ -187,12 +187,12 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.Ses
 		return nil, fmt.Errorf("copilot: session is missing its saved worktree and permissions")
 	}
 	ref.Task.Prompt = t.Prompt
-	args, err := runArgs(ref.Task)
+	args, cleanup, err := runArgs(ref.Task)
 	if err != nil {
 		return nil, err
 	}
 	args = append(args, "--resume="+ref.ID)
-	return p.launch(ctx, h, ref.Task, args, ref.ID)
+	return p.launch(ctx, h, ref.Task, args, ref.ID, cleanup)
 }
 
 func baseArgs() []string {
@@ -201,7 +201,7 @@ func baseArgs() []string {
 
 // Copilot has no ordinary-turn cap; host.Exec enforces the wall-clock limit.
 // Permission patterns that cannot be translated are refused instead of widened.
-func runArgs(task provider.AgentTask) ([]string, error) {
+func runArgs(task provider.AgentTask) ([]string, func(), error) {
 	args := append(baseArgs(), "--allow-tool=read", "--allow-tool=write")
 	for _, rule := range task.Allowlist.Commands {
 		command := strings.TrimSpace(rule.Match)
@@ -209,7 +209,7 @@ func runArgs(task provider.AgentTask) ([]string, error) {
 			continue
 		}
 		if strings.HasPrefix(command, "^") || strings.ContainsAny(command, "(),\r\n") {
-			return nil, fmt.Errorf("copilot: command permission %q cannot be expressed as a Copilot shell pattern", command)
+			return nil, nil, fmt.Errorf("copilot: command permission %q cannot be expressed as a Copilot shell pattern", command)
 		}
 		args = append(args, "--allow-tool=shell("+command+")", "--allow-tool=shell("+command+" *)")
 	}
@@ -222,20 +222,81 @@ func runArgs(task provider.AgentTask) ([]string, error) {
 	if task.Model != "" && task.Model != DefaultModel {
 		args = append(args, "--model", task.Model)
 	}
-	return append(args, "-p", task.Prompt), nil
+	prompt, cleanup, err := promptArg(task)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(args, "-p", prompt), cleanup, nil
 }
 
-func (p *Provider) launch(ctx context.Context, h host.Host, task provider.AgentTask, args []string, session string) (provider.Handle, error) {
+// promptThreshold is the size above which the prompt is handed over as a file.
+//
+// Comfortably under host.MaxArgLen, because -p is not the only argument: the allowlist becomes
+// one --allow-tool per command, and the margin has to cover them.
+const promptThreshold = 96 * 1024
+
+// promptArg returns what to pass to -p, writing the prompt to a file when it is too large to be
+// an argument at all.
+//
+// Copilot has no stdin mode — -p takes a value and its help mentions stdin nowhere — so the
+// pipe that fixes this for claude-code and codex is not available. A file is, because gravy
+// already grants Copilot directory access with --add-dir, and a path is a few hundred bytes
+// whatever the prompt weighs.
+//
+// The alternative was to truncate, and that is the one thing this must not do: handing an agent
+// two thirds of a ROADMAP and letting it plan confidently against the missing third is a failure
+// that reports success.
+func promptArg(task provider.AgentTask) (string, func(), error) {
+	if len(task.Prompt) <= promptThreshold {
+		return task.Prompt, nil, nil
+	}
+
+	dir := task.WorktreePath
+	if task.LogPath != "" {
+		// Beside the run's other artefacts rather than in the worktree, so it is never swept
+		// into a commit — the same rule the claude-code settings file follows.
+		dir = filepath.Dir(task.LogPath)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", nil, fmt.Errorf("copilot: prompt file directory: %w", err)
+	}
+	f, err := os.CreateTemp(dir, "prompt-*.md")
+	if err != nil {
+		return "", nil, fmt.Errorf("copilot: write the prompt: %w", err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(task.Prompt); err != nil {
+		f.Close()
+		os.Remove(name)
+		return "", nil, fmt.Errorf("copilot: write the prompt: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(name)
+		return "", nil, fmt.Errorf("copilot: write the prompt: %w", err)
+	}
+
+	return "Your instructions for this task are in " + name +
+		". Read that file first and in full, then carry out what it says. It is the whole of " +
+		"your brief; nothing else will be provided.", func() { os.Remove(name) }, nil
+}
+
+func (p *Provider) launch(ctx context.Context, h host.Host, task provider.AgentTask, args []string, session string, cleanup func()) (provider.Handle, error) {
 	if task.AskPath != "" {
 		if err := h.FS().MkdirAll(filepath.Dir(task.AskPath), 0700); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
 			return nil, fmt.Errorf("create Copilot ask directory: %w", err)
 		}
 	}
 	proc, err := h.Exec(ctx, host.ExecSpec{Cmd: p.command, Args: args, Dir: task.WorktreePath, Timeout: task.Timeout, UnsetEnv: []string{"COPILOT_ALLOW_ALL"}})
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, fmt.Errorf("copilot: start: %w", err)
 	}
-	handle := &handle{proc: proc, events: make(chan provider.Event, 64), done: make(chan struct{}), session: session}
+	handle := &handle{proc: proc, events: make(chan provider.Event, 64), done: make(chan struct{}), session: session, cleanup: cleanup}
 	go handle.run(p, task)
 	return handle, nil
 }
@@ -247,6 +308,10 @@ type handle struct {
 	session string
 	outcome provider.Outcome
 	err     error
+	// cleanup removes anything the invocation needed on disk — the prompt file, when the
+	// prompt was too large to be an argument. It runs when the process is finished with it,
+	// not when Run returns: Run returns a handle and the agent is still reading.
+	cleanup func()
 }
 
 func (h *handle) Events() <-chan provider.Event   { return h.events }
@@ -255,6 +320,10 @@ func (h *handle) Wait() (provider.Outcome, error) { <-h.done; return h.outcome, 
 
 func (h *handle) run(p *Provider, task provider.AgentTask) {
 	logPath := task.LogPath
+	// Last, so the prompt file outlives every read of it.
+	if h.cleanup != nil {
+		defer h.cleanup()
+	}
 	defer close(h.done)
 	defer close(h.events)
 	stderr := readAll(h.proc.Stderr())

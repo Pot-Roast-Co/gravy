@@ -187,9 +187,14 @@ func (p *Provider) runArgs(t provider.AgentTask) []string {
 	if t.Model != "" && t.Model != DefaultModel {
 		args = append(args, "-m", t.Model)
 	}
-	// The prompt goes last as a positional argument. Passing it on stdin would work too, but
-	// an argument keeps the invocation visible in the run log.
-	return append(args, t.Prompt)
+	// The prompt is omitted, which is how codex is told to read it from stdin.
+	//
+	// It used to go last as a positional argument, for the good reason that an argument keeps
+	// the invocation visible in the run log. The kernel disagrees: a single argv entry is
+	// capped at 128KiB, and a planning prompt carries the project's documents — one repository
+	// reached 132KB on documents alone and fork/exec refused it. Visibility is not worth a
+	// ceiling, and the prompt is written to the run log by the caller anyway.
+	return args
 }
 
 // Resume continues a prior thread with an injected message.
@@ -202,7 +207,8 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRe
 	if s.ProviderID != ID {
 		return nil, fmt.Errorf("codex: session belongs to provider %q", s.ProviderID)
 	}
-	args := []string{"exec", "resume", s.ID, "--json", "--skip-git-repo-check", "-s", p.sandbox, t.Prompt}
+	// No prompt argument here either: it goes on stdin, same as a first turn.
+	args := []string{"exec", "resume", s.ID, "--json", "--skip-git-repo-check", "-s", p.sandbox}
 	// The task goes through so the turn runs where it should and under the same timeout as
 	// the first one. codex still gates by sandbox policy rather than by the allowlist.
 	return p.launch(ctx, h, t, args)
@@ -211,9 +217,12 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRe
 // launch starts the CLI and wires up event parsing.
 func (p *Provider) launch(ctx context.Context, h host.Host, t provider.AgentTask, args []string) (provider.Handle, error) {
 	proc, err := h.Exec(ctx, host.ExecSpec{
-		Cmd:     p.command,
-		Args:    args,
-		Dir:     t.WorktreePath,
+		Cmd:  p.command,
+		Args: args,
+		Dir:  t.WorktreePath,
+		// The prompt. codex reads it from stdin when no positional prompt is given, which is
+		// the only delivery with no size ceiling.
+		Stdin:   strings.NewReader(t.Prompt),
 		Timeout: t.Timeout,
 	})
 	if err != nil {
