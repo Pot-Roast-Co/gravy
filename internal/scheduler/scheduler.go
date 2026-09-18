@@ -377,6 +377,12 @@ func (s *Scheduler) blockingDependency(ctx context.Context, t core.Ticket) (stri
 		if err != nil {
 			return "", fmt.Errorf("scheduler: dependency %q of %q: %w", id, t.ID, err)
 		}
+		if dep.State == core.StateHandedOff {
+			// A different wait from the others: nothing in gravy is going to finish this one.
+			return fmt.Sprintf(
+				"waiting on dependency %s, which you took over — merge it, then: gravy done %s",
+				dep.ID, dep.ID), nil
+		}
 		if dep.State != core.StateDone {
 			return fmt.Sprintf("waiting on dependency %s (%s, not yet done)", dep.ID, dep.State), nil
 		}

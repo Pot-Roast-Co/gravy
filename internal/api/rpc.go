@@ -136,6 +136,7 @@ const (
 	mStreamLogs       = "StreamLogs"
 	mKillRun          = "KillRun"
 	mContinue         = "Continue"
+	mMarkMerged       = "MarkMerged"
 	mListQueue        = "ListQueue"
 	mUpdateTicket     = "UpdateTicket"
 	mReorderTicket    = "ReorderTicket"
@@ -196,6 +197,11 @@ type (
 	approvePlanParams struct {
 		Req ApprovePlanReq `json:"req"`
 	}
+	approveParams struct {
+		TicketID string        `json:"ticket_id"`
+		How      core.Approval `json:"how,omitempty"`
+	}
+
 	attachRepoParams struct {
 		ProjectID string `json:"project_id"`
 		Path      string `json:"path"`

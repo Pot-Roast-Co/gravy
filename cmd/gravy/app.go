@@ -386,13 +386,13 @@ func (a *app) Close() error { return a.db.Close() }
 // requires rather than depending on how landing works.
 type lander struct{ orch *agentrun.Orchestrator }
 
-func (l lander) Approve(ctx context.Context, ticketID string) (core.State, error) {
-	res, err := l.orch.Land().Approve(ctx, ticketID)
+func (l lander) Approve(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
+	res, err := l.orch.Land().Approve(ctx, ticketID, how)
 	return res.State, err
 }
 
-func (l lander) Continue(ctx context.Context, ticketID string) (core.State, error) {
-	res, err := l.orch.Land().Continue(ctx, ticketID)
+func (l lander) Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
+	res, err := l.orch.Land().Continue(ctx, ticketID, how)
 	return res.State, err
 }
 

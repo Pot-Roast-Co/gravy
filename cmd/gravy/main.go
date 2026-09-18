@@ -53,6 +53,8 @@ func run(args []string) error {
 		return runReview(ctx, args[1:])
 	case "approve":
 		return runApprove(ctx, args[1:])
+	case "done":
+		return runMarkMerged(ctx, args[1:])
 	case "continue":
 		return runContinue(ctx, args[1:])
 	case "changes":
@@ -104,6 +106,7 @@ func usage() {
   gravy approve <id>           approve, rebase, squash-merge, push
   gravy reject <id>            abandon a ticket
   gravy continue <id>          retry a landing after you resolved a conflict
+  gravy done <id>              record that you merged a handed-off ticket yourself
   gravy try "<task>"           one-off smoke test in a throwaway repo
 
 Nothing merges without "gravy approve". No flag changes that.

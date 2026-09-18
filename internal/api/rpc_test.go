@@ -166,7 +166,7 @@ func TestRoundTripEveryMethod(t *testing.T) {
 	t.Run("Approve and Reject reach the service", func(t *testing.T) {
 		// Local has no lander, so both must arrive and fail for that reason rather than
 		// silently succeeding.
-		if _, err := c.Approve(ctx, "GR-1"); err == nil || !strings.Contains(err.Error(), "cannot land") {
+		if _, err := c.Approve(ctx, "GR-1", core.ApprovePush); err == nil || !strings.Contains(err.Error(), "cannot land") {
 			t.Errorf("Approve error = %v, want the no-lander refusal", err)
 		}
 		// A ticket of its own: an earlier subtest advanced GR-1, and Assigned has no reject

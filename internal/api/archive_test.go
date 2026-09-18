@@ -17,7 +17,7 @@ type landerStub struct {
 	failErr error
 }
 
-func (l *landerStub) Approve(ctx context.Context, ticketID string) (core.State, error) {
+func (l *landerStub) Approve(ctx context.Context, ticketID string, _ core.Approval) (core.State, error) {
 	if l.failErr != nil {
 		return "", l.failErr
 	}
@@ -33,8 +33,8 @@ func (l *landerStub) Approve(ctx context.Context, ticketID string) (core.State, 
 	return core.StateDone, nil
 }
 
-func (l *landerStub) Continue(ctx context.Context, ticketID string) (core.State, error) {
-	return l.Approve(ctx, ticketID)
+func (l *landerStub) Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
+	return l.Approve(ctx, ticketID, how)
 }
 
 // TestArchivingDoesNotStrandWorkInReview is the acceptance case that decides whether archiving
@@ -118,7 +118,7 @@ func TestArchivingDoesNotStrandWorkInReview(t *testing.T) {
 	}
 
 	// Approvable and landable: the whole point.
-	if _, err := svc.Approve(ctx, "GR-1"); err != nil {
+	if _, err := svc.Approve(ctx, "GR-1", core.ApprovePush); err != nil {
 		t.Fatalf("Approve in an archived project: %v", err)
 	}
 	if len(lander.landed) != 1 {

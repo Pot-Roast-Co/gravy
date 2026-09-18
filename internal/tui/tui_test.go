@@ -37,6 +37,8 @@ type fakeService struct {
 	approveState  core.State
 	continueState core.State
 	attached      []string
+	approvedHow   []core.Approval
+	merged        []string
 	approved      []string
 	rejected      []string
 	changes       map[string]string
@@ -160,11 +162,12 @@ func (f *fakeService) GetReview(_ context.Context, id string) (api.ReviewBundle,
 	return f.review, nil
 }
 
-func (f *fakeService) Approve(_ context.Context, id string) (core.State, error) {
+func (f *fakeService) Approve(_ context.Context, id string, how core.Approval) (core.State, error) {
 	if f.actionErr != nil {
 		return "", f.actionErr
 	}
 	f.approved = append(f.approved, id)
+	f.approvedHow = append(f.approvedHow, how)
 	if f.approveState != "" {
 		return f.approveState, nil
 	}
@@ -253,7 +256,15 @@ func (f *fakeService) AttachRepository(_ context.Context, projectID, path string
 	return core.Project{ID: projectID, RepoPath: path}, nil
 }
 
-func (f *fakeService) Continue(_ context.Context, ticketID string) (core.State, error) {
+func (f *fakeService) MarkMerged(_ context.Context, ticketID string) (core.State, error) {
+	if f.actionErr != nil {
+		return "", f.actionErr
+	}
+	f.merged = append(f.merged, ticketID)
+	return core.StateDone, nil
+}
+
+func (f *fakeService) Continue(_ context.Context, ticketID string, _ core.Approval) (core.State, error) {
 	if f.actionErr != nil {
 		return "", f.actionErr
 	}

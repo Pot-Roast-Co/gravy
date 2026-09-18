@@ -149,9 +149,11 @@ func TestApproveCallsTheGate(t *testing.T) {
 	f := reviewFixture()
 	m := openReview(t, f, 80, 24)
 
-	m, cmd := sendCmd(t, m, key("a"))
+	// "a" opens the chooser, "enter" takes its default: squash onto the target and push.
+	m, _ = sendCmd(t, m, key("a"))
+	m, cmd := sendCmd(t, m, key("enter"))
 	if cmd == nil {
-		t.Fatal("a produced no command")
+		t.Fatal("choosing an outcome produced no command")
 	}
 	m = send(t, m, cmd())
 
@@ -536,9 +538,10 @@ func TestApproveDiscardsTheCheckout(t *testing.T) {
 	m, cmd := sendCmd(t, m, key("e"))
 	m, _ = sendCmd(t, m, cmd())
 
-	m, cmd = sendCmd(t, m, key("a"))
+	m, _ = sendCmd(t, m, key("a"))
+	m, cmd = sendCmd(t, m, key("enter"))
 	if cmd == nil {
-		t.Fatal("a did not approve")
+		t.Fatal("a then enter did not approve")
 	}
 	send(t, m, cmd())
 

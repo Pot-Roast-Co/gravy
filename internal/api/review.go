@@ -39,13 +39,13 @@ type Lander interface {
 	// Approve returns the state the ticket reached. A landing that parks — validation failed,
 	// a merge conflict, a dirty checkout — is not an error, so an error alone cannot tell a
 	// caller whether the work merged.
-	Approve(ctx context.Context, ticketID string) (core.State, error)
+	Approve(ctx context.Context, ticketID string, how core.Approval) (core.State, error)
 	// Continue retries a landing after a human has resolved a conflict in the preserved
 	// worktree. It goes back through the gate, because the resolution changed the code that
 	// was approved.
 	// Continue retries a landing and, like Approve, returns the state it reached: a retry can
 	// park again, and reporting that as success is the same lie one step later.
-	Continue(ctx context.Context, ticketID string) (core.State, error)
+	Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error)
 }
 
 // GetReview assembles the evidence for one ticket awaiting judgement.
@@ -108,11 +108,11 @@ func (l *Local) GetReview(ctx context.Context, ticketID string) (ReviewBundle, e
 //
 // It delegates to the lander, which owns the gate. There is no path to a target branch that does
 // not pass through here, and no configuration that skips it.
-func (l *Local) Approve(ctx context.Context, ticketID string) (core.State, error) {
+func (l *Local) Approve(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
 	if l.lander == nil {
 		return "", fmt.Errorf("this client cannot land work")
 	}
-	state, err := l.lander.Approve(ctx, ticketID)
+	state, err := l.lander.Approve(ctx, ticketID, how)
 	if err != nil {
 		return state, err
 	}
@@ -172,16 +172,37 @@ func (l *Local) requestChanges(ctx context.Context, ticketID, feedback string) e
 }
 
 // Continue retries a landing after a human has resolved a conflict.
-func (l *Local) Continue(ctx context.Context, ticketID string) (core.State, error) {
+func (l *Local) Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error) {
 	if l.lander == nil {
 		return "", fmt.Errorf("this client cannot land work")
 	}
-	state, err := l.lander.Continue(ctx, ticketID)
+	state, err := l.lander.Continue(ctx, ticketID, how)
 	if err != nil {
 		return state, err
 	}
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
+	return state, nil
+}
+
+// MarkMerged records that a human merged a handed-off ticket themselves.
+//
+// Gravy did not do the merge and cannot verify it, so this records what the human says rather
+// than checking git. That is the bargain hand-off makes: the work left gravy's hands, and the
+// person it went to is the one who knows where it ended up.
+func (l *Local) MarkMerged(ctx context.Context, ticketID string) (core.State, error) {
+	t, err := l.db.GetTicket(ctx, ticketID)
+	if err != nil {
+		return "", err
+	}
+	if t.State != core.StateHandedOff {
+		return "", fmt.Errorf("ticket %s is %s, not handed off", ticketID, t.State)
+	}
+	state, err := l.db.SetTicketState(ctx, ticketID, core.EventLanded)
+	if err != nil {
+		return "", err
+	}
+	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	return state, nil
 }
 

@@ -479,7 +479,7 @@ func (e *DirtyCheckoutError) Error() string {
 // The merge happens in the main working copy rather than the worktree, because a worktree has
 // the ticket's own branch checked out and git refuses to check out a branch that is already
 // checked out elsewhere.
-func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message string) (LandResult, error) {
+func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message string, push bool) (LandResult, error) {
 	var out LandResult
 
 	// Git can carry unrelated staged changes into a squash commit. Refuse before
@@ -531,7 +531,13 @@ func (r *LocalRepo) SquashMerge(ctx context.Context, w Worktree, target, message
 	}
 	out.MergeCommit = strings.TrimSpace(hash)
 
-	// Push only when there is a remote to push to. A local-only project is legitimate.
+	// Push only when there is a remote to push to, and only when asked. A local-only project
+	// is legitimate, and so is an approval that deliberately keeps the merge off the remote:
+	// the target is ahead of origin afterwards, which the fast-forward above tolerates because
+	// --ff-only on a branch that already contains the remote is a no-op.
+	if !push {
+		return out, nil
+	}
 	hasRemote, err := r.hasRemote(ctx)
 	if err != nil {
 		return out, err

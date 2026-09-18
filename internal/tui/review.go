@@ -33,6 +33,12 @@ const (
 	// to spend all of it looking untouched, which invites a second press the state machine
 	// then refuses.
 	reviewLanding
+	// reviewApproving is the moment between pressing "a" and choosing what approval means.
+	// Approving is one decision with three outcomes, and they differ in how far gravy carries
+	// the work — far enough to reach the remote, far enough to reach the target branch, or not
+	// at all — so the choice belongs at the point of deciding rather than in a setting made
+	// weeks earlier.
+	reviewApproving
 )
 
 // maxPatchLines caps an inline diff.
@@ -247,6 +253,15 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		// A landing that parked did not land, and saying it did is how a human learns their
 		// work merged when it is sitting in Needs You with a failed validation. Parking is
 		// not an error, so only the state can tell these apart.
+		if msg.state == core.StateHandedOff {
+			r.notice = shortID(r.ticketID) + " is yours — branch and worktree kept, nothing merged"
+			r.ticketID, r.loaded = "", false
+			if len(r.sweep) > 0 {
+				r.swept++
+				return r, r.advance(ctx)
+			}
+			return r, nil
+		}
 		if msg.state == core.StateNeedsYou {
 			r.notice = shortID(r.ticketID) + " did not land — parked for you, see Needs You (8)"
 			r.ticketID, r.loaded = "", false
@@ -274,6 +289,20 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 
 func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	key := msg.String()
+
+	if r.mode == reviewApproving {
+		switch key {
+		case "enter":
+			return r.approve(ctx, core.ApprovePush)
+		case "n":
+			return r.approve(ctx, core.ApproveLocal)
+		case "h":
+			return r.approve(ctx, core.ApproveHandOff)
+		case "esc":
+			r.mode, r.notice = reviewBrowsing, ""
+		}
+		return r, nil
+	}
 
 	// While a landing is in flight the decisions have already been made, so the keys that make
 	// one are refused rather than queued. This is the actual fix for the double press: the
@@ -380,12 +409,7 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 			r.expanded[path] = !r.expanded[path]
 		}
 	case "a":
-		id := r.ticketID
-		r.mode, r.notice = reviewLanding, "landing — rebasing, re-validating and pushing"
-		return r, func() tea.Msg {
-			state, err := ctx.Svc.Approve(context.Background(), id)
-			return reviewActedMsg{verb: "approved and landed", err: err, state: state}
-		}
+		r.mode, r.notice = reviewApproving, ""
 	case "r":
 		// Request changes opens a conversation, not a send. Nothing is queued and nothing is
 		// authorised until the instruction it produces is confirmed.
@@ -611,6 +635,23 @@ func (r *review) scrolled(lines []string, cursorLine int, ctx ViewContext, th Th
 }
 
 // footer says what the keys do, and doubles as the prompt in the modes that take input.
+// approve starts a landing with the outcome the human chose.
+func (r *review) approve(ctx ViewContext, how core.Approval) (Screen, tea.Cmd) {
+	id := r.ticketID
+	verb, notice := "approved and landed", "landing — rebasing, re-validating and pushing"
+	switch how {
+	case core.ApproveLocal:
+		verb, notice = "approved and merged locally", "merging — rebasing and re-validating, no push"
+	case core.ApproveHandOff:
+		verb, notice = "approved and handed to you", "rebasing and re-validating, then it is yours"
+	}
+	r.mode, r.notice = reviewLanding, notice
+	return r, func() tea.Msg {
+		state, err := ctx.Svc.Approve(context.Background(), id, how)
+		return reviewActedMsg{verb: verb, err: err, state: state}
+	}
+}
+
 func (r *review) footer(th Theme, width int) string {
 	switch r.mode {
 	case reviewConfirmReject:
@@ -619,6 +660,16 @@ func (r *review) footer(th Theme, width int) string {
 	}
 	if r.mode == reviewLanding {
 		return th.Accent.Render(trunc(r.notice, width))
+	}
+	if r.mode == reviewApproving {
+		target := branchName(r.bundle.Project.TargetBranch)
+		return strings.Join([]string{
+			th.Header.Render("approve " + shortID(r.ticketID) + " — merges into " + target),
+			th.Text.Render("  enter  squash onto " + target + " and push"),
+			th.Text.Render("  n      squash onto " + target + ", do not push"),
+			th.Text.Render("  h      hand off the branch — " + target + " untouched, yours to merge"),
+			th.Muted.Render("  esc    cancel"),
+		}, "\n")
 	}
 	withNotice := func(actions string) string {
 		if r.notice == "" {
