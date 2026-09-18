@@ -133,6 +133,11 @@ func (c *Client) UpdateProject(ctx context.Context, p core.Project) error {
 	return c.call(ctx, mUpdateProject, updateProjectParams{Project: p}, nil)
 }
 
+func (c *Client) AttachRepository(ctx context.Context, projectID, path string) (core.Project, error) {
+	var out core.Project
+	return out, c.call(ctx, mAttachRepo, attachRepoParams{ProjectID: projectID, Path: path}, &out)
+}
+
 func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 	var out Settings
 	return out, c.call(ctx, mGetSettings, nil, &out)

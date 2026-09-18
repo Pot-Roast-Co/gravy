@@ -468,6 +468,13 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 		case p.Archived && ps.Counts[core.StateReady] > 0:
 			// Not a fault: the repository is finished. Unarchiving starts the queue again.
 			ps.Blocked = "project archived"
+		case strings.TrimSpace(p.RepoPath) == "" && ps.Counts[core.StateReady] > 0:
+			// The scheduler refuses these before it looks at anything else, and used to do it
+			// silently: planning a project with no repository produces implementation tickets,
+			// they sit in Ready looking like work about to start, and nothing says the one
+			// thing standing in the way. Planning is what a project with no repository is for,
+			// so this is the expected end of that road rather than a misconfiguration.
+			ps.Blocked = "no repository yet — gravy project set-repo " + p.Slug + " <path>"
 		case ps.Active != nil && !p.ParallelMode && ps.Counts[core.StateReady] > 0:
 			verb := "in flight"
 			if ps.Active.State == core.StateReview {

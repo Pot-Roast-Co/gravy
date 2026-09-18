@@ -27,6 +27,10 @@ type Service interface {
 	ListProjects(ctx context.Context, f ProjectFilter) ([]core.Project, error)
 	AddProject(ctx context.Context, req AddProjectReq) (core.Project, error)
 	UpdateProject(ctx context.Context, p core.Project) error
+	// AttachRepository gives a project without one a repository to work in, and returns the
+	// project as saved. It is the step between planning a goal and building it: implementation
+	// tickets cannot start until a project has somewhere to work.
+	AttachRepository(ctx context.Context, projectID, path string) (core.Project, error)
 	// ArchiveProject takes a finished repository out of the working set, or puts it back.
 	//
 	// Its own method rather than a field UpdateProject writes: archiving is a state change

@@ -141,6 +141,7 @@ const (
 	mReorderTicket    = "ReorderTicket"
 	mDeleteTicket     = "DeleteTicket"
 	mUpdateProject    = "UpdateProject"
+	mAttachRepo       = "AttachRepository"
 	mGetSettings      = "GetSettings"
 	mUpdateSettings   = "UpdateSettings"
 	// nEvent is the notification the server pushes on the Events stream.
@@ -195,6 +196,11 @@ type (
 	approvePlanParams struct {
 		Req ApprovePlanReq `json:"req"`
 	}
+	attachRepoParams struct {
+		ProjectID string `json:"project_id"`
+		Path      string `json:"path"`
+	}
+
 	updateProjectParams struct {
 		Project core.Project `json:"project"`
 	}
