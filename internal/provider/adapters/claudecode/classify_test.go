@@ -191,7 +191,11 @@ func TestAllowedToolsFromAllowlist(t *testing.T) {
 		{Match: "   ", Note: "blank is skipped"},
 	}})
 
+	// The CLI's own read tools lead, then the shell grants in the order declared. The read
+	// tools are there because a shell rule cannot authorise a chained command, so an agent with
+	// no other way to read a file is denied the moment it writes `ls a; find b`.
 	want := []string{
+		"Read", "Glob", "Grep",
 		"Bash(go test ./...)", "Bash(go test ./... *)",
 		"Bash(go build ./...)", "Bash(go build ./... *)",
 	}
@@ -217,6 +221,11 @@ func TestAllowedToolsStaysNarrow(t *testing.T) {
 	for _, p := range allowedTools(core.Allowlist{Commands: []core.Pattern{{Match: "go test ./..."}}}) {
 		if p == "Bash(go *)" || p == "Bash(*)" {
 			t.Errorf("allowlist widened to %q, which permits unrelated commands", p)
+		}
+		// The read tools are not shell and are checked by their own test; this one is about
+		// what a declared command is allowed to turn into.
+		if !strings.HasPrefix(p, "Bash(") {
+			continue
 		}
 		if !strings.HasPrefix(p, "Bash(go test ./...") {
 			t.Errorf("pattern %q does not start with the declared command", p)

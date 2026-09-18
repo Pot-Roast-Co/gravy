@@ -231,7 +231,18 @@ func (p *Provider) resumeArgs(s provider.SessionRef, msg string, allow core.Allo
 // like `go *` would permit `go run` on anything. GR-035 replaces this with real per-project
 // matching and an escalation path.
 func allowedTools(a core.Allowlist) []string {
-	var out []string
+	if len(a.Commands) == 0 {
+		return nil
+	}
+	// The CLI's own read tools, first.
+	//
+	// Without them the only way an agent can look at a file is to shell out, and a shell rule
+	// is a prefix rule: it authorises one simple command, never a chain. So an agent reaching
+	// for `ls -la a b 2>/dev/null; find . -type f | head -5` is denied even with ls, find and
+	// head each granted — command chaining is an injection vector and prefix matching will not
+	// cover it. Read, Glob and Grep do the same job without a shell, and read-only is what they
+	// are: none of them writes, deletes, or reaches the network.
+	out := []string{"Read", "Glob", "Grep"}
 	for _, pattern := range a.Commands {
 		cmd := strings.TrimSpace(pattern.Match)
 		if cmd == "" {
