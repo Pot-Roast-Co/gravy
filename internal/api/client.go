@@ -224,8 +224,9 @@ func (c *Client) GetReview(ctx context.Context, ticketID string) (ReviewBundle, 
 	return out, c.call(ctx, mGetReview, ticketIDParams{TicketID: ticketID}, &out)
 }
 
-func (c *Client) Approve(ctx context.Context, ticketID string) error {
-	return c.call(ctx, mApprove, ticketIDParams{TicketID: ticketID}, nil)
+func (c *Client) Approve(ctx context.Context, ticketID string) (core.State, error) {
+	var out core.State
+	return out, c.call(ctx, mApprove, ticketIDParams{TicketID: ticketID}, &out)
 }
 
 func (c *Client) RequestChanges(ctx context.Context, ticketID, feedback string) error {
@@ -256,8 +257,9 @@ func (c *Client) CancelDiscussion(ctx context.Context, ticketID string) error {
 	return c.call(ctx, mCancelDiscussion, ticketIDParams{TicketID: ticketID}, nil)
 }
 
-func (c *Client) Continue(ctx context.Context, ticketID string) error {
-	return c.call(ctx, mContinue, ticketIDParams{TicketID: ticketID}, nil)
+func (c *Client) Continue(ctx context.Context, ticketID string) (core.State, error) {
+	var out core.State
+	return out, c.call(ctx, mContinue, ticketIDParams{TicketID: ticketID}, &out)
 }
 
 func (c *Client) Reject(ctx context.Context, ticketID string) error {

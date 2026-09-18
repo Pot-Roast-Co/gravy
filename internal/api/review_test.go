@@ -127,7 +127,7 @@ func TestApproveNeedsALander(t *testing.T) {
 	svc, db := atReview(t)
 	ctx := context.Background()
 
-	err := svc.Approve(ctx, "GR-1")
+	_, err := svc.Approve(ctx, "GR-1")
 	if err == nil {
 		t.Fatal("a service with no lander approved and landed work")
 	}

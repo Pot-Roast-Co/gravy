@@ -17,23 +17,23 @@ type landerStub struct {
 	failErr error
 }
 
-func (l *landerStub) Approve(ctx context.Context, ticketID string) error {
+func (l *landerStub) Approve(ctx context.Context, ticketID string) (core.State, error) {
 	if l.failErr != nil {
-		return l.failErr
+		return "", l.failErr
 	}
 	for _, ev := range []core.Event{core.EventApprove, core.EventLanded} {
 		if _, err := l.db.SetTicketState(ctx, ticketID, ev); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
-		return err
+		return "", err
 	}
 	l.landed = append(l.landed, ticketID)
-	return nil
+	return core.StateDone, nil
 }
 
-func (l *landerStub) Continue(ctx context.Context, ticketID string) error {
+func (l *landerStub) Continue(ctx context.Context, ticketID string) (core.State, error) {
 	return l.Approve(ctx, ticketID)
 }
 
@@ -118,7 +118,7 @@ func TestArchivingDoesNotStrandWorkInReview(t *testing.T) {
 	}
 
 	// Approvable and landable: the whole point.
-	if err := svc.Approve(ctx, "GR-1"); err != nil {
+	if _, err := svc.Approve(ctx, "GR-1"); err != nil {
 		t.Fatalf("Approve in an archived project: %v", err)
 	}
 	if len(lander.landed) != 1 {

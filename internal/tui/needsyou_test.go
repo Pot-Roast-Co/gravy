@@ -159,8 +159,29 @@ func TestMergeConflictContinueRetriesTheLand(t *testing.T) {
 	if len(f.continued) != 1 || f.continued[0] != "aaa11111" {
 		t.Errorf("continued = %v, want the conflicted ticket", f.continued)
 	}
-	if !strings.Contains(m.View(), "landing retried") {
+	// "landed", not "landing retried": the retry is only interesting for what it achieved,
+	// and a retry that parks again says so in the sibling test below.
+	if !strings.Contains(m.View(), "landed") {
 		t.Errorf("the retry was not reported:\n%s", m.View())
+	}
+}
+
+// A retry that parks again has not landed either, and the reopened row is the only other thing
+// that would say so.
+func TestContinueThatParksAgainSaysSo(t *testing.T) {
+	f := queueFixture()
+	f.continueState = core.StateNeedsYou
+	m := openQueue(t, f)
+
+	m, cmd := sendCmd(t, m, key("c"))
+	if cmd == nil {
+		t.Fatal("c produced no command on a merge conflict")
+	}
+	m = send(t, m, cmd())
+
+	view := m.View()
+	if !strings.Contains(view, "still did not land") {
+		t.Errorf("a retry that parked again reported as landed:\n%s", view)
 	}
 }
 
