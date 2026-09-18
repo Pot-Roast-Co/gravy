@@ -74,11 +74,14 @@ type fakeService struct {
 	archived    []archiveCall
 	agentStatus []api.AgentStatus
 	allTickets  []core.Ticket
-	queue       []api.TicketDetail
-	added       []api.AddProjectReq
-	planReply   api.PlanReply
-	planErr     error
-	planned     []api.PlanReq
+	// listTicketsErr fails ListTickets, the fallback lookup navigation uses when the status
+	// snapshot does not carry the selected ticket.
+	listTicketsErr error
+	queue          []api.TicketDetail
+	added          []api.AddProjectReq
+	planReply      api.PlanReply
+	planErr        error
+	planned        []api.PlanReq
 	// checkoutPath is what ReviewCheckout returns; the rest record what was asked for.
 	checkoutPath string
 	checkoutErr  error
@@ -351,6 +354,9 @@ func (f *fakeService) DeleteProject(_ context.Context, id string) error {
 }
 
 func (f *fakeService) ListTickets(context.Context, api.TicketFilter) ([]core.Ticket, error) {
+	if f.listTicketsErr != nil {
+		return nil, f.listTicketsErr
+	}
 	return f.allTickets, nil
 }
 func (f *fakeService) CreateTicket(_ context.Context, req api.CreateTicketReq) (core.Ticket, error) {

@@ -308,6 +308,21 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, nil
 	}
 
+	// A failed load is recoverable in place. Without this the card is a dead end that nothing
+	// but restarting Gravy clears — and the ticket is still sitting there, still needing a
+	// decision, whatever went wrong with the read.
+	if r.err != nil {
+		switch key {
+		case "enter", "R":
+			if r.ticketID == "" {
+				return r, nil
+			}
+			r.err, r.notice = nil, ""
+			return r, loadReview(ctx.Svc, r.ticketID)
+		}
+		return r, nil
+	}
+
 	if !r.loaded {
 		return r, nil
 	}
@@ -436,11 +451,21 @@ func (r *review) View(ctx ViewContext) string {
 
 	switch {
 	case r.err != nil:
-		return strings.Join([]string{
+		// A failed read decides nothing, so the way back in belongs on the screen. Without it
+		// this card takes no keys at all and the only way out is restarting Gravy.
+		lines := []string{
 			th.Danger.Render("Could not load the review."),
 			"",
 			th.Muted.Render(r.err.Error()),
-		}, "\n")
+		}
+		if r.ticketID != "" {
+			lines = append(lines, "",
+				th.Text.Render(shortID(r.ticketID)+" is still waiting — nothing has been decided."),
+				th.Key.Render("  enter")+th.Muted.Render(" retries · ")+
+					th.Key.Render("1")+th.Muted.Render(" dashboard · ")+
+					th.Key.Render("8")+th.Muted.Render(" needs you"))
+		}
+		return strings.Join(lines, "\n")
 
 	case r.ticketID == "":
 		lines := []string{

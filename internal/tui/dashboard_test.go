@@ -95,15 +95,21 @@ func TestRunningRowNamesProviderModelAndHost(t *testing.T) {
 }
 
 // TestEnterOpensTheRightScreen is AC4.
+//
+// Asserted on the active section rather than on the rendered title: every section's name is in
+// the header on every frame, so a view that mentions "Needs You" is not evidence of arriving
+// there. A pending review opens its card directly — the queue is where it is listed, not where
+// it is decided.
 func TestEnterOpensTheRightScreen(t *testing.T) {
 	tests := []struct {
 		name  string
 		downs int
 		want  Section
+		focus string
 	}{
-		{"needs you row", 0, SectionNeedsYou},
-		{"running row", 1, SectionRunning},
-		{"ready row", 2, SectionReady},
+		{"pending review row", 0, SectionReview, "8ecd21bc"},
+		{"running row", 1, SectionRunning, "c9d4"},
+		{"ready row", 2, SectionReady, "f196d04b"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,9 +121,12 @@ func TestEnterOpensTheRightScreen(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("enter produced no command")
 			}
-			m = send(t, m, cmd())
-			if !strings.Contains(m.View(), tc.want.Title()) {
-				t.Errorf("enter did not open %s:\n%s", tc.want.Title(), m.View())
+			m = drive(t, m, cmd)
+			if m.active != tc.want {
+				t.Errorf("enter opened %s, want %s", m.active.Title(), tc.want.Title())
+			}
+			if m.focus != tc.focus {
+				t.Errorf("enter focused %q, want %q", m.focus, tc.focus)
 			}
 		})
 	}

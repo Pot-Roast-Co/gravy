@@ -14,22 +14,46 @@ import (
 // because the first question is the one that costs you when it goes unanswered.
 type dashboard struct {
 	cursor int
+	// selected is the row under the cursor, remembered by id rather than by position.
+	//
+	// The snapshot is replaced on every push, and rows arrive and leave above the cursor. Holding
+	// a position means the row someone read and the row their next keystroke acts on are not
+	// necessarily the same one — an agent finishing while you reach for enter would open somebody
+	// else's ticket.
+	selected string
+	// notice reports a navigation that did not go where the row promised: the ticket left the
+	// queue, or the read failed and is worth pressing again.
+	notice string
 }
 
 // dashRow is one selectable line and where enter takes it.
 type dashRow struct {
-	id    string
-	dest  Section
-	lines []string
+	id string
+	// ticketID is the work the row is about. Navigation resolves this against the daemon rather
+	// than trusting dest, which is only as current as the last push.
+	ticketID string
+	dest     Section
+	lines    []string
 }
 
 func (d dashboard) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return d, nil
-	}
 	rows := dashRows(ctx)
+	d = d.reselect(rows)
 
+	switch msg := msg.(type) {
+	case navNoticeMsg:
+		d.notice = msg.text
+		return d, nil
+	case enteredMsg:
+		d.notice = ""
+		return d, nil
+	case tea.KeyMsg:
+		return d.handleKey(msg, rows, ctx)
+	}
+	return d, nil
+}
+
+func (d dashboard) handleKey(key tea.KeyMsg, rows []dashRow, ctx ViewContext) (Screen, tea.Cmd) {
 	switch key.String() {
 	case "up", "k":
 		if d.cursor > 0 {
@@ -44,16 +68,51 @@ func (d dashboard) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 	case "end", "G":
 		d.cursor = max(0, len(rows)-1)
 	case "enter":
-		if d.cursor < len(rows) {
-			r := rows[d.cursor]
+		if d.cursor >= len(rows) {
+			return d, nil
+		}
+		r := rows[d.cursor]
+		d.notice = ""
+		if r.ticketID == "" {
+			// A queue entry with no ticket behind it — nothing to resolve, so the row's own
+			// destination is the best that can be said.
 			return d, Goto(r.dest, r.id)
 		}
+		// By identity, and by what the daemon says now: this row is a rendering of a snapshot
+		// that may be several seconds old, and a pending review that has since been approved
+		// must not open an empty screen.
+		return d, openTicket(r.ticketID)
 	case "S":
 		// Review latency gates throughput under the serial default, so clearing the queue
 		// fast is the highest-leverage thing this screen can offer.
 		return d, Sweep(sweepOrder(ctx))
+	default:
+		return d, nil
+	}
+
+	d.notice, d.selected = "", ""
+	if d.cursor < len(rows) {
+		d.selected = rows[d.cursor].id
 	}
 	return d, nil
+}
+
+// reselect re-points the cursor at the row it was on, by id.
+//
+// When that row has gone the cursor keeps its position, which is the least surprising place for
+// it to land — but the selection is re-anchored to whatever is there now, so nothing acts on a
+// row that no longer exists.
+func (d dashboard) reselect(rows []dashRow) dashboard {
+	if i := indexOfRow(rows, d.selected); d.selected != "" && i >= 0 {
+		d.cursor = i
+		return d
+	}
+	d.cursor = clamp(d.cursor, 0, max(0, len(rows)-1))
+	d.selected = ""
+	if d.cursor < len(rows) {
+		d.selected = rows[d.cursor].id
+	}
+	return d
 }
 
 func (d dashboard) View(ctx ViewContext) string {
@@ -72,7 +131,7 @@ func (d dashboard) View(ctx ViewContext) string {
 	}
 
 	rows := dashRows(ctx)
-	cursor := clamp(d.cursor, 0, max(0, len(rows)-1))
+	cursor := d.reselect(rows).cursor
 
 	var (
 		lines    []string
@@ -110,7 +169,7 @@ func (d dashboard) View(ctx ViewContext) string {
 	appendSection("READY", len(ctx.Status.Ready), ready,
 		[]string{"the queue is empty", `add work: gravy ticket add "<title>"`})
 
-	return pinFooter(lines, selected, ctx.Height, th, actionFooter("", th.Muted.Render("enter open · j/k move · g/G first/last · S review sweep · P add project"), ctx.Width, th))
+	return pinFooter(lines, selected, ctx.Height, th, actionFooter(d.notice, th.Muted.Render("enter open · j/k move · g/G first/last · S review sweep · P add project"), ctx.Width, th))
 }
 
 // window scrolls so the selected line stays visible, and reports what it hid rather than
@@ -150,7 +209,7 @@ func splitRows(ctx ViewContext) (needs, running, ready []dashRow) {
 			title = a.Attention.TicketID
 		}
 		needs = append(needs, dashRow{
-			id: a.Attention.ID, dest: SectionNeedsYou,
+			id: a.Attention.ID, ticketID: a.Attention.TicketID, dest: SectionNeedsYou,
 			lines: []string{columns(w,
 				col{text: string(a.Attention.Reason), width: 17, style: th.Warning},
 				col{text: projectName(a.Project), width: 11, style: th.Muted},
@@ -167,7 +226,7 @@ func splitRows(ctx ViewContext) (needs, running, ready []dashRow) {
 			agent += "@" + r.Run.HostID
 		}
 		running = append(running, dashRow{
-			id: r.Ticket.ID, dest: SectionRunning,
+			id: r.Ticket.ID, ticketID: r.Ticket.ID, dest: SectionRunning,
 			lines: []string{columns(w,
 				col{text: projectName(r.Project), width: 12, style: th.Accent},
 				col{text: branchName(r.Ticket.Branch), width: 20, style: th.Muted},
@@ -188,7 +247,7 @@ func splitRows(ctx ViewContext) (needs, running, ready []dashRow) {
 			trailing = col{text: "held · " + q.Held, flex: true, style: th.Warning}
 		}
 		ready = append(ready, dashRow{
-			id: q.Ticket.ID, dest: SectionReady,
+			id: q.Ticket.ID, ticketID: q.Ticket.ID, dest: SectionReady,
 			lines: []string{columns(w,
 				col{text: projectName(q.Project), width: 12, style: th.Muted},
 				col{text: shortID(q.Ticket.ID), width: 9, style: th.Muted},

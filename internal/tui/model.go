@@ -55,7 +55,17 @@ type (
 	// sweepMsg starts a review sweep. It is raised by whichever screen the human pressed S on
 	// and handled by the Review screen, which owns the card the sweep renders.
 	sweepMsg struct{ ids []string }
+
+	// navNoticeMsg carries the outcome of a navigation back to the screen the human pressed
+	// enter on, for the cases where there is nowhere better to go. A row that opens nothing and
+	// says nothing is indistinguishable from a wedged client.
+	navNoticeMsg struct{ text string }
 )
+
+// navNotice reports a navigation that did not happen, to whichever screen is showing.
+func navNotice(text string) tea.Cmd {
+	return func() tea.Msg { return navNoticeMsg{text: text} }
+}
 
 // newAttention reports whether the Needs You queue grew, which is the moment worth hearing.
 //
@@ -177,10 +187,116 @@ type ticketDestinationMsg struct {
 	id     string
 	status api.SystemStatus
 	err    error
+	// reviewing is what the daemon said about a ticket the snapshot does not carry. An
+	// attention row resolved from another client leaves a ticket sitting in Review with nothing
+	// in the queue naming it, and the Review card is still where it belongs.
+	reviewing bool
+	// projectID is the repository the ticket belongs to when only the ticket lookup found it.
+	projectID string
 }
 
 // OpenTicket asks a running TUI to navigate to the ticket using fresh state.
 func OpenTicket(id string) tea.Msg { return openTicketMsg{id: id} }
+
+// openTicket is the same request raised from inside the TUI.
+func openTicket(id string) tea.Cmd {
+	return func() tea.Msg { return openTicketMsg{id: id} }
+}
+
+// ticketRoute is where a ticket opens, resolved from a fresh snapshot rather than from the row
+// that happened to be on screen when the key was pressed.
+type ticketRoute struct {
+	section Section
+	// focus is always the ticket id: every destination screen matches a row on it, and it is
+	// the one identifier that survives an attention row being resolved and reopened.
+	focus string
+	// projectID is the repository the destination belongs to, so the frame can drop a scope
+	// that would hide the row it is navigating to.
+	projectID string
+}
+
+// resolveTicket says where a ticket belongs now, from the snapshot alone.
+//
+// A pending review goes to the Review card directly. The Needs You queue is where an item is
+// listed, not where it is acted on — its own enter key on a review_pending row has always handed
+// straight over to Review, so routing through it adds a screen and a chance to land on nothing.
+func resolveTicket(st api.SystemStatus, id string) (ticketRoute, bool) {
+	if id == "" {
+		return ticketRoute{}, false
+	}
+	for _, a := range st.Attention {
+		if a.Attention.TicketID != id {
+			continue
+		}
+		project := a.Project.ID
+		if project == "" {
+			project = a.Attention.ProjectID
+		}
+		// The state is authoritative: it is what the ticket is actually in, while the reason is
+		// only what the row was raised for and outlives the decision that answered it. The reason
+		// is consulted solely when the snapshot did not carry the ticket and the state is unknown.
+		if a.Ticket.State == core.StateReview {
+			return ticketRoute{section: SectionReview, focus: id, projectID: project}, true
+		}
+		if a.Attention.Reason != core.ReasonReviewPending {
+			return ticketRoute{section: SectionNeedsYou, focus: id, projectID: project}, true
+		}
+		if a.Ticket.State == "" {
+			return ticketRoute{section: SectionReview, focus: id, projectID: project}, true
+		}
+		// review_pending over a ticket that has moved on — approved from another client, say, and
+		// now landing. A card for work already decided is exactly the empty, wrong destination this
+		// routing exists to avoid, so let the queues below answer: Running carries a landing ticket.
+		// If neither does, the caller's ListTickets fallback and "left the queue" notice take over.
+		break
+	}
+	for _, r := range st.Running {
+		if r.Ticket.ID == id {
+			return ticketRoute{section: SectionRunning, focus: id, projectID: r.Project.ID}, true
+		}
+	}
+	for _, r := range st.Ready {
+		if r.Ticket.ID == id {
+			return ticketRoute{section: SectionReady, focus: id, projectID: r.Project.ID}, true
+		}
+	}
+	return ticketRoute{}, false
+}
+
+// resolveTicketCmd reads the ticket's current state through the API and reports where it opens.
+//
+// Read-only by construction: it calls Status and, at most, ListTickets. Navigating to a ticket
+// never approves it, never resolves its attention item and never moves it.
+func resolveTicketCmd(svc api.Service, id string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		st, err := svc.Status(ctx, api.ProjectFilter{})
+		if err != nil {
+			return ticketDestinationMsg{id: id, err: err}
+		}
+		msg := ticketDestinationMsg{id: id, status: st}
+		if _, ok := resolveTicket(st, id); ok {
+			return msg
+		}
+		// The snapshot does not carry it anywhere. Before calling it gone, ask the one question
+		// that has a different answer: is it still waiting on a human?
+		ts, err := svc.ListTickets(ctx, api.TicketFilter{State: core.StateReview})
+		if err != nil {
+			// The question that would have distinguished "gone" from "still in Review" went
+			// unanswered, so nothing here is known. Reporting the snapshot would refresh the row
+			// away and call the work finished on the strength of a failed read; report the
+			// failure instead and leave the human a row to press again.
+			return ticketDestinationMsg{id: id, err: err}
+		}
+		for _, t := range ts {
+			if t.ID == id {
+				msg.reviewing, msg.projectID = true, t.ProjectID
+				break
+			}
+		}
+		return msg
+	}
+}
 
 // WithDaemonSound suppresses duplicate terminal bells when desktop audio owns alerts.
 func (m Model) WithDaemonSound() Model { m.daemonSound = true; return m }
@@ -188,24 +304,11 @@ func (m Model) WithDaemonSound() Model { m.daemonSound = true; return m }
 // WithTicket opens the destination using its current state once connected.
 func (m Model) WithTicket(id string) Model { m.initialTicket = id; return m }
 
+// notificationDestination is resolveTicket's section, with Review as the fallback for a ticket
+// the snapshot no longer carries — the card still loads from the ticket id alone.
 func notificationDestination(st api.SystemStatus, id string) Section {
-	for _, a := range st.Attention {
-		if a.Attention.TicketID == id {
-			if a.Ticket.State == core.StateReview {
-				return SectionReview
-			}
-			return SectionNeedsYou
-		}
-	}
-	for _, r := range st.Running {
-		if r.Ticket.ID == id {
-			return SectionRunning
-		}
-	}
-	for _, r := range st.Ready {
-		if r.Ticket.ID == id {
-			return SectionReady
-		}
+	if r, ok := resolveTicket(st, id); ok {
+		return r.section
 	}
 	return SectionReview
 }
@@ -304,18 +407,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id == "" {
 			return m, Goto(SectionDashboard, "")
 		}
-		return m, func() tea.Msg {
-			st, err := m.svc.Status(context.Background(), api.ProjectFilter{})
-			return ticketDestinationMsg{id: msg.id, status: st, err: err}
-		}
+		return m, resolveTicketCmd(m.svc, msg.id)
 	case ticketDestinationMsg:
 		if msg.err != nil {
-			m.connErr = msg.err
-			return m, nil
+			// The snapshot the frame already holds is still good and the row is still there to
+			// press again, so this is a message rather than a dead client: restarting Gravy was
+			// never the fix for a read that failed once. The row and the way out lead, because
+			// the footer truncates to the terminal's width and a long reason would push
+			// "enter retries" off the end — a dead end again.
+			return m, navNotice(fmt.Sprintf("could not open %s — enter retries: %v",
+				shortID(msg.id), msg.err))
 		}
 		m.status = msg.status
 		m = m.resyncProjectFilter()
-		return m, Goto(notificationDestination(msg.status, msg.id), msg.id)
+
+		route, ok := resolveTicket(msg.status, msg.id)
+		if !ok && msg.reviewing {
+			// Its queue entry went, the work did not: resolved from another client, or
+			// recovered at startup. The card is still the right place to land.
+			route, ok = ticketRoute{section: SectionReview, focus: msg.id, projectID: msg.projectID}, true
+		}
+		if !ok {
+			// Nothing to open. The frame has just refreshed, so the screen underneath this
+			// message is current — say what happened and leave the human on it.
+			return m, tea.Batch(
+				m.refreshScreen(),
+				navNotice(shortID(msg.id)+" has left the queue — it is no longer waiting on you; this screen is up to date"),
+			)
+		}
+		m = m.unscopeFor(route.projectID)
+		return m, Goto(route.section, route.focus)
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -593,6 +714,22 @@ func (m Model) resyncProjectFilter() Model {
 			return m
 		}
 	}
+	m.projectIdx, m.projectID = -1, ""
+	return m
+}
+
+// unscopeFor drops a filter that would hide the row being navigated to.
+//
+// The Dashboard spans every repository on purpose, so following one of its rows must not land on
+// a screen scoped somewhere else and therefore empty. That empty screen reads as "nothing needs
+// you", and the only way out of it used to be restarting Gravy.
+func (m Model) unscopeFor(projectID string) Model {
+	m.filter, m.filtering = "", false
+	if projectID == "" || m.projectIdx < 0 || m.projectID == projectID {
+		return m
+	}
+	// Back to every project rather than across to the destination's: widening shows the row
+	// without silently re-pointing a scope the human set deliberately at something else.
 	m.projectIdx, m.projectID = -1, ""
 	return m
 }
