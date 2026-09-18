@@ -2,7 +2,6 @@ package claudecode_test
 
 import (
 	"context"
-	"github.com/pot-roast-co/gravy/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,7 +170,7 @@ func TestIntegrationResumeContinuesContext(t *testing.T) {
 	}
 
 	// A separate invocation resumes the session. If context were lost, the word would be gone.
-	hd2, err := p.Resume(ctx, h, first.Session, "What was the important word? Reply with just that word. Do not use tools.", core.Allowlist{})
+	hd2, err := p.Resume(ctx, h, first.Session, provider.AgentTask{Prompt: "What was the important word? Reply with just that word. Do not use tools.", WorktreePath: worktree})
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}

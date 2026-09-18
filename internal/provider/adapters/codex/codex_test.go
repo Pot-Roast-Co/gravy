@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"github.com/pot-roast-co/gravy/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,7 +217,7 @@ func TestRunArgsAreHonestAboutWhatCodexCannotDo(t *testing.T) {
 
 // TestResumeRefusesAForeignSession keeps one provider from resuming another's thread.
 func TestResumeRefusesAForeignSession(t *testing.T) {
-	_, err := New().Resume(t.Context(), nil, provider.SessionRef{ProviderID: "claude-code", ID: "x"}, "go on", core.Allowlist{})
+	_, err := New().Resume(t.Context(), nil, provider.SessionRef{ProviderID: "claude-code", ID: "x"}, provider.AgentTask{Prompt: "go on"})
 	if err == nil || !strings.Contains(err.Error(), "belongs to provider") {
 		t.Errorf("err = %v, want a refusal naming the other provider", err)
 	}

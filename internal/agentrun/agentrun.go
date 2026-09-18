@@ -105,6 +105,9 @@ type Config struct {
 	MaxTurns int
 	// RunsDir is where per-run artefacts live, normally ~/.gravy/runs.
 	RunsDir string
+	// Home is the gravy home, normally ~/.gravy. It is where a project with no repository
+	// gets a directory to be planned in.
+	Home string
 	// CooldownQuota, CooldownRateLimit and CooldownUnavailable are how long a model is
 	// considered unavailable after each kind of provider-side failure.
 	CooldownQuota       time.Duration

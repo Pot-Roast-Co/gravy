@@ -94,7 +94,7 @@ func TestRunAndResumePreservePermissions(t *testing.T) {
 	if err != nil || out.Class != provider.Success || !out.Session.Valid() {
 		t.Fatalf("%+v %v", out, err)
 	}
-	handle, err = p.Resume(context.Background(), h, out.Session, "continue", core.Allowlist{})
+	handle, err = p.Resume(context.Background(), h, out.Session, provider.AgentTask{Prompt: "continue"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRunAndResumePreservePermissions(t *testing.T) {
 			t.Fatalf("unsafe pattern accepted %q", bad)
 		}
 	}
-	if _, err := p.Resume(context.Background(), h, provider.SessionRef{ProviderID: "other", ID: "session"}, "x", core.Allowlist{}); err == nil {
+	if _, err := p.Resume(context.Background(), h, provider.SessionRef{ProviderID: "other", ID: "session"}, provider.AgentTask{Prompt: "x"}); err == nil {
 		t.Fatal("wrong provider accepted")
 	}
 }

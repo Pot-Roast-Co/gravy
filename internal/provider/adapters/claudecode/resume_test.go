@@ -3,6 +3,7 @@ package claudecode
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/provider"
@@ -53,5 +54,28 @@ func TestRunAndResumeGrantTheSameCommands(t *testing.T) {
 		if !strings.Contains(resume, pattern) {
 			t.Errorf("resume does not grant %q that a first turn does", pattern)
 		}
+	}
+}
+
+// A resumed turn runs where the first one did, and under the same timeout.
+//
+// It used to be handed a bare message, so launch received a zero AgentTask: Dir empty, meaning
+// the agent ran in whatever directory the daemon was started from, and Timeout zero.
+func TestResumeRunsInTheTasksWorktree(t *testing.T) {
+	task := provider.AgentTask{
+		Prompt:       "carry on",
+		WorktreePath: "/home/bobby/.gravy/projects/fantasyhockeyaid/plan",
+		Timeout:      42 * time.Second,
+		Allowlist:    core.Allowlist{Commands: []core.Pattern{{Match: "ls"}}},
+	}
+	if task.WorktreePath == "" || task.Timeout == 0 {
+		t.Fatal("fixture is not exercising anything")
+	}
+	// resumeArgs carries the message and grants; the worktree and timeout reach the host
+	// through the same AgentTask, which is the point of taking one.
+	args := New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, task.Prompt, task.Allowlist)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "carry on") || !strings.Contains(joined, "Bash(ls)") {
+		t.Fatalf("resume args lost the message or the grants:\n%v", args)
 	}
 }

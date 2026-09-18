@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pot-roast-co/gravy/internal/core"
 	"io"
 	"os"
 	"path/filepath"
@@ -179,7 +178,7 @@ type sessionRef struct {
 }
 
 // Resume restores the context Gravy recorded with the session.
-func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.SessionRef, message string, allow core.Allowlist) (provider.Handle, error) {
+func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.SessionRef, t provider.AgentTask) (provider.Handle, error) {
 	if !session.Valid() || session.ProviderID != ID {
 		return nil, fmt.Errorf("copilot: invalid session for this provider")
 	}
@@ -187,7 +186,7 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.Ses
 	if err := json.Unmarshal([]byte(session.ID), &ref); err != nil || ref.ID == "" || ref.Task.WorktreePath == "" {
 		return nil, fmt.Errorf("copilot: session is missing its saved worktree and permissions")
 	}
-	ref.Task.Prompt = message
+	ref.Task.Prompt = t.Prompt
 	args, err := runArgs(ref.Task)
 	if err != nil {
 		return nil, err

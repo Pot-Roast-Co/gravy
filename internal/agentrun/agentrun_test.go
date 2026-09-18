@@ -77,8 +77,8 @@ func (w *workBench) Run(ctx context.Context, h host.Host, task provider.AgentTas
 	return w.inner.Run(ctx, h, task)
 }
 
-func (w *workBench) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string, allow core.Allowlist) (provider.Handle, error) {
-	return w.inner.Resume(ctx, h, s, msg, allow)
+func (w *workBench) Resume(ctx context.Context, h host.Host, s provider.SessionRef, t provider.AgentTask) (provider.Handle, error) {
+	return w.inner.Resume(ctx, h, s, t)
 }
 func (w *workBench) Detect(ctx context.Context, h host.Host) (provider.Availability, error) {
 	return w.inner.Detect(ctx, h)
@@ -653,7 +653,7 @@ func (panicProvider) Detect(context.Context, host.Host) (provider.Availability, 
 	return provider.Availability{}, nil
 }
 func (panicProvider) Models(context.Context) ([]provider.Model, error) { return nil, nil }
-func (panicProvider) Resume(context.Context, host.Host, provider.SessionRef, string, core.Allowlist) (provider.Handle, error) {
+func (panicProvider) Resume(context.Context, host.Host, provider.SessionRef, provider.AgentTask) (provider.Handle, error) {
 	return nil, nil
 }
 func (panicProvider) Classify(int, string, string) provider.Classification {

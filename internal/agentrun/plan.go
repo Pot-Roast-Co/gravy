@@ -133,7 +133,19 @@ func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.
 				"this conversation was started by %q, which this build cannot run — start a new one", held)
 		}
 		providerID, agent = held, choice.ProviderID+"/"+choice.Model
-		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg, planAllowlist())
+		dir, derr := p.workspace(h, turn.Project)
+		if derr != nil {
+			return core.PlanResult{}, derr
+		}
+		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, provider.AgentTask{
+			RunID:        runID,
+			WorktreePath: dir,
+			Prompt:       msg,
+			Model:        choice.Model,
+			Timeout:      o.cfg.RunTimeout,
+			MaxTurns:     o.cfg.MaxTurns,
+			Allowlist:    planAllowlist(),
+		})
 	} else {
 		// A project that pins its planning bucket means it for planning too, not only for the
 		// tickets planning produces.
@@ -143,9 +155,13 @@ func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.
 			return core.PlanResult{}, fmt.Errorf("plan: no adapter for provider %q", choice.ProviderID)
 		}
 		providerID, agent = choice.ProviderID, choice.ProviderID+"/"+choice.Model
+		dir, derr := p.workspace(h, turn.Project)
+		if derr != nil {
+			return core.PlanResult{}, derr
+		}
 		handle, err = prov.Run(ctx, h, provider.AgentTask{
 			RunID:        runID,
-			WorktreePath: turn.Project.RepoPath,
+			WorktreePath: dir,
 			Prompt:       p.prompt(h, turn.Project, turn.Backlog, planningMessage(turn)),
 			Allowlist:    planAllowlist(),
 			Model:        choice.Model,
@@ -251,6 +267,33 @@ const planSchema = "```json\n" +
 	"\n```"
 
 // prompt builds the opening turn.
+// workspace is the directory a planning turn runs in.
+//
+// A project with a repository is planned in it. A project without one is planned in a directory
+// gravy makes for it, because "no repository" is a supported and deliberate state — it is how a
+// goal gets a home before anyone has decided what to build — and planning is the entire point of
+// a project in that state.
+//
+// It used to pass the empty RepoPath straight through, and the adapter refused with
+// "claude-code: no worktree path". The one kind of project that exists only to be planned was
+// the one kind that could not be.
+//
+// The directory is stable rather than temporary so a planning conversation that spans several
+// turns can leave notes in it and find them again.
+func (p *Planner) workspace(h host.Host, project core.Project) (string, error) {
+	if dir := strings.TrimSpace(project.RepoPath); dir != "" {
+		return dir, nil
+	}
+	if strings.TrimSpace(p.orch.cfg.Home) == "" {
+		return "", fmt.Errorf("plan: %s has no repository and no gravy home to plan in", project.Slug)
+	}
+	dir := filepath.Join(p.orch.cfg.Home, "projects", project.Slug, "plan")
+	if err := h.FS().MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("plan: make a workspace for %s: %w", project.Slug, err)
+	}
+	return dir, nil
+}
+
 func (p *Planner) prompt(h host.Host, project core.Project, backlog []core.Ticket, message string) string {
 	ask := strings.TrimSpace(message)
 	if ask == "" {

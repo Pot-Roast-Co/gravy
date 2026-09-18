@@ -213,6 +213,7 @@ func newApp(ctx context.Context) (*app, error) {
 			RunTimeout:           cfg.Timeouts.Run.D(),
 			MaxTurns:             60,
 			RunsDir:              filepath.Join(home, "runs"),
+			Home:                 home,
 			CooldownQuota:        cfg.Retry.CooldownQuota.D(),
 			CooldownRateLimit:    cfg.Retry.CooldownRateLimit.D(),
 			CooldownUnavailable:  cfg.Retry.CooldownUnavailable.D(),
