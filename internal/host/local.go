@@ -83,6 +83,11 @@ func (h *LocalHost) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 	if spec.Cmd == "" {
 		return nil, errors.New("exec: no command given")
 	}
+	// Checked here rather than left to fork/exec, which reports it as "argument list too long"
+	// and names nothing useful.
+	if err := checkArgLengths(spec); err != nil {
+		return nil, err
+	}
 
 	cmd := exec.Command(spec.Cmd, spec.Args...) //nolint:gosec // running configured commands is this package's purpose
 	cmd.Dir = spec.Dir

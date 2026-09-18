@@ -18,7 +18,7 @@ import (
 func TestResumeCarriesTheAllowlist(t *testing.T) {
 	p := New()
 	allow := core.Allowlist{Commands: []core.Pattern{{Match: "ls"}, {Match: "sed"}}}
-	args := p.resumeArgs(provider.SessionRef{ProviderID: ID, ID: "sess-1"}, "try again", allow)
+	args := p.resumeArgs(provider.SessionRef{ProviderID: ID, ID: "sess-1"}, allow)
 
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--allowedTools") {
@@ -29,15 +29,16 @@ func TestResumeCarriesTheAllowlist(t *testing.T) {
 			t.Errorf("resume args omit %q:\n%v", want, args)
 		}
 	}
-	// The session and message still go, obviously.
-	if !strings.Contains(joined, "--resume sess-1") || !strings.Contains(joined, "try again") {
-		t.Errorf("resume lost its session or message:\n%v", args)
+	// The session still goes as an argument. The message does not: it is written to stdin,
+	// because an argument has a 128KiB ceiling and a prompt does not.
+	if !strings.Contains(joined, "--resume sess-1") {
+		t.Errorf("resume lost its session:\n%v", args)
 	}
 }
 
 // An empty allowlist sends no flag rather than an empty one, which the CLI rejects.
 func TestResumeWithNoGrantsSendsNoFlag(t *testing.T) {
-	args := New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, "hi", core.Allowlist{})
+	args := New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, core.Allowlist{})
 	if strings.Contains(strings.Join(args, " "), "--allowedTools") {
 		t.Errorf("sent an empty --allowedTools:\n%v", args)
 	}
@@ -49,7 +50,7 @@ func TestRunAndResumeGrantTheSameCommands(t *testing.T) {
 	allow := core.Allowlist{Commands: []core.Pattern{{Match: "grep"}, {Match: "head"}}}
 	want := allowedTools(allow)
 
-	resume := strings.Join(New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, "m", allow), " ")
+	resume := strings.Join(New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, allow), " ")
 	for _, pattern := range want {
 		if !strings.Contains(resume, pattern) {
 			t.Errorf("resume does not grant %q that a first turn does", pattern)
@@ -73,9 +74,8 @@ func TestResumeRunsInTheTasksWorktree(t *testing.T) {
 	}
 	// resumeArgs carries the message and grants; the worktree and timeout reach the host
 	// through the same AgentTask, which is the point of taking one.
-	args := New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, task.Prompt, task.Allowlist)
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "carry on") || !strings.Contains(joined, "Bash(ls)") {
-		t.Fatalf("resume args lost the message or the grants:\n%v", args)
+	args := New().resumeArgs(provider.SessionRef{ProviderID: ID, ID: "s"}, task.Allowlist)
+	if joined := strings.Join(args, " "); !strings.Contains(joined, "Bash(ls)") {
+		t.Fatalf("resume args lost the grants:\n%v", args)
 	}
 }

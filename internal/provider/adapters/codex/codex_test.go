@@ -210,8 +210,10 @@ func TestRunArgsAreHonestAboutWhatCodexCannotDo(t *testing.T) {
 	if strings.Contains(joined, "7") {
 		t.Errorf("MaxTurns leaked into the invocation: %v", args)
 	}
-	if args[len(args)-1] != "do the thing" {
-		t.Errorf("the prompt is not the final positional argument: %v", args)
+	// The prompt is deliberately absent: codex reads it from stdin when no positional prompt
+	// is given, and an argument is capped at 128KiB while a planning prompt is not.
+	if strings.Contains(joined, "do the thing") {
+		t.Errorf("the prompt is an argument again, which caps it at 128KiB: %v", args)
 	}
 }
 
