@@ -866,11 +866,37 @@ func effectiveAllowlist(p core.Project) core.Allowlist {
 // (PRODUCT.md §12).
 //
 // Without these an agent is denied on `find` or `git log` while orienting itself, works around
-// it, and the run is marked a failure over a command that could not have changed anything. Every
-// one of these only reads; nothing here writes, deletes, or reaches the network.
+// it, and the run is marked a failure over a command that could not have changed anything.
+//
+// These are commands whose purpose is to read. A shell redirection can still write, which is
+// equally true of `cat`, so this is a statement about intent and blast radius rather than a
+// sandbox: nothing here edits in place by default, deletes, or reaches the network.
+//
+// sed and awk earn their place by being how an agent reads part of a file. Denied them, the
+// planner reaches for `sed -n 98,128p` anyway, is refused, and the whole turn is recorded as a
+// task failure over a command that wanted to print twenty lines.
 var readOnlyShell = []string{
 	"ls", "cat", "head", "tail", "wc", "find", "grep", "rg", "which", "pwd", "file", "stat",
+	"sed", "awk", "cut", "tr", "sort", "uniq", "diff", "basename", "dirname", "echo", "true",
 	"git status", "git diff", "git log", "git show", "git branch", "git ls-files",
+}
+
+// planAllowlist is what a planning turn may run.
+//
+// Read-only and nothing else, deliberately: planning reads a repository and proposes work, and
+// it is the one agent role that never edits. It does not inherit the project's build and test
+// commands for the same reason — a planner has no business running `make`.
+//
+// It used to be empty, which is not the same as restrictive. An AgentTask with no allowlist
+// sends no --allowedTools at all, so the agent fell back to the CLI's own default and was denied
+// every shell call it made: three planning turns in a row died on "permission denied" for ls,
+// sed and grep, and the Plan screen was unusable on any project.
+func planAllowlist() core.Allowlist {
+	out := make([]core.Pattern, 0, len(readOnlyShell))
+	for _, cmd := range readOnlyShell {
+		out = append(out, core.Pattern{Match: cmd, Note: "reading the repository to plan"})
+	}
+	return core.Allowlist{Commands: out}
 }
 
 // failureContext renders what went wrong for the next attempt's prompt.

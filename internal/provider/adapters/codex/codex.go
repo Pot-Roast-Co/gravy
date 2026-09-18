@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,7 +194,9 @@ func (p *Provider) runArgs(t provider.AgentTask) []string {
 }
 
 // Resume continues a prior thread with an injected message.
-func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string) (provider.Handle, error) {
+// The allowlist is accepted and ignored, as in Run: codex gates by sandbox policy over a
+// directory rather than by command pattern, so there is nothing to render it into.
+func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string, _ core.Allowlist) (provider.Handle, error) {
 	if !s.Valid() {
 		return nil, fmt.Errorf("codex: cannot resume invalid session %+v", s)
 	}

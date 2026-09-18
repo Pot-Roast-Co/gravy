@@ -33,7 +33,10 @@ type Provider interface {
 	Detect(ctx context.Context, h host.Host) (Availability, error)
 	Models(ctx context.Context) ([]Model, error)
 	Run(ctx context.Context, h host.Host, t AgentTask) (Handle, error)
-	Resume(ctx context.Context, h host.Host, s SessionRef, msg string) (Handle, error)
+	// Resume continues a session. It takes an allowlist for the same reason Run does: the
+	// permissions are a property of the turn, not of the session that started it, and an
+	// adapter that forgets them denies every command on every message after the first.
+	Resume(ctx context.Context, h host.Host, s SessionRef, msg string, allow core.Allowlist) (Handle, error)
 	Classify(exit int, stdout, stderr string) Classification
 }
 

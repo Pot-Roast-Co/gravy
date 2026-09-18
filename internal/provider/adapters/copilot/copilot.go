@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/core"
 	"io"
 	"os"
 	"path/filepath"
@@ -178,7 +179,7 @@ type sessionRef struct {
 }
 
 // Resume restores the context Gravy recorded with the session.
-func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.SessionRef, message string) (provider.Handle, error) {
+func (p *Provider) Resume(ctx context.Context, h host.Host, session provider.SessionRef, message string, allow core.Allowlist) (provider.Handle, error) {
 	if !session.Valid() || session.ProviderID != ID {
 		return nil, fmt.Errorf("copilot: invalid session for this provider")
 	}
