@@ -69,16 +69,27 @@ func (s statusBar) view(th Theme, width int) string {
 	// here, beside the other one that is always available. Off the row but never hidden.
 	right := th.Muted.Render(SettingsKey + " settings  ·  ? help")
 	if s.filtering {
-		right = th.Accent.Render("/" + s.filter)
+		// Named, with a cursor and the way out. A bare "/" and whatever you had typed so far
+		// left an empty search looking like nothing had happened at all: the one moment the
+		// indicator matters most is before the first keystroke, when you are wondering
+		// whether the key did anything.
+		right = th.Accent.Render("search: "+s.filter+"▌") +
+			th.Muted.Render(" · enter applies · esc cancels")
 	} else if s.filter != "" {
 		// The way out, beside the thing it gets you out of. A filter you cannot see how to
 		// clear is one you clear by quitting.
-		right = th.Accent.Render("filter: "+s.filter) + th.Muted.Render("  ·  esc clears")
+		right = th.Accent.Render("filter: "+s.filter) + th.Muted.Render(" · esc clears")
 	}
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		// Too narrow for both: the health of the queue outranks a hint the user can discover.
+		// Too narrow for both. The health of the queue outranks a hint the human can
+		// discover — but not a search, which is state rather than a hint and is the reason
+		// the list on screen is short. Dropping that is how a narrow terminal turns a
+		// filtered list into an apparently empty one.
+		if s.filtering || s.filter != "" {
+			return th.StatusBar.MaxWidth(width).Render(right)
+		}
 		return th.StatusBar.MaxWidth(width).Render(left)
 	}
 	return th.StatusBar.MaxWidth(width).Render(left + strings.Repeat(" ", gap) + right)

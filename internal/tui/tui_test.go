@@ -716,12 +716,12 @@ func TestFilterCapturesTheKeyboard(t *testing.T) {
 			t.Fatal("typing q into a filter quit the program")
 		}
 	}
-	if !strings.Contains(m.View(), "/q") {
+	if !strings.Contains(m.View(), "search: q") {
 		t.Errorf("the filter did not receive the keystroke:\n%s", m.View())
 	}
 
 	m = send(t, m, key("esc"))
-	if strings.Contains(m.View(), "/q") {
+	if strings.Contains(m.View(), "search: q") {
 		t.Error("esc did not cancel the filter")
 	}
 }

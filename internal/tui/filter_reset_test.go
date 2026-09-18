@@ -81,3 +81,46 @@ func TestTheStatusBarSaysHowToClearAFilter(t *testing.T) {
 		t.Errorf("esc did not clear it:\n%s", view)
 	}
 }
+
+// Pressing "/" has to look like something happened before you type anything. The moment the
+// indicator matters most is the first one, when you are wondering whether the key did anything.
+func TestSearchAnnouncesItselfBeforeYouType(t *testing.T) {
+	m := openBacklog(t, fleetBacklog())
+
+	if view := m.View(); !strings.Contains(view, "/ search") {
+		t.Errorf("nothing tells you the backlog can be searched:\n%s", view)
+	}
+
+	m = send(t, m, key("/"))
+	view := m.View()
+	if !strings.Contains(view, "search:") {
+		t.Errorf("pressing / gave no sign it had started a search:\n%s", view)
+	}
+	for _, want := range []string{"enter applies", "esc cancels"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("an empty search does not say %q:\n%s", want, view)
+		}
+	}
+}
+
+// A narrow terminal must not drop the search indicator. Dropping it is how a filtered list
+// becomes an apparently empty one with nothing on screen to explain it.
+func TestNarrowTerminalKeepsTheSearchVisible(t *testing.T) {
+	for _, w := range []int{60, 80, 100, 140} {
+		f := fleetBacklog()
+		m := boot(t, f, w, 24)
+		m = send(t, m, key(SectionBacklog.Key()))
+		m = send(t, m, queueLoadedMsg{state: core.StateBacklog, items: f.queue})
+		m = send(t, m, key("/"))
+		for _, r := range []string{"g", "r", "a", "v", "y"} {
+			m = send(t, m, key(r))
+		}
+		if view := m.View(); !strings.Contains(view, "search: gravy") {
+			t.Errorf("at width %d the search vanished:\n%s", w, view)
+		}
+		m = send(t, m, key("enter"))
+		if view := m.View(); !strings.Contains(view, "filter: gravy") {
+			t.Errorf("at width %d the applied filter vanished:\n%s", w, view)
+		}
+	}
+}

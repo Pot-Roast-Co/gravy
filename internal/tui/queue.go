@@ -647,7 +647,7 @@ func (q *queue) footer(ctx ViewContext) (result string) {
 		move += " (" + strconv.Itoa(n) + " selected)"
 	}
 	return th.Muted.Render(strings.Join([]string{
-		"n new ticket", "e edit", move, "x select", "J/K reorder", "+/- priority", action,
+		"n new ticket", "e edit", move, "x select", "/ search", "J/K reorder", "+/- priority", action,
 	}, " · "))
 }
 
