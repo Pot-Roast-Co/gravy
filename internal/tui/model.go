@@ -720,6 +720,12 @@ func (m Model) statusBarView() string {
 		project:   m.projectName(),
 		usedSlots: used, totalSlots: total,
 		attention: len(m.status.Attention),
-		filter:    m.filter, filtering: m.filtering,
+		updateLatest: func() string {
+			if m.status.Update.Available {
+				return m.status.Update.Latest
+			}
+			return ""
+		}(),
+		filter: m.filter, filtering: m.filtering,
 	}.view(m.theme, m.width)
 }

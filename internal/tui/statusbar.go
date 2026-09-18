@@ -21,6 +21,8 @@ type statusBar struct {
 	attention             int
 	filter                string
 	filtering             bool
+	// updateLatest is a newer released version, empty when there is none or none is known.
+	updateLatest string
 }
 
 func (s statusBar) view(th Theme, width int) string {
@@ -48,12 +50,19 @@ func (s statusBar) view(th Theme, width int) string {
 		attention = th.Warning.Render(fmt.Sprintf("needs you %d", s.attention))
 	}
 
-	left := strings.Join([]string{
+	segments := []string{
 		health,
 		th.Muted.Render(project),
 		th.Muted.Render(fmt.Sprintf("workers %d/%d", s.usedSlots, s.totalSlots)),
 		attention,
-	}, th.Muted.Render("  ·  "))
+	}
+	// Last, and only when there is one. A newer version is worth knowing and never worth
+	// interrupting for: it sits beside the queue rather than in front of it, and says the
+	// version so the reader can judge whether they care.
+	if s.updateLatest != "" {
+		segments = append(segments, th.Accent.Render(s.updateLatest+" available"))
+	}
+	left := strings.Join(segments, th.Muted.Render("  ·  "))
 
 	// A filter in progress replaces the hint, because that is what the next keystroke does.
 	// Settings is not on the number row — that row is the ticket lifecycle — so its key lives

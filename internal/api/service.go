@@ -181,6 +181,18 @@ type SystemStatus struct {
 	// Buckets are the configured route names, so a client can offer them rather than guess at
 	// a list compiled into Gravy.
 	Buckets []core.Route
+	// Update is what the last release check found. The zero value means nothing is known,
+	// which is the case until the first check returns, whenever checking is switched off, and
+	// on any build that did not come from a release.
+	Update UpdateStatus
+}
+
+// UpdateStatus is a release check's answer, carried to clients so the frame can mention it.
+type UpdateStatus struct {
+	// Latest is the newest released version, empty when unknown.
+	Latest string
+	// Available is true only when Latest is genuinely newer than this build.
+	Available bool
 }
 
 // AttentionItem is one Needs You row, resolved against the ticket and project it concerns so a
