@@ -36,6 +36,7 @@ type fakeService struct {
 	actionErr     error
 	approveState  core.State
 	continueState core.State
+	attached      []string
 	approved      []string
 	rejected      []string
 	changes       map[string]string
@@ -242,6 +243,14 @@ func (f *fakeService) StreamLogs(ctx context.Context, runID string) (<-chan api.
 	ch := make(chan api.LogLine)
 	close(ch)
 	return ch, func() {}, nil
+}
+
+func (f *fakeService) AttachRepository(_ context.Context, projectID, path string) (core.Project, error) {
+	if f.actionErr != nil {
+		return core.Project{}, f.actionErr
+	}
+	f.attached = append(f.attached, projectID+"="+path)
+	return core.Project{ID: projectID, RepoPath: path}, nil
 }
 
 func (f *fakeService) Continue(_ context.Context, ticketID string) (core.State, error) {

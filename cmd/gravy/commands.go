@@ -38,6 +38,8 @@ func runProject(ctx context.Context, args []string) error {
 	switch sub {
 	case "add":
 		return projectAdd(ctx, rest)
+	case "set-repo":
+		return projectSetRepo(ctx, rest)
 	case "set-target":
 		return projectSetTarget(ctx, rest)
 	case "archive":
@@ -47,7 +49,8 @@ func runProject(ctx context.Context, args []string) error {
 	case "list", "ls", "":
 		return projectList(ctx, rest)
 	default:
-		return fmt.Errorf("unknown project command %q (try: add, list, set-target, archive, unarchive)", sub)
+		return fmt.Errorf(
+			"unknown project command %q (try: add, list, set-repo, set-target, archive, unarchive)", sub)
 	}
 }
 
@@ -207,6 +210,50 @@ func projectList(ctx context.Context, args []string) error {
 //
 // Nothing is deleted and nothing in flight is stopped: the project's tickets, runs and summaries
 // stay exactly where they are, and a ticket already running or awaiting review finishes.
+// projectSetRepo gives a project without a repository one to work in.
+//
+// The step between planning a goal and building it. A project registered with no path can be
+// planned — that is what it is for — but the implementation tickets planning produces cannot
+// start until there is somewhere to work, and the only route to that used to be deleting the
+// project and registering it again, which took the plan with it.
+func projectSetRepo(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy project set-repo", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy project set-repo <slug|id> <path>")
+		fmt.Fprintln(os.Stderr, "\nGives a project with no repository one to work in.")
+		fs.PrintDefaults()
+	}
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 2 {
+		fs.Usage()
+		return fmt.Errorf("expected a project and a path")
+	}
+
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	p, err := findProject(ctx, a.svc, rest[0])
+	if err != nil {
+		return err
+	}
+	saved, err := a.svc.AttachRepository(ctx, p.ID, rest[1])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s now works in %s\n", saved.Slug, saved.RepoPath)
+	fmt.Printf("  target branch %s\n", saved.TargetBranch)
+	if n := len(saved.Allowlist.Commands); n > 0 {
+		fmt.Printf("  detected %d allowed command(s); review them with `gravy` -> Projects\n", n)
+	}
+	return nil
+}
+
 // projectSetTarget changes the branch a project's approved work merges into.
 //
 // It exists because the target branch was otherwise editable only on the Settings screen, and a

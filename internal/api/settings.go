@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -104,6 +105,70 @@ func (l *Local) updateSettings(c config.Config) (Settings, error) {
 		Config: copyConfig(l.cfg), Path: config.Path(l.home),
 		PendingRestart: l.pendingRestart, Agents: l.agents,
 	}, nil
+}
+
+// AttachRepository gives a project without one a repository to work in.
+//
+// Deliberately its own operation rather than a field on UpdateProject. RepoPath is not editable
+// there for a good reason — every worktree, branch and run already recorded points at it, so
+// changing it would orphan work rather than edit it — but that reason does not cover the first
+// assignment, where there is nothing recorded to orphan.
+//
+// This is the transition from a goal to a project. Planning a project with no repository is a
+// supported thing to do, and it produces implementation tickets that cannot run until this is
+// called: the scheduler refuses them for having nowhere to work. Before this existed the only
+// route was to delete the project and register it again, which took the plan with it.
+func (l *Local) AttachRepository(ctx context.Context, projectID, path string) (core.Project, error) {
+	current, err := l.db.GetProject(ctx, projectID)
+	if err != nil {
+		return core.Project{}, err
+	}
+	if existing := strings.TrimSpace(current.RepoPath); existing != "" {
+		return core.Project{}, fmt.Errorf(
+			"%s already has a repository at %s; remove and re-add it to move the checkout", current.Slug, existing)
+	}
+
+	h, err := l.hostFor(current.HostID)
+	if err != nil {
+		return core.Project{}, err
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return core.Project{}, fmt.Errorf("a repository needs a path")
+	}
+	if current.HostID == "" || current.HostID == h.ID() {
+		if path, err = filepath.Abs(path); err != nil {
+			return core.Project{}, fmt.Errorf("resolve %q: %w", path, err)
+		}
+	} else if !filepath.IsAbs(path) {
+		return core.Project{}, fmt.Errorf("a path on %s must be absolute: %q", current.HostID, path)
+	}
+	if !h.FS().Exists(path) {
+		return core.Project{}, fmt.Errorf("%s: no such directory on host %s", path, hostName(current.HostID))
+	}
+	if err := checkGitRepo(ctx, h, path); err != nil {
+		return core.Project{}, err
+	}
+
+	current.RepoPath = path
+	// The two things a project could not have without a repository, filled in now that it has
+	// one. Neither overwrites a value the human already chose.
+	if strings.TrimSpace(current.TargetBranch) == "" {
+		target, err := resolveTargetBranch(ctx, h, path)
+		if err != nil {
+			return core.Project{}, err
+		}
+		current.TargetBranch = target
+	}
+	if len(current.Allowlist.Commands) == 0 {
+		current.Allowlist = seedAllowlist(ctx, h, path)
+	}
+
+	if err := l.db.UpdateProject(ctx, current); err != nil {
+		return core.Project{}, err
+	}
+	l.events.publish(Event{Kind: EventProjectChanged, ProjectID: current.ID})
+	return current, nil
 }
 
 // UpdateProject saves a project's editable fields.
