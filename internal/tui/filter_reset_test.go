@@ -58,22 +58,26 @@ func TestFilterSurvivesStayingOnTheSameScreen(t *testing.T) {
 	}
 }
 
-// The Backlog's project chooser is a scope, not a search, and is deliberately kept: it is the
-// one list a human works one repository at a time.
-func TestBacklogProjectScopeSurvivesNavigation(t *testing.T) {
+// A filter says how to clear itself. One you cannot see the way out of is one you clear by
+// quitting the program.
+func TestTheStatusBarSaysHowToClearAFilter(t *testing.T) {
 	m := openBacklog(t, fleetBacklog())
-
-	q, ok := m.screens[SectionBacklog].(*queue)
-	if !ok {
-		t.Fatal("backlog is not a queue")
+	m = send(t, m, key("/"))
+	for _, r := range []string{"g", "r", "a", "v", "y"} {
+		m = send(t, m, key(r))
 	}
-	q.projectFilter = "p1"
+	m = send(t, m, key("enter"))
 
-	m = send(t, m, key("1"))
-	m = send(t, m, key(SectionBacklog.Key()))
+	view := m.View()
+	if !strings.Contains(view, "filter: gravy") {
+		t.Fatalf("the filter is not shown at all:\n%s", view)
+	}
+	if !strings.Contains(view, "esc clears") {
+		t.Errorf("nothing says how to clear it:\n%s", view)
+	}
 
-	q, _ = m.screens[SectionBacklog].(*queue)
-	if q.projectFilter != "p1" {
-		t.Errorf("the project scope was cleared by navigation; it is a scope, not a search")
+	m = send(t, m, key("esc"))
+	if view := m.View(); strings.Contains(view, "filter: gravy") {
+		t.Errorf("esc did not clear it:\n%s", view)
 	}
 }

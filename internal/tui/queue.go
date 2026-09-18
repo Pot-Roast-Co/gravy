@@ -21,16 +21,7 @@ const (
 	queueForm
 	queueConfirmDelete
 	queueConfirmReject
-	queueProjectPick
 )
-
-// allProjectsLabel is what an unset project filter is called. Named rather than blank: a filter
-// row that renders as nothing reads as a screen that forgot to say what it is showing.
-const allProjectsLabel = "all projects"
-
-// projectFilterKey opens the Backlog's project chooser. Not `p`: that is the frame's own filter,
-// checked before a screen's keys, and the whole point of this one is that the two are separate.
-const projectFilterKey = "f"
 
 // formField is one line of the ticket form.
 type formField struct {
@@ -53,17 +44,6 @@ type queue struct {
 
 	cursor   int
 	selected map[string]bool
-
-	// projectFilter is the Backlog's own filter: the project id its tickets must belong to,
-	// empty for every project. It is deliberately not the frame's filter — the backlog is the
-	// one list a human works one repository at a time, while the dashboard and the review
-	// queues are read across the fleet, so the two selections must not move together.
-	//
-	// It lives on the screen, which the frame keeps for the session, so navigating away and back
-	// returns to the same filtered list.
-	projectFilter string
-	// pickCursor is the row in the project chooser.
-	pickCursor int
 
 	mode       queueMode
 	fields     []formField
@@ -121,7 +101,6 @@ func (q *queue) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 			return q, nil
 		}
 		q.items, q.loaded, q.err = msg.items, true, nil
-		q.syncProjectFilter(ctx)
 		present := make(map[string]bool, len(msg.items))
 		for _, item := range msg.items {
 			present[item.Ticket.ID] = true
@@ -151,13 +130,6 @@ func (q *queue) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 	return q, nil
 }
 
-// ownsProjectFilter reports whether this queue filters by project itself.
-//
-// The Backlog does: it is the list a human writes and grooms one repository at a time. Ready is
-// what the scheduler is about to pull from, read as one queue across the fleet, so it keeps
-// following the frame's filter.
-func (q *queue) ownsProjectFilter() bool { return q.state == core.StateBacklog }
-
 // visible applies the project and text filters. The text filter matches body as well as title: a
 // queue you can only search by title is one you re-read instead of searching.
 func (q *queue) visible(ctx ViewContext) []api.TicketDetail {
@@ -182,73 +154,13 @@ func (q *queue) visible(ctx ViewContext) []api.TicketDetail {
 	return out
 }
 
-// inProject applies whichever project filter governs this queue.
-func (q *queue) inProject(d api.TicketDetail, ctx ViewContext) bool {
-	if q.ownsProjectFilter() {
-		return q.projectFilter == "" || d.Project.ID == q.projectFilter
-	}
-	return ctx.Project == "" || projectName(d.Project) == ctx.Project
-}
-
-// setProjectFilter applies a project id — empty for every project — to this screen only.
+// inProject applies the frame's project scope.
 //
-// Selections the new filter hides are dropped. Actions already run over the visible rows, so a
-// hidden selection could not be acted on; what it could do is sit in the footer's count,
-// describing a selection that is not on screen, and come back the next time the filter changed.
-func (q *queue) setProjectFilter(id string, ctx ViewContext) {
-	q.projectFilter, q.cursor = id, 0
-	shown := make(map[string]bool, len(q.items))
-	for _, d := range q.visible(ctx) {
-		shown[d.Ticket.ID] = true
-	}
-	for sel := range q.selected {
-		if !shown[sel] {
-			delete(q.selected, sel)
-		}
-	}
-}
-
-// syncProjectFilter drops a filter whose project has left the snapshot — archived or deleted,
-// possibly from another client. A backlog filtered to a repository that is no longer there is
-// empty for a reason nothing on the screen explains, and its name is not in the chooser either.
-func (q *queue) syncProjectFilter(ctx ViewContext) {
-	if q.projectFilter == "" || len(ctx.Status.Projects) == 0 {
-		return
-	}
-	for _, ps := range ctx.Status.Projects {
-		if ps.Project.ID == q.projectFilter {
-			return
-		}
-	}
-	q.setProjectFilter("", ctx)
-}
-
-// projectOption is one row of the chooser.
-type projectOption struct {
-	id    string
-	label string
-}
-
-// projectOptions lists every registered project, behind the option to see all of them.
-func (q *queue) projectOptions(ctx ViewContext) []projectOption {
-	out := []projectOption{{label: allProjectsLabel}}
-	for _, ps := range ctx.Status.Projects {
-		out = append(out, projectOption{id: ps.Project.ID, label: projectName(ps.Project)})
-	}
-	return out
-}
-
-// projectLabel names the active filter.
-func (q *queue) projectLabel(ctx ViewContext) string {
-	if q.projectFilter == "" {
-		return allProjectsLabel
-	}
-	for _, ps := range ctx.Status.Projects {
-		if ps.Project.ID == q.projectFilter {
-			return projectName(ps.Project)
-		}
-	}
-	return q.projectFilter
+// The Backlog used to carry a project filter of its own, chosen with "f". It is gone: "/" now
+// matches the project name, so narrowing to one repository is a search like any other, and the
+// screen no longer holds a second, invisible notion of which project you are looking at.
+func (q *queue) inProject(d api.TicketDetail, ctx ViewContext) bool {
+	return ctx.Project == "" || projectName(d.Project) == ctx.Project
 }
 
 func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
@@ -257,8 +169,6 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	switch q.mode {
 	case queueForm:
 		return q.formKey(msg, ctx)
-	case queueProjectPick:
-		return q.pickKey(msg, ctx)
 	case queueConfirmReject:
 		q.mode = queueBrowsing
 		targets := q.pendReject
@@ -298,18 +208,6 @@ func (q *queue) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 
 	// The project chooser works on an empty queue, which is exactly when a filter is the thing
 	// to change: a backlog emptied by its own filter must still offer the way out of it.
-	if key == projectFilterKey && q.ownsProjectFilter() {
-		q.mode = queueProjectPick
-		q.pickCursor = 0
-		for i, opt := range q.projectOptions(ctx) {
-			if opt.id == q.projectFilter {
-				q.pickCursor = i
-				break
-			}
-		}
-		return q, nil
-	}
-
 	// `n` works on an empty queue; everything else needs a row.
 	if key == "n" {
 		q.startForm("", core.Ticket{})
@@ -453,31 +351,6 @@ func (q *queue) setPriority(t core.Ticket, p int, ctx ViewContext) tea.Cmd {
 	}
 }
 
-// ---- the project chooser -------------------------------------------------
-
-func (q *queue) pickKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
-	options := q.projectOptions(ctx)
-	q.pickCursor = clamp(q.pickCursor, 0, max(0, len(options)-1))
-
-	switch msg.String() {
-	case "esc":
-		q.mode, q.notice = queueBrowsing, ""
-	case "up", "k":
-		q.pickCursor = max(0, q.pickCursor-1)
-	case "down", "j":
-		q.pickCursor = min(max(0, len(options)-1), q.pickCursor+1)
-	case "enter":
-		if len(options) == 0 {
-			q.mode = queueBrowsing
-			return q, nil
-		}
-		chosen := options[q.pickCursor]
-		q.setProjectFilter(chosen.id, ctx)
-		q.mode, q.notice = queueBrowsing, "showing "+chosen.label
-	}
-	return q, nil
-}
-
 // ---- the form ------------------------------------------------------------
 
 // startForm opens the create or edit form. Creating writes to Backlog immediately on save; there
@@ -576,16 +449,25 @@ func (q *queue) submitForm(ctx ViewContext) tea.Cmd {
 	}
 }
 
-// projectID is the project a new ticket belongs to: the one this screen is filtered to, else the
-// one the frame is filtered to, or the only one registered.
-func (q *queue) projectID(ctx ViewContext) string {
-	if q.ownsProjectFilter() && q.projectFilter != "" {
-		for _, p := range ctx.Status.Projects {
-			if p.Project.ID == q.projectFilter {
-				return q.projectFilter
-			}
+// selectedVisible counts selections that are currently on screen.
+func (q *queue) selectedVisible(ctx ViewContext) int {
+	n := 0
+	for _, d := range q.visible(ctx) {
+		if q.selected[d.Ticket.ID] {
+			n++
 		}
 	}
+	return n
+}
+
+// projectID is the project a new ticket belongs to: the one the frame is scoped to, the only one
+// on screen, or the only one registered.
+//
+// The middle case is what a search leaves behind. Narrowing the backlog to one repository used
+// to be a stored choice the screen could read back; now it is a search, so the answer is derived
+// from what the search left visible. If every row on screen belongs to one project, that is the
+// project a ticket written here belongs to — which is what the human would say if asked.
+func (q *queue) projectID(ctx ViewContext) string {
 	if ctx.Project != "" {
 		for _, p := range ctx.Status.Projects {
 			if projectName(p.Project) == ctx.Project {
@@ -593,10 +475,40 @@ func (q *queue) projectID(ctx ViewContext) string {
 			}
 		}
 	}
+	// Only when a search is narrowing the list. An unfiltered backlog that happens to hold one
+	// project's work is not a statement about where the next ticket belongs, and treating it as
+	// one would file work in the wrong place on the day a second repository gets busy.
+	if strings.TrimSpace(ctx.Filter) != "" {
+		if id, ok := q.onlyVisibleProject(ctx); ok {
+			return id
+		}
+	}
 	if len(ctx.Status.Projects) == 1 {
 		return ctx.Status.Projects[0].Project.ID
 	}
 	return ""
+}
+
+// onlyVisibleProject returns the project every visible row belongs to, when there is exactly one.
+//
+// Called only for a searched list, where narrowing to one repository is a deliberate act.
+//
+// Ambiguity is reported rather than resolved: a backlog showing two repositories has no answer
+// to "which project is this ticket for", and guessing one would file work in the wrong place
+// quietly.
+func (q *queue) onlyVisibleProject(ctx ViewContext) (string, bool) {
+	id := ""
+	for _, d := range q.visible(ctx) {
+		switch {
+		case d.Project.ID == "":
+			return "", false
+		case id == "":
+			id = d.Project.ID
+		case id != d.Project.ID:
+			return "", false
+		}
+	}
+	return id, id != ""
 }
 
 // ---- rendering -----------------------------------------------------------
@@ -614,9 +526,6 @@ func (q *queue) View(ctx ViewContext) string {
 	if q.mode == queueForm {
 		return q.formView(ctx)
 	}
-	if q.mode == queueProjectPick {
-		return q.pickView(ctx)
-	}
 
 	items := q.visible(ctx)
 	title := "Backlog"
@@ -625,11 +534,12 @@ func (q *queue) View(ctx ViewContext) string {
 	}
 
 	lines := []string{th.Header.Render(fmt.Sprintf("%s (%d)", title, len(items)))}
-	// The filter and its key, above the rows and whether or not there are any: a filtered list
-	// that looks unfiltered is how you conclude a backlog is empty when it is only narrowed.
-	if q.ownsProjectFilter() {
-		lines = append(lines, th.Muted.Render("  project ")+th.Text.Render(q.projectLabel(ctx))+
-			th.Muted.Render(" · ")+th.Key.Render(projectFilterKey)+th.Muted.Render(" to change"))
+	// The filter, above the rows and whether or not there are any: a filtered list that looks
+	// unfiltered is how you conclude a backlog is empty when it is only narrowed. Said here as
+	// well as in the status bar because this is where the short list is.
+	if needle := strings.TrimSpace(ctx.Filter); needle != "" {
+		lines = append(lines, th.Muted.Render("  matching ")+th.Text.Render(needle)+
+			th.Muted.Render(" · ")+th.Key.Render("esc")+th.Muted.Render(" clears it"))
 	}
 	if len(items) == 0 {
 		lines = append(lines,
@@ -673,30 +583,6 @@ func (q *queue) View(ctx ViewContext) string {
 	}
 
 	return pinFooter(lines, selected, ctx.Height, th, q.footer(ctx))
-}
-
-func (q *queue) pickView(ctx ViewContext) string {
-	th := ctx.Theme
-	options := q.projectOptions(ctx)
-	q.pickCursor = clamp(q.pickCursor, 0, max(0, len(options)-1))
-
-	lines := []string{th.Header.Render("Show which project?"), ""}
-	selected := -1
-	for i, opt := range options {
-		marker, style := "  ", th.Text
-		if i == q.pickCursor {
-			marker, style = "▸ ", th.Accent
-			selected = len(lines)
-		}
-		mark := " "
-		if opt.id == q.projectFilter {
-			mark = "✓"
-		}
-		lines = append(lines, style.Render(trunc(marker+mark+" "+opt.label, max(0, ctx.Width))))
-	}
-
-	hint := th.Muted.Render("↑/↓ choose · enter apply · esc cancel")
-	return pinFooter(lines, selected, ctx.Height, th, actionFooter("", hint, ctx.Width, th))
 }
 
 func (q *queue) formView(ctx ViewContext) string {
@@ -751,7 +637,13 @@ func (q *queue) footer(ctx ViewContext) (result string) {
 		move = "space send to backlog"
 		action = "r reject"
 	}
-	if n := len(q.selected); n > 0 {
+	// Counted over the visible rows, not every selection held.
+	//
+	// Actions already run over what is on screen, so a selection a filter hides cannot be
+	// acted on — but it could sit in this count, describing a selection that is not there and
+	// inviting a bulk action the human cannot see the extent of. The count says what would
+	// happen, which is the only number worth showing.
+	if n := q.selectedVisible(ctx); n > 0 {
 		move += " (" + strconv.Itoa(n) + " selected)"
 	}
 	return th.Muted.Render(strings.Join([]string{

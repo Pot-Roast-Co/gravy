@@ -518,15 +518,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectBacklogMsg:
 		for i, project := range m.status.Projects {
 			if project.Project.ID == msg.projectID {
-				// Both filters: the frame's, so every other screen follows the repository just
-				// chosen, and the Backlog's own, because that is what the destination renders
-				// from and it is the one that stays put afterwards.
+				// The frame's scope, so every other screen follows the repository just
+				// chosen, and a search for its name, so the Backlog you land on is narrowed
+				// to it and says so in a way you can clear with esc.
+				//
+				// The Backlog used to keep a project filter of its own for this. Two notions
+				// of "which project am I looking at" is one more than anybody can hold, and
+				// the second one was invisible from every other screen.
 				m.projectIdx, m.projectID = i, project.Project.ID
 				m.active, m.showHelp = SectionBacklog, false
-				m.filter, m.focus, m.filtering = "", "", false
-				if q, ok := m.screens[SectionBacklog].(*queue); ok {
-					q.setProjectFilter(msg.projectID, m.viewContext())
-				}
+				m.focus, m.filtering = "", false
+				m.filter = projectName(project.Project)
 				return m, entered("")
 			}
 		}

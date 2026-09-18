@@ -71,7 +71,9 @@ func (s statusBar) view(th Theme, width int) string {
 	if s.filtering {
 		right = th.Accent.Render("/" + s.filter)
 	} else if s.filter != "" {
-		right = th.Muted.Render("filter: " + s.filter)
+		// The way out, beside the thing it gets you out of. A filter you cannot see how to
+		// clear is one you clear by quitting.
+		right = th.Accent.Render("filter: "+s.filter) + th.Muted.Render("  ·  esc clears")
 	}
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)

@@ -197,14 +197,12 @@ func TestProjectsEnterOpensItsTickets(t *testing.T) {
 	if m.active != SectionBacklog {
 		t.Errorf("enter went to %v, want the backlog", m.active)
 	}
-	if m.projectName() != "gravy" || m.filter != "" {
+	// The frame's scope follows the choice, and the Backlog lands narrowed to it by a search
+	// for its name — the same search "/" would have typed, and clearable the same way.
+	if m.projectName() != "gravy" || m.filter != "gravy" {
 		t.Fatalf("wrong filters: project %q, text %q", m.projectName(), m.filter)
 	}
-	// The destination filters on its own selection, which is the one that outlives the trip.
 	q := m.screens[SectionBacklog].(*queue)
-	if q.projectFilter != "p1" {
-		t.Fatalf("backlog project filter = %q, want the chosen project", q.projectFilter)
-	}
 	q.items = []api.TicketDetail{
 		{Project: core.Project{ID: "p1", Name: "gravy"}, Ticket: core.Ticket{Title: "Archive projects"}},
 		{Project: core.Project{ID: "p2", Name: "mojo"}, Ticket: core.Ticket{Title: "Other work"}},
