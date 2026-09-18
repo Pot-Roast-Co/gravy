@@ -238,6 +238,29 @@ func specFor(r core.AttentionReason) reasonSpec {
 // visibleItems applies the frame's project and text filters. Ordering is left alone: the service
 // returns the queue oldest-first, which is the order a human works through it and the reason
 // nothing starves.
+// clearHint names whatever is doing the hiding, so the way out is on the screen rather than
+// something the human has to remember about a filter they set three screens ago.
+func clearHint(ctx ViewContext) string {
+	switch {
+	case ctx.Project != "" && strings.TrimSpace(ctx.Filter) != "":
+		return fmt.Sprintf("Scoped to %s and filtered by %q — esc clears the filter, p switches project.", ctx.Project, ctx.Filter)
+	case ctx.Project != "":
+		return fmt.Sprintf("Scoped to %s — p switches project, and the count in the status bar is fleet-wide.", ctx.Project)
+	case strings.TrimSpace(ctx.Filter) != "":
+		return fmt.Sprintf("Filtered by %q — esc clears it.", ctx.Filter)
+	}
+	return "Nothing here matches, which should not happen; refresh with r."
+}
+
+// plural picks a form and prefixes the count, because "1 items are hidden" reads like a bug in
+// the thing that is telling you about a bug.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
 func (s *needsYou) visibleItems(ctx ViewContext) []api.AttentionItem {
 	var out []api.AttentionItem
 	needle := strings.ToLower(strings.TrimSpace(ctx.Filter))
@@ -377,12 +400,23 @@ func (s *needsYou) View(ctx ViewContext) string {
 
 	items := s.visibleItems(ctx)
 	if len(items) == 0 {
-		return pinFooter(append([]string{
-			th.Header.Render("Needs You (0)"),
-			"",
-			th.Success.Render("  Nothing needs you."),
-			th.Muted.Render("  If it is not here, Gravy does not need you."),
-		}, s.heldQueues(ctx)...), -1, ctx.Height, th, actionFooter(s.notice, th.Muted.Render("1 dashboard · 4 backlog · 7 review"), ctx.Width, th))
+		// "Nothing needs you" is a promise, and this screen filters by project and by search
+		// while the status bar counts the whole fleet. When those disagree the old empty
+		// state said the reassuring thing and the status bar said "needs you 1", and the
+		// human went looking for work the screen had hidden from them.
+		head := []string{th.Header.Render("Needs You (0)"), ""}
+		if hidden := len(ctx.Status.Attention); hidden > 0 {
+			head = append(head,
+				th.Warning.Render(fmt.Sprintf("  Nothing here, but %s hidden by this view.", plural(hidden, "item is", "items are"))),
+				th.Muted.Render("  "+clearHint(ctx)),
+			)
+		} else {
+			head = append(head,
+				th.Success.Render("  Nothing needs you."),
+				th.Muted.Render("  If it is not here, Gravy does not need you."),
+			)
+		}
+		return pinFooter(append(head, s.heldQueues(ctx)...), -1, ctx.Height, th, actionFooter(s.notice, th.Muted.Render("1 dashboard · 4 backlog · 7 review"), ctx.Width, th))
 	}
 	s.cursor = clamp(s.cursor, 0, len(items)-1)
 

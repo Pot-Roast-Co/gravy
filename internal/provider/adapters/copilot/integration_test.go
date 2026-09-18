@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/core"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,7 +111,7 @@ func TestRealCLIWithFakeModel(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), `"type":"result"`) {
 		t.Fatalf("lost raw log: %s %v", raw, err)
 	}
-	handle, err = p.Resume(ctx, h, out.Session, "Again, please.")
+	handle, err = p.Resume(ctx, h, out.Session, "Again, please.", core.Allowlist{})
 	if err != nil {
 		t.Fatal(err)
 	}

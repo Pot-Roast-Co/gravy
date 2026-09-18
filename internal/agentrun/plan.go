@@ -133,7 +133,7 @@ func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.
 				"this conversation was started by %q, which this build cannot run — start a new one", held)
 		}
 		providerID, agent = held, choice.ProviderID+"/"+choice.Model
-		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg)
+		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg, planAllowlist())
 	} else {
 		// A project that pins its planning bucket means it for planning too, not only for the
 		// tickets planning produces.
@@ -147,6 +147,7 @@ func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.
 			RunID:        runID,
 			WorktreePath: turn.Project.RepoPath,
 			Prompt:       p.prompt(h, turn.Project, turn.Backlog, planningMessage(turn)),
+			Allowlist:    planAllowlist(),
 			Model:        choice.Model,
 			Timeout:      o.cfg.RunTimeout,
 			MaxTurns:     o.cfg.MaxTurns,
