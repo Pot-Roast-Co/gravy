@@ -168,7 +168,11 @@ func (q *queue) visible(ctx ViewContext) []api.TicketDetail {
 			continue
 		}
 		if needle != "" {
-			hay := strings.ToLower(d.Ticket.Title + " " + d.Ticket.Body)
+			// The project name is part of the haystack so that "/gravy" narrows the backlog
+			// to one repository — the job the project chooser exists for, done with the key
+			// people already reach for. A search you have to leave to do by another means is
+			// one you stop using.
+			hay := strings.ToLower(d.Ticket.Title + " " + d.Ticket.Body + " " + projectName(d.Project))
 			if !strings.Contains(hay, needle) {
 				continue
 			}

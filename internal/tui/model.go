@@ -510,7 +510,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, refreshStatus(m.svc)
 
 	case sweepMsg:
-		m.active, m.showHelp = SectionReview, false
+		m = m.show(SectionReview)
 		screen, cmd := m.screens[SectionReview].Update(msg, m.viewContext())
 		m.screens[SectionReview] = screen
 		return m, cmd
@@ -533,7 +533,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, refreshStatus(m.svc)
 
 	case gotoMsg:
-		m.active, m.showHelp = msg.section, false
+		m = m.show(msg.section)
 		m.focus = msg.focus
 		return m, entered(msg.focus)
 
@@ -666,7 +666,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if s, ok := m.keys.SectionFor(key); ok {
-		m.active, m.showHelp = s, false
+		m = m.show(s)
 		// Tell the destination it is now on screen, so a screen that loads its own data
 		// knows to. Nothing else reaches a screen that was not being shown.
 		return m, entered(m.focus)
@@ -697,6 +697,27 @@ func (m Model) projectName() string {
 		return ""
 	}
 	return m.status.Projects[m.projectIdx].Project.Name
+}
+
+// show switches to a section and drops the state that should not follow the human there.
+//
+// The text filter is a search, and a search belongs to the screen it was typed on. It used to be
+// one string on the frame, cleared only by esc, so it followed you everywhere: filter the
+// backlog, press 1, and the dashboard quietly hides everything that does not match a word you
+// typed about tickets. Worse on Needs You, where the status bar counts the whole fleet and the
+// screen counts what survived the filter — a queue saying "nothing needs you" beside a bar
+// reading "needs you 1".
+//
+// What does not reset: the project scope, and the Backlog's own project chooser. Those are
+// scopes rather than searches — deliberate answers to "which repository am I working on" that a
+// human sets once and expects to still be there. The rule is that searching is transient and
+// scoping is not.
+func (m Model) show(s Section) Model {
+	if s != m.active {
+		m.filter, m.filtering = "", false
+	}
+	m.active, m.showHelp = s, false
+	return m
 }
 
 // resyncProjectFilter re-points the filter at the project it was set on, and drops it when that
