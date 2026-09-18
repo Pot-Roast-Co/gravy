@@ -185,14 +185,14 @@ func (p *Provider) Run(ctx context.Context, h host.Host, t provider.AgentTask) (
 // The session is resumed rather than restarted, so the agent keeps its context: verified in the
 // spike, where a separate later process correctly recalled which file it had edited and with
 // which tool.
-func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string, allow core.Allowlist) (provider.Handle, error) {
+func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, t provider.AgentTask) (provider.Handle, error) {
 	if !s.Valid() {
 		return nil, fmt.Errorf("claude-code: cannot resume invalid session %+v", s)
 	}
 	if s.ProviderID != ID {
 		return nil, fmt.Errorf("claude-code: session belongs to provider %q", s.ProviderID)
 	}
-	return p.launch(ctx, h, provider.AgentTask{Allowlist: allow}, p.resumeArgs(s, msg, allow), s.ID, nil)
+	return p.launch(ctx, h, t, p.resumeArgs(s, t.Prompt, t.Allowlist), s.ID, nil)
 }
 
 // resumeArgs builds the CLI invocation for a resumed turn.

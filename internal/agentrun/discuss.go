@@ -116,7 +116,15 @@ func (d *Discussion) once(ctx context.Context, turn core.DiscussionTurn, choice 
 				"this discussion was started by %q, which this build cannot run — start a new one", held)
 		}
 		providerID, agent = held, choice.ProviderID+"/"+choice.Model
-		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, msg, readOnlyAllowlist())
+		handle, err = prov.Resume(ctx, h, provider.SessionRef{ProviderID: held, ID: sessionID}, provider.AgentTask{
+			RunID:        runID,
+			WorktreePath: dir,
+			Prompt:       msg,
+			Model:        choice.Model,
+			Timeout:      o.cfg.RunTimeout,
+			MaxTurns:     o.cfg.MaxTurns,
+			Allowlist:    readOnlyAllowlist(),
+		})
 	} else {
 		prov, ok := o.providers[choice.ProviderID]
 		if !ok {

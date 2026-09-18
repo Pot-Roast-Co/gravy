@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/pot-roast-co/gravy/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,15 +195,17 @@ func (p *Provider) runArgs(t provider.AgentTask) []string {
 // Resume continues a prior thread with an injected message.
 // The allowlist is accepted and ignored, as in Run: codex gates by sandbox policy over a
 // directory rather than by command pattern, so there is nothing to render it into.
-func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, msg string, _ core.Allowlist) (provider.Handle, error) {
+func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRef, t provider.AgentTask) (provider.Handle, error) {
 	if !s.Valid() {
 		return nil, fmt.Errorf("codex: cannot resume invalid session %+v", s)
 	}
 	if s.ProviderID != ID {
 		return nil, fmt.Errorf("codex: session belongs to provider %q", s.ProviderID)
 	}
-	args := []string{"exec", "resume", s.ID, "--json", "--skip-git-repo-check", "-s", p.sandbox, msg}
-	return p.launch(ctx, h, provider.AgentTask{}, args)
+	args := []string{"exec", "resume", s.ID, "--json", "--skip-git-repo-check", "-s", p.sandbox, t.Prompt}
+	// The task goes through so the turn runs where it should and under the same timeout as
+	// the first one. codex still gates by sandbox policy rather than by the allowlist.
+	return p.launch(ctx, h, t, args)
 }
 
 // launch starts the CLI and wires up event parsing.

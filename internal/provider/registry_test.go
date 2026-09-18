@@ -3,7 +3,6 @@ package provider_test
 import (
 	"context"
 	"errors"
-	"github.com/pot-roast-co/gravy/internal/core"
 	"strings"
 	"testing"
 	"time"
@@ -205,7 +204,7 @@ func TestFakeResume(t *testing.T) {
 	p := fake.New("fake")
 	session := provider.SessionRef{ProviderID: "fake", ID: "sess-42"}
 
-	h, err := p.Resume(context.Background(), nil, session, "the human says: use the other API", core.Allowlist{})
+	h, err := p.Resume(context.Background(), nil, session, provider.AgentTask{Prompt: "the human says: use the other API"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +226,7 @@ func TestFakeResume(t *testing.T) {
 
 	// An unusable reference must be refused rather than silently starting a fresh run, which
 	// would lose the agent's context and look like a mysterious restart.
-	if _, err := p.Resume(context.Background(), nil, provider.SessionRef{}, "hello", core.Allowlist{}); err == nil {
+	if _, err := p.Resume(context.Background(), nil, provider.SessionRef{}, provider.AgentTask{Prompt: "hello"}); err == nil {
 		t.Error("Resume accepted an invalid session reference")
 	}
 }

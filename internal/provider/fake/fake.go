@@ -9,7 +9,6 @@ package fake
 import (
 	"context"
 	"fmt"
-	"github.com/pot-roast-co/gravy/internal/core"
 	"sync"
 	"time"
 
@@ -119,12 +118,12 @@ func (p *Provider) Run(ctx context.Context, _ host.Host, t provider.AgentTask) (
 }
 
 // Resume continues a session, recording that it happened.
-func (p *Provider) Resume(ctx context.Context, _ host.Host, s provider.SessionRef, msg string, allow core.Allowlist) (provider.Handle, error) {
+func (p *Provider) Resume(ctx context.Context, _ host.Host, s provider.SessionRef, t provider.AgentTask) (provider.Handle, error) {
 	if !s.Valid() {
 		return nil, fmt.Errorf("resume: invalid session reference %+v", s)
 	}
 	p.mu.Lock()
-	p.resumes = append(p.resumes, Resume{Session: s, Message: msg})
+	p.resumes = append(p.resumes, Resume{Session: s, Message: t.Prompt})
 	script := p.nextScript()
 	p.mu.Unlock()
 	return start(ctx, script), nil
