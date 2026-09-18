@@ -192,7 +192,9 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRe
 	if s.ProviderID != ID {
 		return nil, fmt.Errorf("claude-code: session belongs to provider %q", s.ProviderID)
 	}
-	return p.launch(ctx, h, t, p.resumeArgs(s, t.Prompt, t.Allowlist), s.ID, nil)
+	// t.Prompt is not passed to resumeArgs: launch writes it to stdin, because an argument
+	// has a 128KiB ceiling and a prompt does not.
+	return p.launch(ctx, h, t, p.resumeArgs(s, t.Allowlist), s.ID, nil)
 }
 
 // resumeArgs builds the CLI invocation for a resumed turn.
@@ -202,9 +204,10 @@ func (p *Provider) Resume(ctx context.Context, h host.Host, s provider.SessionRe
 // allowlist the CLI falls back to its own default and denies every shell command, so the second
 // and every later message of a planning conversation failed on ls, sed and grep — each one
 // recorded as a task failure rather than as the missing permission it was.
-func (p *Provider) resumeArgs(s provider.SessionRef, msg string, allow core.Allowlist) []string {
+func (p *Provider) resumeArgs(s provider.SessionRef, allow core.Allowlist) []string {
 	args := []string{
-		"-p", msg,
+		// -p is a flag, not a parameter: the prompt goes in on stdin. See runArgs.
+		"-p",
 		"--resume", s.ID,
 		"--output-format", "stream-json",
 		"--verbose",
@@ -256,7 +259,16 @@ func allowedTools(a core.Allowlist) []string {
 // runArgs builds the CLI invocation for a task, plus a cleanup for any temporary files.
 func (p *Provider) runArgs(t provider.AgentTask, sessionID string) ([]string, func(), error) {
 	args := []string{
-		"-p", t.Prompt,
+		// The prompt is deliberately not an argument.
+		//
+		// Linux caps a single argv entry at MAX_ARG_STRLEN — 128KiB, independent of the much
+		// larger ARG_MAX for the whole list — and a planning prompt carries the project's
+		// documents. One repository's README and ROADMAP came to 132KB on their own, which is
+		// over the cap before the instructions, the backlog or the human's question are added,
+		// and fork/exec fails with "argument list too long" before the agent ever starts.
+		//
+		// stdin has no such limit, and -p is a flag whose documented use is exactly this.
+		"-p",
 		// Gravy assigns the session id rather than scraping it from output. The spike
 		// confirmed --session-id is honoured and that --resume returns the same id, so there
 		// is no reconciliation step and no parsing to get wrong.
@@ -294,9 +306,13 @@ func (p *Provider) runArgs(t provider.AgentTask, sessionID string) ([]string, fu
 // launch starts the CLI and wires up event parsing.
 func (p *Provider) launch(ctx context.Context, h host.Host, t provider.AgentTask, args []string, sessionID string, cleanup func()) (provider.Handle, error) {
 	proc, err := h.Exec(ctx, host.ExecSpec{
-		Cmd:     p.command,
-		Args:    args,
-		Dir:     t.WorktreePath,
+		Cmd:  p.command,
+		Args: args,
+		Dir:  t.WorktreePath,
+		// The prompt, which is too large to be an argument. An empty one still gives the CLI
+		// a stdin that is immediately at EOF, which is what it expects when there is nothing
+		// to say — a nil Stdin would leave it inheriting the daemon's.
+		Stdin:   strings.NewReader(t.Prompt),
 		Timeout: t.Timeout,
 		Env: map[string]string{
 			// The CLI must never wait for a human it cannot reach.
