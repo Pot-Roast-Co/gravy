@@ -318,6 +318,16 @@ func (p *Planner) prompt(h host.Host, project core.Project, backlog []core.Ticke
 		b.WriteString("\n")
 	}
 
+	// A project with no repository has nothing on disk, and saying so is the difference
+	// between a planner that plans and one that spends its turn running ls against an empty
+	// directory it was never told was empty.
+	if strings.TrimSpace(project.RepoPath) == "" {
+		b.WriteString("# There is no repository yet\n\n" +
+			"Nothing has been built for this project. There are no files to read and no code " +
+			"to look at, so do not go looking: everything known about it is in this prompt. " +
+			"Plan from that, and say what you assumed.\n\n")
+	}
+
 	b.WriteString(renderBacklog(backlog))
 
 	b.WriteString(`
@@ -338,6 +348,10 @@ Keep the prose to a few sentences: what you propose, why, and anything you assum
 belongs in the ticket bodies, not in the conversation.
 
 Do not write any code and do not modify any file. This conversation produces a plan, not a diff.
+
+Read files with the file tools rather than the shell. If you do run a shell command, run one
+simple command: a chain joined by ";", "|" or "&&" is refused whatever it contains, so it costs
+you the turn rather than the command.
 
 # How to propose
 

@@ -68,3 +68,49 @@ func TestPlanWorkspaceWithoutAHomeIsAnError(t *testing.T) {
 		t.Fatal("want an error naming the missing home")
 	}
 }
+
+// TestPlanPromptSaysWhenThereIsNoRepository is the other half of planning a project that has
+// nothing built yet.
+//
+// The workspace it runs in is an empty directory gravy just created. An agent not told that
+// spends its turn shelling out to look around — and `ls a b 2>/dev/null; find . | head -5` is a
+// chained command, which no prefix rule can authorise, so the turn dies on "permission denied"
+// having learned nothing that was there to learn.
+func TestPlanPromptSaysWhenThereIsNoRepository(t *testing.T) {
+	o := New(nil, nil, nil, nil, nil, Config{}, func() string { return "run-1" })
+	got := o.Plan(nil, 0).prompt(host.NewLocal("local", 1),
+		core.Project{Slug: "fantasyhockeyaid", Name: "fantasyHockeyAid"}, nil, "I want to make this")
+
+	if !strings.Contains(got, "no repository yet") {
+		t.Fatalf("the planner is not told the project has no files:\n%s", got)
+	}
+	if !strings.Contains(got, "do not go looking") {
+		t.Errorf("told there are no files but not to stop looking for them:\n%s", got)
+	}
+}
+
+// A project with a repository is told nothing of the sort: it has files, and looking at them is
+// the job.
+func TestPlanPromptSaysNothingAboutMissingFilesWhenThereIsARepo(t *testing.T) {
+	o := New(nil, nil, nil, nil, nil, Config{}, func() string { return "run-1" })
+	got := o.Plan(nil, 0).prompt(host.NewLocal("local", 1),
+		core.Project{Slug: "gravy", RepoPath: t.TempDir()}, nil, "what next")
+
+	if strings.Contains(got, "no repository yet") {
+		t.Errorf("told a project with a repository that it has none:\n%s", got)
+	}
+}
+
+// Whatever the project, the planner is steered off chained shell commands, because a chain is
+// refused whatever it contains.
+func TestPlanPromptSteersAwayFromChainedCommands(t *testing.T) {
+	o := New(nil, nil, nil, nil, nil, Config{}, func() string { return "run-1" })
+	got := o.Plan(nil, 0).prompt(host.NewLocal("local", 1), core.Project{Slug: "gravy"}, nil, "hi")
+
+	if !strings.Contains(got, "simple command") {
+		t.Errorf("nothing steers the agent off chained shell commands:\n%s", got)
+	}
+	if !strings.Contains(got, "file tools") {
+		t.Errorf("nothing points the agent at the file tools instead of the shell:\n%s", got)
+	}
+}
