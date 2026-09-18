@@ -38,6 +38,9 @@ type Local struct {
 	killer Killer
 	// planner is nil on a client that may not plan.
 	planner Planner
+	// discusser is nil on a client that cannot run a change discussion. Such a client can still
+	// read one, edit its instruction and send it: the human gate does not depend on a model.
+	discusser Discusser
 	// checkouts is nil on a client that may not create review checkouts.
 	checkouts Checkouts
 	// agents is what this build can run, for validating a route before it is saved.

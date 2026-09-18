@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +37,18 @@ type fakeService struct {
 	approved  []string
 	rejected  []string
 	changes   map[string]string
+
+	// The change discussion. talk is what the service hands back; said, drafts, sent and
+	// canceled record what the screen asked for, which is how "a message starts no work" is
+	// asserted. reply and propose are what the agent answers with.
+	talk       api.DiscussionView
+	talkErr    error
+	said       []api.DiscussReq
+	drafts     []core.ChangeInstruction
+	sent       []api.SendChangesReq
+	canceled   []string
+	reply      string
+	replyDraft core.ChangeInstruction
 
 	// reconnected records which machines the screen asked the daemon to reach again;
 	// reconnectTo is what it finds when it looks.
@@ -165,6 +178,52 @@ func (f *fakeService) RequestChanges(_ context.Context, id, feedback string) err
 		f.changes = map[string]string{}
 	}
 	f.changes[id] = feedback
+	return nil
+}
+
+func (f *fakeService) OpenDiscussion(_ context.Context, id string) (api.DiscussionView, error) {
+	if f.talkErr != nil {
+		return api.DiscussionView{}, f.talkErr
+	}
+	f.talk.Discussion.TicketID = id
+	return f.talk, nil
+}
+
+func (f *fakeService) Discuss(_ context.Context, req api.DiscussReq) (api.DiscussionView, error) {
+	f.said = append(f.said, req)
+	if f.talkErr != nil {
+		return api.DiscussionView{}, f.talkErr
+	}
+	if req.Proposal != nil {
+		f.talk.Discussion.Proposal = *req.Proposal
+	}
+	f.talk.Discussion.Say(core.RoleHuman, req.Message, time.Time{})
+	f.talk.Discussion.Say(core.RoleAgent, f.reply, time.Time{})
+	if !f.replyDraft.Empty() {
+		f.talk.Discussion.Proposal = f.replyDraft
+	}
+	return f.talk, nil
+}
+
+func (f *fakeService) SaveProposal(_ context.Context, req api.ProposalReq) (api.DiscussionView, error) {
+	f.drafts = append(f.drafts, req.Proposal)
+	if f.talkErr != nil {
+		return api.DiscussionView{}, f.talkErr
+	}
+	f.talk.Discussion.Proposal = req.Proposal
+	return f.talk, nil
+}
+
+func (f *fakeService) SendChanges(_ context.Context, req api.SendChangesReq) error {
+	if f.actionErr != nil {
+		return f.actionErr
+	}
+	f.sent = append(f.sent, req)
+	return nil
+}
+
+func (f *fakeService) CancelDiscussion(_ context.Context, id string) error {
+	f.canceled = append(f.canceled, id)
 	return nil
 }
 

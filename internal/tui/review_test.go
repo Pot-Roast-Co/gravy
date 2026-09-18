@@ -164,57 +164,170 @@ func TestApproveCallsTheGate(t *testing.T) {
 	}
 }
 
-// TestRequestChangesPromptsAndSendsFeedback is AC5.
-func TestRequestChangesPromptsAndSendsFeedback(t *testing.T) {
+// TestRequestChangesDiscussesRatherThanQueues is AC5, as the discussion step rewrote it:
+// pressing r opens a conversation, and taking a turn in it starts no work at all.
+func TestRequestChangesDiscussesRatherThanQueues(t *testing.T) {
 	f := reviewFixture()
-	m := openReview(t, f, 80, 24)
+	f.reply = "You want the docs, not a behaviour change. Multiply must keep its current result."
+	m := openReview(t, f, 100, 30)
 
 	m = send(t, m, key("r"))
-	if !strings.Contains(m.View(), "what needs to change") {
-		t.Fatalf("r did not prompt for feedback:\n%s", m.View())
+	view := m.View()
+	if !strings.Contains(view, "Request changes") {
+		t.Fatalf("r did not open the discussion:\n%s", view)
 	}
-	for _, c := range "add docs" {
-		m = send(t, m, key(string(c)))
+	if !strings.Contains(view, "Nothing here starts work") {
+		t.Errorf("the screen never says that a message queues nothing:\n%s", view)
 	}
+
+	m = typeKeys(t, m, "add docs")
 	if !strings.Contains(m.View(), "add docs") {
 		t.Errorf("the prompt did not echo what was typed:\n%s", m.View())
 	}
 
 	m, cmd := sendCmd(t, m, key("enter"))
 	if cmd == nil {
-		t.Fatal("enter did not submit the feedback")
+		t.Fatal("enter did not send the message")
 	}
 	m = send(t, m, cmd())
 
-	if got := f.changes[f.review.Ticket.ID]; got != "add docs" {
-		t.Errorf("feedback = %q, want %q", got, "add docs")
+	if len(f.said) != 1 || f.said[0].Message != "add docs" {
+		t.Errorf("what was discussed = %+v, want one message saying %q", f.said, "add docs")
 	}
-	if len(f.approved) != 0 {
-		t.Error("requesting changes approved the ticket")
+	// The whole point of the step: nothing was queued, authorised or decided.
+	if len(f.changes) != 0 || len(f.sent) != 0 {
+		t.Errorf("a discussion message started implementation: changes=%v sent=%+v", f.changes, f.sent)
 	}
-	// The ticket has gone back to the agent, so the card must not still be offering to
-	// approve the work that was just rejected.
-	if strings.Contains(m.View(), "a approve") {
-		t.Errorf("the card survived sending the work back:\n%s", m.View())
+	if len(f.approved) != 0 || len(f.rejected) != 0 {
+		t.Error("discussing decided the ticket")
+	}
+	if !strings.Contains(m.View(), "Multiply must keep its current result") {
+		t.Errorf("the agent's answer is not in the transcript:\n%s", m.View())
 	}
 }
 
-// TestEmptyFeedbackIsRefused: sending work back with no reason wastes the retry the note exists
-// to make worthwhile.
-func TestEmptyFeedbackIsRefused(t *testing.T) {
+// TestSendForImplementationNeedsAnExplicitConfirmation is AC3: the human confirms Send before
+// the ticket goes anywhere, and the instruction that travels carries its preservation
+// constraints with it.
+func TestSendForImplementationNeedsAnExplicitConfirmation(t *testing.T) {
+	f := reviewFixture()
+	f.reply = "Understood."
+	f.replyDraft = core.ChangeInstruction{
+		Correction: "Return an error rather than panicking on a nil operand",
+		Preserve:   []string{"Multiply keeps handling negative inputs"},
+		Verify:     []string{"go test ./..."},
+	}
+	m := openReview(t, f, 100, 30)
+	m = send(t, m, key("r"))
+	m = typeKeys(t, m, "do not panic")
+	m, cmd := sendCmd(t, m, key("enter"))
+	if cmd == nil {
+		t.Fatal("enter sent nothing")
+	}
+	m = send(t, m, cmd())
+
+	view := m.View()
+	for _, want := range []string{
+		"Proposed instruction", "Return an error", "Preserve", "negative inputs", "go test ./...",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the proposal on screen omits %q:\n%s", want, view)
+		}
+	}
+
+	// S asks the question; anything but y answers no.
+	m = send(t, m, key("S"))
+	if len(f.sent) != 0 {
+		t.Fatal("S sent the instruction without asking")
+	}
+	m = send(t, m, key("n"))
+	if len(f.sent) != 0 {
+		t.Fatal("declining the confirmation sent it anyway")
+	}
+
+	m = send(t, m, key("S"))
+	m, cmd = sendCmd(t, m, key("y"))
+	if cmd == nil {
+		t.Fatal("y sent nothing")
+	}
+	send(t, m, cmd())
+
+	if len(f.sent) != 1 {
+		t.Fatalf("sent = %+v, want exactly one", f.sent)
+	}
+	got := f.sent[0]
+	if !got.Confirm {
+		t.Error("the confirmation did not travel with the instruction")
+	}
+	if got.Proposal.Correction != f.replyDraft.Correction {
+		t.Errorf("correction = %q", got.Proposal.Correction)
+	}
+	if len(got.Proposal.Preserve) != 1 || got.Proposal.Preserve[0] != f.replyDraft.Preserve[0] {
+		t.Errorf("preservation constraints = %v, want them sent with the correction", got.Proposal.Preserve)
+	}
+}
+
+// TestCancellingADiscussionLeavesTheTicketInReview is AC4's second half. Backing out of a
+// conversation must never be a decision.
+func TestCancellingADiscussionLeavesTheTicketInReview(t *testing.T) {
+	f := reviewFixture()
+	m := openReview(t, f, 100, 30)
+	m = send(t, m, key("r"))
+	m = typeKeys(t, m, "never mind")
+	m = send(t, m, key("esc")) // out of the message field
+	m, cmd := sendCmd(t, m, key("esc"))
+	if cmd == nil {
+		t.Fatal("esc closed nothing")
+	}
+	m = send(t, m, cmd())
+
+	if len(f.canceled) != 1 {
+		t.Errorf("cancelled = %v, want the discussion closed", f.canceled)
+	}
+	if len(f.sent) != 0 || len(f.changes) != 0 || len(f.approved) != 0 || len(f.rejected) != 0 {
+		t.Error("cancelling decided something")
+	}
+	// Back on the card, still offering the same judgement on the same ticket.
+	if !strings.Contains(m.View(), "a approve") {
+		t.Errorf("the card did not come back after cancelling:\n%s", m.View())
+	}
+}
+
+// TestEmptyDiscussionMessageIsRefused: an empty turn costs a model call and says nothing.
+func TestEmptyDiscussionMessageIsRefused(t *testing.T) {
 	f := reviewFixture()
 	m := openReview(t, f, 80, 24)
 	m = send(t, m, key("r"))
 
 	m, cmd := sendCmd(t, m, key("enter"))
 	if cmd != nil {
-		t.Fatal("empty feedback was submitted")
+		t.Fatal("an empty message was submitted")
 	}
-	if !strings.Contains(m.View(), "say what needs to change") {
+	if !strings.Contains(m.View(), "say something") {
 		t.Errorf("no explanation for the refusal:\n%s", m.View())
 	}
-	if len(f.changes) != 0 {
-		t.Errorf("changes were requested anyway: %v", f.changes)
+	if len(f.said) != 0 {
+		t.Errorf("a turn was taken anyway: %+v", f.said)
+	}
+}
+
+// TestSendingRefusesAnEmptyInstruction: there is nothing to agree in an empty correction, and
+// sending one would be the old one-keystroke path wearing a new name.
+func TestSendingRefusesAnEmptyInstruction(t *testing.T) {
+	f := reviewFixture()
+	m := openReview(t, f, 100, 30)
+	m = send(t, m, key("r"))
+	m = send(t, m, key("esc")) // reading mode, with no proposal on the table
+
+	m, cmd := sendCmd(t, m, key("S"))
+	if cmd != nil {
+		t.Fatal("an empty instruction was sent")
+	}
+	if !strings.Contains(m.View(), "says nothing yet") {
+		t.Errorf("no explanation for the refusal:\n%s", m.View())
+	}
+	if len(f.sent) != 0 {
+		t.Errorf("sent = %+v", f.sent)
 	}
 }
 
@@ -647,8 +760,8 @@ func TestRequestChangesStartsFromTheVerdict(t *testing.T) {
 
 	scr := m.screens[SectionReview].(*review)
 	for _, want := range []string{"ROADMAP.md", "missing from the diff", "[low]"} {
-		if !strings.Contains(scr.feedback, want) {
-			t.Errorf("the seeded feedback omits %q: %q", want, scr.feedback)
+		if !strings.Contains(scr.talk.input, want) {
+			t.Errorf("the seeded message omits %q: %q", want, scr.talk.input)
 		}
 	}
 
@@ -660,9 +773,12 @@ func TestRequestChangesStartsFromTheVerdict(t *testing.T) {
 	}
 	send(t, m, cmd())
 
-	sent := f.changes[f.review.Ticket.ID]
-	if !strings.Contains(sent, "ROADMAP.md") || !strings.Contains(sent, "Also bump the version.") {
-		t.Errorf("what was sent = %q", sent)
+	if len(f.said) != 1 {
+		t.Fatalf("discussed = %+v, want one turn", f.said)
+	}
+	said := f.said[0].Message
+	if !strings.Contains(said, "ROADMAP.md") || !strings.Contains(said, "Also bump the version.") {
+		t.Errorf("what was said = %q", said)
 	}
 }
 
@@ -677,13 +793,13 @@ func TestRequestChangesCanBeClearedInOneKey(t *testing.T) {
 	}
 	m := openReview(t, f, 110, 30)
 	m = send(t, m, key("r"))
-	if scr := m.screens[SectionReview].(*review); scr.feedback == "" {
+	if scr := m.screens[SectionReview].(*review); scr.talk.input == "" {
 		t.Fatal("nothing was seeded")
 	}
 
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlU})
-	if scr := m.screens[SectionReview].(*review); scr.feedback != "" {
-		t.Errorf("ctrl+u left %q", scr.feedback)
+	if scr := m.screens[SectionReview].(*review); scr.talk.input != "" {
+		t.Errorf("ctrl+u left %q", scr.talk.input)
 	}
 }
 
@@ -695,8 +811,8 @@ func TestRequestChangesIsEmptyWithoutFindings(t *testing.T) {
 
 	m := openReview(t, f, 110, 30)
 	m = send(t, m, key("r"))
-	if scr := m.screens[SectionReview].(*review); scr.feedback != "" {
-		t.Errorf("seeded %q from a passing verdict", scr.feedback)
+	if scr := m.screens[SectionReview].(*review); scr.talk.input != "" {
+		t.Errorf("seeded %q from a passing verdict", scr.talk.input)
 	}
 }
 

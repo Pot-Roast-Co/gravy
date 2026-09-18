@@ -16,8 +16,15 @@ import (
 // atReview returns a service holding one ticket awaiting judgement, with an open queue entry.
 func atReview(t *testing.T) (*Local, *store.DB) {
 	t.Helper()
+	return atReviewIn(t, filepath.Join(t.TempDir(), "gravy.db"))
+}
+
+// atReviewIn is atReview over a named database file, so a test can close it and open it again —
+// which is the only honest way to ask whether something survived a restart.
+func atReviewIn(t *testing.T, path string) (*Local, *store.DB) {
+	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "gravy.db"))
+	db, err := store.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}

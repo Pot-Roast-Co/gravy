@@ -233,6 +233,29 @@ func (c *Client) RequestChanges(ctx context.Context, ticketID, feedback string) 
 		requestChangesParams{TicketID: ticketID, Feedback: feedback}, nil)
 }
 
+func (c *Client) OpenDiscussion(ctx context.Context, ticketID string) (DiscussionView, error) {
+	var out DiscussionView
+	return out, c.call(ctx, mOpenDiscussion, ticketIDParams{TicketID: ticketID}, &out)
+}
+
+func (c *Client) Discuss(ctx context.Context, req DiscussReq) (DiscussionView, error) {
+	var out DiscussionView
+	return out, c.call(ctx, mDiscuss, discussParams{Req: req}, &out)
+}
+
+func (c *Client) SaveProposal(ctx context.Context, req ProposalReq) (DiscussionView, error) {
+	var out DiscussionView
+	return out, c.call(ctx, mSaveProposal, proposalParams{Req: req}, &out)
+}
+
+func (c *Client) SendChanges(ctx context.Context, req SendChangesReq) error {
+	return c.call(ctx, mSendChanges, sendChangesParams{Req: req}, nil)
+}
+
+func (c *Client) CancelDiscussion(ctx context.Context, ticketID string) error {
+	return c.call(ctx, mCancelDiscussion, ticketIDParams{TicketID: ticketID}, nil)
+}
+
 func (c *Client) Continue(ctx context.Context, ticketID string) error {
 	return c.call(ctx, mContinue, ticketIDParams{TicketID: ticketID}, nil)
 }

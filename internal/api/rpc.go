@@ -121,6 +121,11 @@ const (
 	mGetReview        = "GetReview"
 	mApprove          = "Approve"
 	mRequestChanges   = "RequestChanges"
+	mOpenDiscussion   = "OpenDiscussion"
+	mDiscuss          = "Discuss"
+	mSaveProposal     = "SaveProposal"
+	mSendChanges      = "SendChanges"
+	mCancelDiscussion = "CancelDiscussion"
 	mReject           = "Reject"
 	mListAttention    = "ListAttention"
 	mResolveAttention = "ResolveAttention"
@@ -205,6 +210,15 @@ type (
 	}
 	createTicketParams struct {
 		Req CreateTicketReq `json:"req"`
+	}
+	discussParams struct {
+		Req DiscussReq `json:"req"`
+	}
+	proposalParams struct {
+		Req ProposalReq `json:"req"`
+	}
+	sendChangesParams struct {
+		Req SendChangesReq `json:"req"`
 	}
 )
 

@@ -36,6 +36,10 @@ type Store interface {
 	OpenAttention(ctx context.Context, a core.Attention) error
 	ResolveAttentionForTicket(ctx context.Context, ticketID string) (int, error)
 	SetProviderUnavailable(ctx context.Context, a core.ProviderAvailability) error
+	// ListChangeInstructions returns what a human has agreed for this ticket, oldest first.
+	// The prompt carries all of them, because the preservation constraints of the first
+	// correction are still binding during the third.
+	ListChangeInstructions(ctx context.Context, ticketID string) ([]core.ChangeInstruction, error)
 }
 
 // Repos supplies a git repository manager per project.
@@ -78,6 +82,13 @@ type Attempt struct {
 	Number int
 	// PriorFailure is the validation output from the previous attempt, empty on the first.
 	PriorFailure string
+	// Agreed are the change instructions a human confirmed for this ticket, oldest first.
+	//
+	// They are passed rather than looked up so that the prompt builder stays free of I/O, and
+	// they are a list rather than the latest one because every round's preservation constraints
+	// remain binding — losing an earlier one is precisely how a narrow correction undoes work
+	// that was already accepted.
+	Agreed []core.ChangeInstruction
 }
 
 // IDGen generates run identifiers.
@@ -421,12 +432,20 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 		priorFailure string
 	)
 
+	// Read once, before the first attempt: what a human agreed does not change while the agent
+	// is working, and a failure to read it must not be discovered halfway through a retry.
+	agreed, err := o.store.ListChangeInstructions(ctx, ticket.ID)
+	if err != nil {
+		return res, fmt.Errorf("agentrun: read agreed changes for %s: %w", ticket.ID, err)
+	}
+
 	maxAttempts := o.cfg.SelfCorrectionBudget + 1
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res.attempts = attempt
 		runID, outcome, err := o.executeAgent(ctx, ticket, project, h, a, wt, Attempt{
 			Number:       attempt,
 			PriorFailure: priorFailure,
+			Agreed:       agreed,
 		})
 		res.runID = runID
 		res.lastClass, res.lastNote = outcome.Class, outcome.Note

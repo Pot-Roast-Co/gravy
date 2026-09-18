@@ -24,7 +24,7 @@ func TestLongFeedbackWrapsKeepsCursorAndSubmitsWholeValue(t *testing.T) {
 	if lipgloss.Height(view) > 18 {
 		t.Fatalf("too tall: %d", lipgloss.Height(view))
 	}
-	if !strings.Contains(view, "END▏") || !strings.Contains(view, "enter send") {
+	if !strings.Contains(view, "END▏") || !strings.Contains(view, "enter to send the message") {
 		t.Fatal(view)
 	}
 	m, cmd := sendCmd(t, m, key("enter"))
@@ -32,7 +32,7 @@ func TestLongFeedbackWrapsKeepsCursorAndSubmitsWholeValue(t *testing.T) {
 		t.Fatal("no submit")
 	}
 	_ = send(t, m, cmd())
-	if f.changes[f.review.Ticket.ID] != value {
+	if len(f.said) != 1 || f.said[0].Message != value {
 		t.Fatal("wrapping changed submitted text")
 	}
 }
@@ -44,8 +44,8 @@ func TestFeedbackBackspacePreservesUnicode(t *testing.T) {
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("fix 界")})
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 	r := m.screens[SectionReview].(*review)
-	if r.feedback != "fix " || !utf8.ValidString(r.feedback) {
-		t.Fatalf("%q", r.feedback)
+	if r.talk.input != "fix " || !utf8.ValidString(r.talk.input) {
+		t.Fatalf("%q", r.talk.input)
 	}
 }
 

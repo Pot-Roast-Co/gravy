@@ -76,6 +76,17 @@ type Service interface {
 	GetReview(ctx context.Context, ticketID string) (ReviewBundle, error)
 	Approve(ctx context.Context, ticketID string) error
 	RequestChanges(ctx context.Context, ticketID, feedback string) error
+
+	// change discussion — the agreement step in front of RequestChanges.
+	//
+	// Opening one, taking a turn in it and saving its draft all change nothing about the
+	// ticket. SendChanges is the only call here that moves work, and it refuses to without an
+	// explicit confirmation. RequestChanges stays for callers that already have their wording.
+	OpenDiscussion(ctx context.Context, ticketID string) (DiscussionView, error)
+	Discuss(ctx context.Context, req DiscussReq) (DiscussionView, error)
+	SaveProposal(ctx context.Context, req ProposalReq) (DiscussionView, error)
+	SendChanges(ctx context.Context, req SendChangesReq) error
+	CancelDiscussion(ctx context.Context, ticketID string) error
 	// Continue retries a landing after a human resolved a conflict in the preserved worktree.
 	Continue(ctx context.Context, ticketID string) error
 	Reject(ctx context.Context, ticketID string) error

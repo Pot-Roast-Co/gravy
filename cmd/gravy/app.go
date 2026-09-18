@@ -270,6 +270,11 @@ func newApp(ctx context.Context) (*app, error) {
 			// context does rather than a number of its own to drift out of step.
 			cfg.Context.TokenBudget,
 		)).
+		WithDiscusser(orch.Discuss(
+			func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {
+				return rtr.Resolve(ctx, route, c)
+			},
+		)).
 		WithSettings(home, cfg, applyConfig(live, sched, cfg)).
 		WithAgents(agentOptions(ctx, providers)).
 		WithDetector(detector{providers: providers, host: h, cfg: cfg})

@@ -445,6 +445,41 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.RequestChanges(ctx, p.TicketID, p.Feedback)
 
+	case mOpenDiscussion:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.OpenDiscussion(ctx, p.TicketID)
+
+	case mDiscuss:
+		var p discussParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.Discuss(ctx, p.Req)
+
+	case mSaveProposal:
+		var p proposalParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.SaveProposal(ctx, p.Req)
+
+	case mSendChanges:
+		var p sendChangesParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.SendChanges(ctx, p.Req)
+
+	case mCancelDiscussion:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.svc.CancelDiscussion(ctx, p.TicketID)
+
 	case mContinue:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

@@ -127,10 +127,20 @@ func (l *Local) Approve(ctx context.Context, ticketID string) error {
 // It serves both places a human sends work back from. Out of Review that is request_changes; out
 // of Needs You — a parked run, a failed validation — it is requeue. The distinction is the state
 // machine's, not the caller's: from the human's side both are "try again, and here is why".
+//
+// It is deliberately still the direct route. The discussion step (OpenDiscussion, SendChanges)
+// is what the TUI offers, and it ends here — but a script that has always called this keeps
+// working unchanged, and the preservation constraints agreed in earlier rounds still reach the
+// prompt, because those live on the ticket rather than in whichever call sent the work back.
 func (l *Local) RequestChanges(ctx context.Context, ticketID, feedback string) error {
 	if strings.TrimSpace(feedback) == "" {
 		return fmt.Errorf("request changes: say what needs to change")
 	}
+	return l.requestChanges(ctx, ticketID, feedback)
+}
+
+// requestChanges is the shared lifecycle: record the note, move the ticket, clear the queue.
+func (l *Local) requestChanges(ctx context.Context, ticketID, feedback string) error {
 	t, err := l.db.GetTicket(ctx, ticketID)
 	if err != nil {
 		return err

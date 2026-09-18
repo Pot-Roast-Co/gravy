@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,7 +22,9 @@ type reviewMode int
 const (
 	reviewBrowsing reviewMode = iota
 	reviewConfirmReject
-	reviewFeedback
+	// reviewDiscuss is Request changes: a conversation that agrees the correction, and the
+	// preservation constraints that go with it, before any of it reaches an agent.
+	reviewDiscuss
 	reviewTry
 	reviewPreviewCommand
 	reviewTrySaving
@@ -62,8 +63,9 @@ type review struct {
 	// you is checking whether it looks reasonable, not whether it did what was asked.
 	showTicket bool
 
-	mode         reviewMode
-	feedback     string
+	mode reviewMode
+	// talk is the Request-changes conversation. It owns its own keys and body while it is open.
+	talk         *discussion
 	previewInput string
 	// notice reports the outcome of the last action, or why a key did nothing.
 	notice string
@@ -77,7 +79,7 @@ type review struct {
 	swept int
 }
 
-func newReview() *review { return &review{expanded: map[string]bool{}} }
+func newReview() *review { return &review{expanded: map[string]bool{}, talk: newDiscussion()} }
 
 // CapturesKeys is true while a prompt is open or a sweep is running, both of which bind keys the
 // global keymap also claims.
@@ -196,10 +198,28 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, loadReview(ctx.Svc, id)
 
 	case refreshedMsg:
-		if r.ticketID != "" && r.mode != reviewPreviewCommand && r.mode != reviewTrySaving {
+		// Not while a prompt or a conversation is open: re-reading is free, but rebuilding the
+		// card underneath someone who is mid-sentence is not.
+		if r.ticketID != "" && r.mode != reviewPreviewCommand && r.mode != reviewTrySaving &&
+			r.mode != reviewDiscuss {
 			return r, loadReview(ctx.Svc, r.ticketID)
 		}
 		return r, nil
+
+	case discussionLoadedMsg:
+		return r, r.talk.Update(msg)
+
+	case discussionClosedMsg:
+		// Cancelling is not a decision. The ticket is still in Review, still carrying whatever
+		// it carried before, and the card goes back to offering the same three keys.
+		r.mode = reviewBrowsing
+		if msg.err != nil {
+			r.notice = "closing the discussion: " + msg.err.Error()
+		} else {
+			r.notice = "discussion cancelled — the ticket is still awaiting your decision"
+		}
+		return r, nil
+
 	case reviewLoadedMsg:
 		r.bundle, r.loaded, r.err = msg.bundle, true, nil
 		return r, nil
@@ -254,35 +274,8 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 	switch r.mode {
 	case reviewTry, reviewPreviewCommand, reviewTrySaving:
 		return r.tryKey(msg, ctx)
-	case reviewFeedback:
-		switch {
-		case key == "esc":
-			r.mode, r.feedback = reviewBrowsing, ""
-		case key == "ctrl+u":
-			// Clears the seeded verdict in one keystroke. Backspacing a paragraph a machine
-			// wrote for you is not a reasonable thing to ask.
-			r.feedback = ""
-		case key == "enter":
-			if strings.TrimSpace(r.feedback) == "" {
-				r.notice = "say what needs to change, or esc to cancel"
-				return r, nil
-			}
-			fb, id := r.feedback, r.ticketID
-			r.mode, r.feedback = reviewBrowsing, ""
-			return r, func() tea.Msg {
-				err := ctx.Svc.RequestChanges(context.Background(), id, fb)
-				return reviewActedMsg{verb: "sent back for changes", err: err}
-			}
-		case key == "backspace":
-			if r.feedback != "" {
-				_, size := utf8.DecodeLastRuneInString(r.feedback)
-				r.feedback = r.feedback[:len(r.feedback)-size]
-			}
-		case len(msg.Runes) > 0:
-			r.feedback += string(msg.Runes)
-			r.notice = ""
-		}
-		return r, nil
+	case reviewDiscuss:
+		return r, r.talk.handleKey(msg, ctx)
 
 	case reviewConfirmReject:
 		switch key {
@@ -364,10 +357,15 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 			return reviewActedMsg{verb: "approved and landed", err: err}
 		}
 	case "r":
-		// Seeded with the automated review's own words. It has just read the diff and said
-		// what is wrong with it; making the human retype that to send it back is asking them
-		// to be a courier between two machines.
-		r.mode, r.feedback, r.notice = reviewFeedback, verdictAsFeedback(r.bundle.Verdict), ""
+		// Request changes opens a conversation, not a send. Nothing is queued and nothing is
+		// authorised until the instruction it produces is confirmed.
+		//
+		// The opening message is seeded with the automated review's own words: it has just read
+		// the diff and said what is wrong with it, and making the human retype that is asking
+		// them to be a courier between two machines.
+		r.mode, r.notice = reviewDiscuss, ""
+		return r, r.talk.open(ctx.Svc, r.ticketID, r.bundle.Ticket.Title,
+			verdictAsFeedback(r.bundle.Verdict))
 	case "x":
 		r.mode, r.notice = reviewConfirmReject, ""
 	case "s":
@@ -412,6 +410,9 @@ func (r *review) View(ctx ViewContext) string {
 	}
 	if r.mode == reviewTry || r.mode == reviewPreviewCommand || r.mode == reviewTrySaving {
 		return r.tryView(ctx)
+	}
+	if r.mode == reviewDiscuss {
+		return r.talk.View(ctx)
 	}
 	th := ctx.Theme
 	if ctx.Width <= 0 || ctx.Height <= 0 {
@@ -533,13 +534,6 @@ func (r *review) View(ctx ViewContext) string {
 // which is why the two are tracked separately.
 func (r *review) scrolled(lines []string, cursorLine int, ctx ViewContext, th Theme) string {
 	footer := r.footer(th, ctx.Width)
-	if r.mode == reviewFeedback {
-		hint := "enter send · ctrl+u clear · esc cancel"
-		if r.notice != "" {
-			hint = r.notice + " · " + hint
-		}
-		footer = feedbackInput(r.feedback, hint, ctx.Width, ctx.Height, th)
-	}
 
 	body := ctx.Height - 1 - lipgloss.Height(footer)
 	if body < 1 {
@@ -579,12 +573,6 @@ func (r *review) scrolled(lines []string, cursorLine int, ctx ViewContext, th Th
 // footer says what the keys do, and doubles as the prompt in the modes that take input.
 func (r *review) footer(th Theme, width int) string {
 	switch r.mode {
-	case reviewFeedback:
-		hint := "▏  enter to send back · ctrl+u clear · esc to cancel"
-		if r.notice != "" {
-			hint = "▏  " + r.notice + " · enter send · esc cancel"
-		}
-		return feedbackInput(r.feedback, strings.TrimPrefix(hint, "▏  "), width, 10, th)
 	case reviewConfirmReject:
 		return th.Danger.Render("reject this ticket and delete its worktree? ") +
 			th.Muted.Render("y / n")
@@ -722,11 +710,11 @@ func sweepOrder(ctx ViewContext) []string {
 	return append(held, rest...)
 }
 
-// verdictAsFeedback turns an advisory verdict into a first draft of what to send back.
+// verdictAsFeedback turns an advisory verdict into a first draft of what to say.
 //
-// A draft, not a decision: it lands in an editable field, and a verdict that found nothing
-// leaves it empty rather than sending the agent a cheerful summary of its own success. The
-// severities travel with it, because "low" and "high" change what an agent does first.
+// A draft, not a decision: it lands in the discussion's editable message field, and a verdict
+// that found nothing leaves it empty rather than opening with a cheerful summary of the agent's
+// own success. The severities travel with it, because "low" and "high" change what matters first.
 func verdictAsFeedback(v rev.Verdict) string {
 	if !v.Available() || len(v.Findings) == 0 {
 		return ""
