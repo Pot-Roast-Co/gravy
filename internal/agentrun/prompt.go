@@ -3,6 +3,7 @@ package agentrun
 import (
 	"context"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/contextbuild"
 	"strings"
 
 	"github.com/pot-roast-co/gravy/internal/core"
@@ -21,6 +22,15 @@ func (SimplePrompt) Build(_ context.Context, t core.Ticket, p core.Project, atte
 	var b strings.Builder
 
 	b.WriteString("You are implementing one ticket in an existing repository.\n\n")
+
+	// What the project is for, before what this ticket is. A ticket body says what to change;
+	// the notes are the only place that says what the thing being changed is meant to be, and
+	// an agent that does not know cannot tell a fix from a workaround.
+	if notes := contextbuild.RenderNotes(p.Notes); notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+	}
+
 	fmt.Fprintf(&b, "## Ticket %s: %s\n\n", t.ID, t.Title)
 	if strings.TrimSpace(t.Body) != "" {
 		b.WriteString(t.Body)
