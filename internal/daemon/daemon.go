@@ -49,12 +49,15 @@ type ReconcileStore interface {
 // a client over the socket, which is what stops any of them from quietly growing a shortcut into
 // the store.
 type Daemon struct {
-	home  string
-	svc   api.Service
-	loop  Runner
-	store ReconcileStore
-	newID func() string
-	log   *slog.Logger
+	home string
+	svc  api.Service
+	// updateCheck is nil when release checking is switched off, which is the whole of the
+	// opt-out: no field set, no goroutine, no request.
+	updateCheck func(context.Context) (api.UpdateStatus, error)
+	loop        Runner
+	store       ReconcileStore
+	newID       func() string
+	log         *slog.Logger
 	// notifier is told when a run is found orphaned by a restart. Nil is legitimate.
 	notifier Notifier
 
@@ -67,6 +70,16 @@ type Notifier interface {
 }
 
 // WithNotifier sets who is told when reconciliation parks an orphaned run.
+// WithUpdateCheck runs a release check on start and daily after, publishing the answer through
+// the service so the frame can mention it.
+//
+// Nothing is installed and nothing is prompted twice: gravy reports that a newer version exists
+// and leaves the decision, and the timing, to the person who installed it.
+func (d *Daemon) WithUpdateCheck(check func(context.Context) (api.UpdateStatus, error)) *Daemon {
+	d.updateCheck = check
+	return d
+}
+
 func (d *Daemon) WithNotifier(n Notifier) *Daemon {
 	d.notifier = n
 	return d
@@ -124,6 +137,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	wg.Add(2)
 	go func() { defer wg.Done(); serveEr = d.srv.Serve(ctx) }()
 	go func() { defer wg.Done(); loopEr = d.loop.Run(ctx) }()
+	if d.updateCheck != nil {
+		// Deliberately not in the WaitGroup: a slow or hanging release check must never be
+		// something a shutdown waits on. It is the least important thing the daemon does.
+		go d.watchForUpdates(ctx)
+	}
 	wg.Wait()
 
 	// A cancelled context is how a clean shutdown arrives, not a failure.
@@ -143,6 +161,36 @@ func (d *Daemon) Run(ctx context.Context) error {
 // hear from. Both cases therefore end the same way — the run is failed and the ticket is parked
 // visibly — with the payload saying which happened. A still-running orphan is killed first,
 // because it is writing into a worktree the next run would otherwise reuse underneath it.
+// updateSink is the part of the local service that records a release check. It is an optional
+// interface rather than a Service method because a read-only client has no business carrying an
+// answer it cannot have obtained.
+type updateSink interface{ SetUpdate(api.UpdateStatus) }
+
+// updateInterval is how often the release check repeats. Daily: releases are not frequent, and
+// the point is that someone running gravy for a week finds out, not that they find out fast.
+const updateInterval = 24 * time.Hour
+
+// watchForUpdates checks on start and then daily until ctx ends.
+func (d *Daemon) watchForUpdates(ctx context.Context) {
+	for {
+		if status, err := d.updateCheck(ctx); err != nil {
+			// Debug, not warn: an unreachable GitHub is an answer to a question the human
+			// did not ask, and a daily warning about it would be the only thing in the log.
+			d.log.Debug("release check failed", "error", err)
+		} else if sink, ok := d.svc.(updateSink); ok && status.Latest != "" {
+			sink.SetUpdate(status)
+			if status.Available {
+				d.log.Info("a newer gravy is available", "latest", status.Latest)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(updateInterval):
+		}
+	}
+}
+
 func (d *Daemon) Reconcile(ctx context.Context) (int, error) {
 	runs, err := d.store.ListUnfinishedRuns(ctx)
 	if err != nil {

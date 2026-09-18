@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/pot-roast-co/gravy/internal/update"
 	"log/slog"
 	"os"
 	"time"
@@ -47,6 +48,15 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	d := daemon.New(a.home, a.svc, a.loop(), a.db, newID, log).WithNotifier(a.notifier)
+	// The one request gravy makes on its own behalf, and the only one anyone can switch off.
+	// Off means the check is never wired up at all rather than wired up and skipped.
+	if a.cfg.Updates.Check {
+		checker := update.Checker{}
+		d = d.WithUpdateCheck(func(ctx context.Context) (api.UpdateStatus, error) {
+			st, err := checker.Check(ctx, version)
+			return api.UpdateStatus{Latest: st.Latest, Available: st.Available}, err
+		})
+	}
 	return d.Run(ctx)
 }
 

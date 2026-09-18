@@ -25,6 +25,17 @@ type Config struct {
 	Context       Context                 `yaml:"context"`
 	Notifications Notifications           `yaml:"notifications"`
 	Retention     Retention               `yaml:"retention"`
+	Updates       Updates                 `yaml:"updates"`
+}
+
+// Updates controls the one request gravy makes on its own behalf.
+//
+// It is a setting rather than a constant because it is the only time gravy talks to anything the
+// human did not configure. Everything else it does over the network goes to their own machines.
+type Updates struct {
+	// Check asks GitHub for the newest release on daemon start, and daily after. It reports;
+	// it never installs. Set false and gravy makes no outbound request of its own.
+	Check bool `yaml:"check"`
 }
 
 // Host is another machine Gravy can run work on.
@@ -150,6 +161,7 @@ type Notifications struct {
 func Default() Config {
 	return Config{
 		Concurrency: Concurrency{Workers: 4},
+		Updates:     Updates{Check: true},
 		Providers: map[string]Provider{
 			"claude-code": {Enabled: true, Command: "claude"},
 			"copilot":     {Enabled: true, Command: "copilot"},

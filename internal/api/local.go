@@ -38,6 +38,10 @@ type Local struct {
 	killer Killer
 	// planner is nil on a client that may not plan.
 	planner Planner
+	// update is the last release check's answer, written by whoever runs the check and read
+	// by every Status. Guarded because the check runs on its own schedule, not on a request.
+	updateMu sync.RWMutex
+	update   UpdateStatus
 	// discusser is nil on a client that cannot run a change discussion. Such a client can still
 	// read one, edit its instruction and send it: the human gate does not depend on a model.
 	discusser Discusser
@@ -104,6 +108,13 @@ func (l *Local) WithPlanner(p Planner) *Local {
 func (l *Local) WithLander(ld Lander) *Local {
 	l.lander = ld
 	return l
+}
+
+// SetUpdate records what a release check found, for Status to carry to clients.
+func (l *Local) SetUpdate(u UpdateStatus) {
+	l.updateMu.Lock()
+	defer l.updateMu.Unlock()
+	l.update = u
 }
 
 // NewLocal returns a Service backed by the store.
@@ -526,6 +537,9 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 	}
 	SortAttention(st.Attention)
 	st.Buckets = l.Routes()
+	l.updateMu.RLock()
+	st.Update = l.update
+	l.updateMu.RUnlock()
 	return st, nil
 }
 

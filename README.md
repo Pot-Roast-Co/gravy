@@ -139,6 +139,20 @@ After installing an updated build, quit any open Gravy UI, run `gravy stop`, the
 `gravy` again so both the UI and daemon use it. Database migrations run automatically at
 startup; existing single-command preview settings are preserved.
 
+Gravy tells you when a newer release exists: the daemon asks GitHub once at startup and daily
+after, and the status bar gains a `v0.1.4 available` note when there is something newer. It
+never installs anything — upgrading is `brew upgrade`, a new tarball, or `make install`, and
+stays your decision. Builds from source are left alone, since they are already ahead of the
+newest release.
+
+This is the only request Gravy makes on its own behalf. Turn it off and it makes none:
+
+```yaml
+# ~/.gravy/config.yaml
+updates:
+  check: false
+```
+
 Requires `git` and at least one coding agent CLI (`claude`, `codex`, or `copilot`) that you have already
 logged in to. Gravy drives the CLIs; it never handles your credentials. Go 1.24+ is needed only
 for the `go install` and `make install` routes.
