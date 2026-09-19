@@ -96,6 +96,16 @@ func (l *Local) GetReview(ctx context.Context, ticketID string) (ReviewBundle, e
 	if h == nil {
 		return rb, fmt.Errorf("no host available to read %s", t.WorktreePath)
 	}
+	// A worktree that is no longer there is not an error worth failing the whole review over.
+	//
+	// Landing removes it, and a human resolving a conflict can remove it too. The record of it
+	// is cleared first now, so this should not happen — but "should not" is not a guarantee
+	// across two processes, and the cost of being wrong is a screen that says a finished
+	// ticket could not be loaded. No worktree means no diff, which is the truth about work
+	// that has already landed.
+	if !h.FS().Exists(t.WorktreePath) {
+		return rb, nil
+	}
 	repo := git.NewLocalRepo(h, p.RepoPath, "")
 	wt := git.Worktree{Path: t.WorktreePath, Branch: t.Branch, Base: p.TargetBranch}
 	if rb.Diff, err = repo.Diff(ctx, wt, p.TargetBranch); err != nil {

@@ -247,18 +247,30 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return "", fmt.Errorf("land: %w", err)
 	}
 
-	// Cleanup failures are logged, never fatal: the work has merged, and refusing to call the
-	// ticket Done because a directory could not be removed would be the wrong trade.
-	if err := repo.RemoveWorktree(ctx, wt); err != nil {
-		o.log.Warn("could not remove worktree after landing", "ticket", ticket.ID, "error", err)
-	} else if err := lander.DeleteBranch(ctx, wt.Branch); err != nil {
-		o.log.Warn("could not delete branch after landing", "ticket", ticket.ID, "error", err)
-	}
-
+	// The recorded path goes before the directory does, not after.
+	//
+	// Everything that reads a ticket reads this field, and the review screen turns it into a
+	// `git diff` in that directory. Removing the worktree first leaves a window — short, but
+	// wide enough, because landing publishes a ticket-changed event that makes clients reload
+	// immediately — in which the database still names a directory that is gone. The reload
+	// then fails with "not a git repository" and the screen reports that a landing which
+	// merged, pushed and finished could not be loaded.
+	//
+	// Clearing first cannot have the opposite problem: a reader that sees no worktree shows no
+	// diff, which is the truth about a ticket that has landed.
 	if err := o.updateTicketFields(ctx, ticket.ID, func(t *core.Ticket) {
 		t.WorktreePath = ""
 	}); err != nil {
 		return state, fmt.Errorf("land: %w", err)
+	}
+
+	// Cleanup failures are logged, never fatal: the work has merged, and refusing to call the
+	// ticket Done because a directory could not be removed would be the wrong trade. wt still
+	// carries the path; only the ticket's copy of it was cleared.
+	if err := repo.RemoveWorktree(ctx, wt); err != nil {
+		o.log.Warn("could not remove worktree after landing", "ticket", ticket.ID, "error", err)
+	} else if err := lander.DeleteBranch(ctx, wt.Branch); err != nil {
+		o.log.Warn("could not delete branch after landing", "ticket", ticket.ID, "error", err)
 	}
 	return state, nil
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,5 +197,35 @@ func TestReadyWorkStopsExplainingOnceAttached(t *testing.T) {
 		if strings.Contains(q.Held, "no repository") {
 			t.Errorf("still says %q after a repository was attached", q.Held)
 		}
+	}
+}
+
+// TestReviewOfALandedTicketDoesNotFail covers the other half: a worktree that is gone is not an
+// error worth failing a review over.
+//
+// Landing removes it, and a human resolving a conflict can remove it too. Failing here produced
+// "Could not load the review … not a git repository" over a ticket that had merged and pushed.
+func TestReviewOfALandedTicketDoesNotFail(t *testing.T) {
+	_, db := atReview(t)
+	ctx := context.Background()
+	// A host, because reading a worktree needs one; the point of the test is what happens when
+	// the worktree it would read is not there.
+	var n int
+	svc := NewLocal(db, nil, []host.Host{host.NewLocal("local", 1)},
+		func() string { n++; return fmt.Sprintf("id-%d", n) })
+
+	// A path that does not exist, which is what a removed worktree leaves behind if anything
+	// still names it.
+	tk, err := db.GetTicket(ctx, "GR-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.WorktreePath = filepath.Join(t.TempDir(), "worktree-that-was-removed")
+	if err := db.UpdateTicket(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.GetReview(ctx, "GR-1"); err != nil {
+		t.Fatalf("a review whose worktree is gone failed to load: %v", err)
 	}
 }
