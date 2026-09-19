@@ -3,8 +3,10 @@ package host
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestExecRefusesAnArgumentTheKernelWould turns an opaque failure into a named one.
@@ -64,4 +66,68 @@ func TestExecAcceptsALargePayloadOnStdin(t *testing.T) {
 	if _, err := proc.Wait(); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
+}
+
+// And a child that does read stdin still receives all of it.
+func TestStdinReachesAChildThatReadsIt(t *testing.T) {
+	h := NewLocal("local", 1)
+	const payload = "the whole prompt arrives"
+
+	proc, err := h.Exec(context.Background(), ExecSpec{Cmd: "cat", Stdin: strings.NewReader(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(proc.Stdout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proc.Wait(); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if string(out) != payload {
+		t.Errorf("child received %q, want %q", out, payload)
+	}
+}
+
+// TestReadingOutputEndsWhenAGrandchildHoldsThePipe is the regression, and it wedged a running
+// daemon for the better part of an hour.
+//
+// A pipe reaches EOF when every writer is gone, and the process gravy starts is not necessarily
+// the last one: anything it spawns inherits the descriptor. Here the child exits immediately and
+// leaves a sleeper holding stdout. A reader waiting for EOF blocks forever — and an agent run
+// decides a run is over by waiting for exactly that reader, with no timeout above it, so the
+// worker slot and the serial project behind it are held indefinitely.
+func TestReadingOutputEndsWhenAGrandchildHoldsThePipe(t *testing.T) {
+	h := NewLocal("local", 1)
+
+	// sh exits at once; the backgrounded sleep inherits stdout and keeps the write end open.
+	proc, err := h.Exec(context.Background(), ExecSpec{
+		Cmd:  "sh",
+		Args: []string{"-c", "echo hello; sleep 120 & exit 0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(proc.Stdout())
+		read <- string(b)
+	}()
+
+	if _, err := proc.Wait(); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	select {
+	case got := <-read:
+		// What the process actually wrote is still delivered; the grace period is what makes
+		// that true rather than a race.
+		if !strings.Contains(got, "hello") {
+			t.Errorf("output written before exit was lost: %q", got)
+		}
+	case <-time.After(outputGrace + 10*time.Second):
+		t.Fatal("reading stdout never ended; a grandchild held the pipe and the worker is wedged")
+	}
+	_ = proc.Kill()
 }

@@ -94,7 +94,29 @@ func (h *LocalHost) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 	if len(spec.Env) > 0 || len(spec.UnsetEnv) > 0 {
 		cmd.Env = executionEnv(spec)
 	}
-	cmd.Stdin = spec.Stdin
+	// Stdin is written by a goroutine this package owns, not by exec's.
+	//
+	// Cmd.Wait "waits for any copying to stdin to complete" when Stdin is an ordinary Reader,
+	// because exec makes a pipe and copies into it itself. A child that exits without reading
+	// the whole of stdin therefore leaves that copy unfinished and Wait blocked — forever, with
+	// no timeout anywhere above it. An agent prompt is now a six-figure byte count sent this
+	// way, and an agent is free to stop reading whenever it likes, so this is not a corner:
+	// one wedged Wait holds a worker slot and a serial project's whole queue behind it.
+	//
+	// Taking the pipe ourselves means exec has nothing to wait for. The copy runs detached,
+	// gets EPIPE when the child stops reading, and nobody is held up by it.
+	if spec.Stdin != nil {
+		pipe, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, fmt.Errorf("exec %s: stdin: %w", spec.Cmd, err)
+		}
+		go func() {
+			defer pipe.Close()
+			// Both errors are expected and neither is actionable: EPIPE means the child had
+			// read enough, and a short write means the same thing one layer down.
+			_, _ = io.Copy(pipe, spec.Stdin)
+		}()
+	}
 	setProcessGroup(cmd)
 
 	// os.Pipe rather than cmd.StdoutPipe: Wait closes the pipes StdoutPipe returns, which
@@ -139,6 +161,12 @@ func (h *LocalHost) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 }
 
 // localProcess is a running command.
+// outputGrace is how long a process's output pipes stay open after it exits.
+//
+// Long enough that a reader draining what is already buffered is never cut off, short enough
+// that a grandchild holding the pipe cannot wedge a worker for an afternoon.
+const outputGrace = 5 * time.Second
+
 type localProcess struct {
 	cmd            *exec.Cmd
 	stdout, stderr *os.File
@@ -223,6 +251,25 @@ func (p *localProcess) Wait() (ExitStatus, error) {
 	p.waitOnce.Do(func() {
 		err := p.cmd.Wait()
 		close(p.done)
+
+		// The output pipes are closed a short while after the process exits, whether or not
+		// anyone has finished reading them.
+		//
+		// A pipe reaches EOF when every writer is gone, and the child is not necessarily the
+		// last one: anything it spawned inherits these descriptors and can outlive it. A
+		// reader then blocks forever on output that will never come, and callers that wait
+		// for their reader to finish — which is how an agent run decides a run is over —
+		// block with it. That wedged a daemon: the agent exited, a grandchild kept the pipe,
+		// and the worker slot and the serial project behind it were held indefinitely with no
+		// timeout anywhere above.
+		//
+		// The delay is the grace: anything the process actually wrote is buffered in the pipe
+		// and readable, and a normal run drains it long before this fires.
+		go func() {
+			time.Sleep(outputGrace)
+			p.stdout.Close()
+			p.stderr.Close()
+		}()
 
 		p.mu.Lock()
 		timedOut, killed := p.timedOut, p.killed
