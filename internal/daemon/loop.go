@@ -24,6 +24,16 @@ type Loop struct {
 	// Interval is how often the queue is re-examined when nothing else wakes it.
 	Interval time.Duration
 
+	// Prune, when set, sweeps run logs past their retention window. It lives on the loop
+	// because the loop is the thing still running an hour — or a month — after startup, and a
+	// daemon nobody restarts is precisely the one accumulating logs.
+	Prune func()
+
+	// PruneInterval is how often Prune runs. Retention is measured in days, so it is
+	// deliberately nothing like Interval: the sweep walks the whole runs directory and has no
+	// business doing that every couple of seconds.
+	PruneInterval time.Duration
+
 	// OnAssign, when set, is called as each assignment starts. Used by the CLI to narrate.
 	OnAssign func(scheduler.Assignment)
 	// OnFinish, when set, is called as each run ends.
@@ -37,11 +47,12 @@ type Loop struct {
 // NewLoop returns a scheduler loop.
 func NewLoop(s *scheduler.Scheduler, o *agentrun.Orchestrator, log *slog.Logger) *Loop {
 	return &Loop{
-		sched:    s,
-		orch:     o,
-		log:      log,
-		Interval: 2 * time.Second,
-		running:  map[string]bool{},
+		sched:         s,
+		orch:          o,
+		log:           log,
+		Interval:      2 * time.Second,
+		PruneInterval: time.Hour,
+		running:       map[string]bool{},
 	}
 }
 
@@ -49,6 +60,15 @@ func NewLoop(s *scheduler.Scheduler, o *agentrun.Orchestrator, log *slog.Logger)
 func (l *Loop) Run(ctx context.Context) error {
 	ticker := time.NewTicker(l.Interval)
 	defer ticker.Stop()
+
+	// A second, far slower ticker rather than a counter on the first one: the two answer
+	// different questions, and a nil channel is how "no retention configured" blocks forever.
+	var pruneC <-chan time.Time
+	if l.Prune != nil && l.PruneInterval > 0 {
+		pruner := time.NewTicker(l.PruneInterval)
+		defer pruner.Stop()
+		pruneC = pruner.C
+	}
 
 	for {
 		if err := l.tick(ctx); err != nil {
@@ -60,6 +80,8 @@ func (l *Loop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			l.wg.Wait()
 			return nil
+		case <-pruneC:
+			l.Prune()
 		case <-ticker.C:
 		}
 	}

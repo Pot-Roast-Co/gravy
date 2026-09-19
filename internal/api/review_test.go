@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
+	"github.com/pot-roast-co/gravy/internal/runlog"
 	"github.com/pot-roast-co/gravy/internal/store"
 )
 
@@ -235,6 +237,60 @@ func TestDeleteOnlyRemovesUnstartedWork(t *testing.T) {
 	}
 	if _, err := db.GetTicket(ctx, "GR-9"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("the backlog ticket survived deletion: %v", err)
+	}
+}
+
+// TestDeleteTicketTakesItsRunLogsWithIt: the rows go by foreign-key cascade, and the directories
+// under ~/.gravy/runs used to stay behind — unreachable, since nothing left in the database names
+// them, until retention happened to sweep them a fortnight later.
+//
+// A Backlog ticket with runs behind it is not a contrived case: killing a running ticket returns
+// it to Backlog, where deleting it is allowed.
+func TestDeleteTicketTakesItsRunLogsWithIt(t *testing.T) {
+	base, db := atReview(t)
+	ctx := context.Background()
+
+	logs := runlog.New(filepath.Join(t.TempDir(), "runs"))
+	svc := base.WithLogs(logs)
+
+	killed := core.Ticket{ID: "GR-9", ProjectID: "p1", Title: "ran, then killed",
+		State: core.StateBacklog, Route: core.RouteImplementation, CreatedAt: time.Now()}
+	if err := db.CreateTicket(ctx, killed); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []core.Run{
+		{ID: "r1", TicketID: "GR-9", HostID: "local", ProviderID: "p", Model: "m",
+			State: core.StateRunning, StartedAt: time.Unix(1, 0)},
+		{ID: "r2", TicketID: "GR-9", HostID: "local", ProviderID: "p", Model: "m",
+			State: core.StateRunning, StartedAt: time.Unix(2, 0)},
+		{ID: "r3", TicketID: "GR-1", HostID: "local", ProviderID: "p", Model: "m",
+			State: core.StateReview, StartedAt: time.Unix(3, 0)},
+	} {
+		if err := db.CreateRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		w, err := logs.Open(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.WriteAgent("output for " + r.ID); err != nil {
+			t.Fatal(err)
+		}
+		w.Close()
+	}
+
+	if err := svc.DeleteTicket(ctx, "GR-9"); err != nil {
+		t.Fatalf("DeleteTicket: %v", err)
+	}
+
+	// Every one of the ticket's runs, not just the first.
+	for _, id := range []string{"r1", "r2"} {
+		if _, err := os.Stat(logs.Dir(id)); !os.IsNotExist(err) {
+			t.Errorf("run %s kept its log directory after its ticket was deleted", id)
+		}
+	}
+	if _, err := os.Stat(logs.Dir("r3")); err != nil {
+		t.Errorf("deleting one ticket took another ticket's run logs: %v", err)
 	}
 }
 

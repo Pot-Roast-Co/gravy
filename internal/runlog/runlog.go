@@ -381,6 +381,36 @@ func (s *Store) Prune(cutoff time.Time, keep func(runID string) bool) (int, erro
 	return removed, nil
 }
 
+// Remove deletes one run's directory, whatever its age.
+//
+// This is how disk follows the database: a run whose row has gone has no reader left, and
+// waiting for retention to notice means a directory nobody can reach sitting there for the
+// length of the window. A run that is still writing is refused — retention's guard, for the
+// same reason.
+//
+// A directory that is not there is success: the caller asked for it to be gone.
+func (s *Store) Remove(runID string) error {
+	dir := s.Dir(runID)
+	// A run id reaches here from a database row, and a row is not a promise about path
+	// separators. Anything that does not name a direct child of the root is refused rather
+	// than handed to RemoveAll.
+	if runID == "" || filepath.Dir(dir) != filepath.Clean(s.root) {
+		return fmt.Errorf("runlog: %q is not a run id", runID)
+	}
+
+	s.mu.Lock()
+	_, isLive := s.live[runID]
+	s.mu.Unlock()
+	if isLive {
+		return fmt.Errorf("runlog: run %s is still running", runID)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("runlog: remove %s: %w", runID, err)
+	}
+	return nil
+}
+
 // Runs lists the run ids the store holds logs for, newest first.
 func (s *Store) Runs() ([]string, error) {
 	entries, err := os.ReadDir(s.root)

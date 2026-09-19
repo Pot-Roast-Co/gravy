@@ -35,9 +35,15 @@ func runServe(ctx context.Context, args []string) error {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// Retention runs on the way up rather than on a timer: a daemon that is never restarted is
-	// one whose disk was never a problem.
-	if keep := a.cfg.Retention.RunLogs.D(); keep > 0 {
+	// Retention runs on the way up and then on the loop's own slow ticker. Startup alone was
+	// backwards: a daemon that is never restarted is exactly the one accumulating months of run
+	// logs with nothing sweeping them, and `retention.run_logs` has to mean what it says on a
+	// process that has been up since spring.
+	pruneRunLogs := func() {
+		keep := a.cfg.Retention.RunLogs.D()
+		if keep <= 0 {
+			return
+		}
 		n, err := a.logs.Prune(time.Now().Add(-keep), nil)
 		switch {
 		case err != nil:
@@ -46,8 +52,12 @@ func runServe(ctx context.Context, args []string) error {
 			log.Info("pruned old run logs", "count", n, "older_than", keep)
 		}
 	}
+	pruneRunLogs()
 
-	d := daemon.New(a.home, a.svc, a.loop(), a.db, newID, log).WithNotifier(a.notifier)
+	loop := a.loop()
+	loop.Prune = pruneRunLogs
+
+	d := daemon.New(a.home, a.svc, loop, a.db, newID, log).WithNotifier(a.notifier)
 	// The one request gravy makes on its own behalf, and the only one anyone can switch off.
 	// Off means the check is never wired up at all rather than wired up and skipped.
 	if a.cfg.Updates.Check {

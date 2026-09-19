@@ -277,6 +277,74 @@ func TestPruneNeverLeavesTheRoot(t *testing.T) {
 	}
 }
 
+// TestRemoveDeletesOneRunNow covers deleting a run whose row has gone: waiting for retention to
+// notice leaves an unreachable directory on disk for the length of the window.
+func TestRemoveDeletesOneRunNow(t *testing.T) {
+	s := newStore(t)
+	for _, id := range []string{"gone", "kept"} {
+		w, err := s.Open(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.WriteAgent("output for " + id); err != nil {
+			t.Fatal(err)
+		}
+		w.Close()
+	}
+
+	// Fresh, not old: Remove is not a second retention window.
+	if err := s.Remove("gone"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(s.Dir("gone")); !os.IsNotExist(err) {
+		t.Error("the removed run's directory survived")
+	}
+	if _, err := os.Stat(s.Dir("kept")); err != nil {
+		t.Errorf("Remove took a run it was not asked for: %v", err)
+	}
+
+	// Already gone is what the caller asked for.
+	if err := s.Remove("gone"); err != nil {
+		t.Errorf("removing a run twice: %v", err)
+	}
+}
+
+// TestRemoveRefusesALiveRunAndStaysInItsRoot is the pair of catastrophes: deleting the files a
+// run is still writing to, and handing RemoveAll something from a database row that is not a
+// plain run id.
+func TestRemoveRefusesALiveRunAndStaysInItsRoot(t *testing.T) {
+	base := t.TempDir()
+	sibling := filepath.Join(base, "gravy.db")
+	if err := os.WriteFile(sibling, []byte("durable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(base, "runs"))
+
+	live, err := s.Open("live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	if err := s.Remove("live"); err == nil {
+		t.Error("Remove deleted a run that was still writing")
+	}
+	if _, err := os.Stat(s.Dir("live")); err != nil {
+		t.Errorf("the live run's directory went anyway: %v", err)
+	}
+
+	for _, id := range []string{"", ".", "..", "../..", "a/b"} {
+		if err := s.Remove(id); err == nil {
+			t.Errorf("Remove(%q) was accepted as a run id", id)
+		}
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Errorf("Remove reached outside its root: %v", err)
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Errorf("Remove deleted its root's parent: %v", err)
+	}
+}
+
 // TestConcurrentWritersAndReaders runs the shape the daemon actually produces.
 func TestConcurrentWritersAndReaders(t *testing.T) {
 	s := newStore(t)

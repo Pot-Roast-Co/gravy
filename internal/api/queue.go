@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -134,9 +135,40 @@ func (l *Local) DeleteTicket(ctx context.Context, id string) error {
 	if t.State != core.StateBacklog && t.State != core.StateDraft {
 		return fmt.Errorf("ticket %s is %s: reject it rather than deleting it", id, t.State)
 	}
+	// Read the runs before the cascade takes them. Afterwards nothing on disk says which
+	// directories under ~/.gravy/runs belonged to this ticket, so they would sit there
+	// unreachable until retention happened to sweep them — a whole window later.
+	runs, err := l.db.ListRunsForTicket(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := l.db.DeleteTicket(ctx, id); err != nil {
 		return err
 	}
 	l.events.publish(Event{Kind: EventTicketChanged, ProjectID: t.ProjectID, TicketID: id})
+
+	// The ticket is gone either way, and the caller's view is already correct; the error says
+	// what is actually left over rather than claiming the delete failed. Retention is still
+	// the backstop.
+	if err := l.removeRunLogs(runs); err != nil {
+		return fmt.Errorf("ticket %s was deleted, but its run logs remain: %w", id, err)
+	}
 	return nil
+}
+
+// removeRunLogs deletes the log directories of runs whose rows have gone.
+//
+// Every run is attempted before the first failure is reported: one undeletable directory is no
+// reason to leave the rest of them behind.
+func (l *Local) removeRunLogs(runs []core.Run) error {
+	if l.logs == nil {
+		return nil // a service that cannot read run logs does not own them either
+	}
+	var errs []error
+	for _, r := range runs {
+		if err := l.logs.Remove(r.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
