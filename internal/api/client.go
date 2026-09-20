@@ -262,6 +262,11 @@ func (c *Client) CancelDiscussion(ctx context.Context, ticketID string) error {
 	return c.call(ctx, mCancelDiscussion, ticketIDParams{TicketID: ticketID}, nil)
 }
 
+func (c *Client) Requeue(ctx context.Context, ticketID string) (core.State, error) {
+	var out core.State
+	return out, c.call(ctx, mRequeue, ticketIDParams{TicketID: ticketID}, &out)
+}
+
 func (c *Client) MarkMerged(ctx context.Context, ticketID string) (core.State, error) {
 	var out core.State
 	return out, c.call(ctx, mMarkMerged, ticketIDParams{TicketID: ticketID}, &out)

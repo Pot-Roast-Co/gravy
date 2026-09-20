@@ -98,6 +98,9 @@ type Service interface {
 	CancelDiscussion(ctx context.Context, ticketID string) error
 	// Continue retries a landing after a human resolved a conflict in the preserved worktree.
 	Continue(ctx context.Context, ticketID string, how core.Approval) (core.State, error)
+	// Requeue puts a parked ticket back in the queue, for a problem that was never the
+	// ticket's fault and needed nothing changed about the work.
+	Requeue(ctx context.Context, ticketID string) (core.State, error)
 	// MarkMerged records that a human merged a handed-off ticket themselves. It is the only
 	// way such a ticket reaches Done, and therefore the only way its dependents start.
 	MarkMerged(ctx context.Context, ticketID string) (core.State, error)

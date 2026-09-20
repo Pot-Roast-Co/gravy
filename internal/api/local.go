@@ -535,12 +535,42 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 	if err != nil {
 		return st, err
 	}
+	answered := make(map[string]bool, len(open))
 	for _, a := range open {
 		item := AttentionItem{Attention: a, Project: byProject[a.ProjectID], Age: now.Sub(a.CreatedAt)}
 		if t, ok := byTicket[a.TicketID]; ok {
 			item.Ticket = t
 		}
+		answered[a.TicketID] = true
 		st.Attention = append(st.Attention, item)
+	}
+
+	// A parked ticket with no open row is work nobody can reach.
+	//
+	// Needs You renders attention rows, the scheduler runs Ready tickets, and a ticket in
+	// needs_you with its row resolved is in neither: invisible on the screen that exists to
+	// show it, and skipped by the loop that would run it. Acknowledging used to do exactly
+	// that, and the ticket it stranded was only found by reading the database.
+	//
+	// The row is synthesised rather than written, because the fault is that the ticket is
+	// parked and unexplained, and inventing a stored reason would be a second lie on top of
+	// the first.
+	for _, t := range byTicket {
+		if t.State != core.StateNeedsYou || answered[t.ID] {
+			continue
+		}
+		st.Attention = append(st.Attention, AttentionItem{
+			Attention: core.Attention{
+				ID:        "unexplained-" + t.ID,
+				ProjectID: t.ProjectID,
+				TicketID:  t.ID,
+				Reason:    core.ReasonUnexplained,
+				CreatedAt: t.UpdatedAt,
+			},
+			Project: byProject[t.ProjectID],
+			Ticket:  t,
+			Age:     now.Sub(t.UpdatedAt),
+		})
 	}
 	SortAttention(st.Attention)
 	st.Buckets = l.Routes()

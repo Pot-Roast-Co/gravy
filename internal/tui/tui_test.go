@@ -39,6 +39,7 @@ type fakeService struct {
 	attached      []string
 	approvedHow   []core.Approval
 	merged        []string
+	requeued      []string
 	approved      []string
 	rejected      []string
 	changes       map[string]string
@@ -254,6 +255,14 @@ func (f *fakeService) AttachRepository(_ context.Context, projectID, path string
 	}
 	f.attached = append(f.attached, projectID+"="+path)
 	return core.Project{ID: projectID, RepoPath: path}, nil
+}
+
+func (f *fakeService) Requeue(_ context.Context, ticketID string) (core.State, error) {
+	if f.actionErr != nil {
+		return "", f.actionErr
+	}
+	f.requeued = append(f.requeued, ticketID)
+	return core.StateReady, nil
 }
 
 func (f *fakeService) MarkMerged(_ context.Context, ticketID string) (core.State, error) {

@@ -18,14 +18,21 @@ const (
 	ReasonMergeConflict    AttentionReason = "merge_conflict"
 	ReasonCheckoutDirty    AttentionReason = "checkout_dirty"
 	ReasonProviderAuth     AttentionReason = "provider_auth"
-	ReasonTicketCritique   AttentionReason = "ticket_critique"
-	ReasonHostUnavailable  AttentionReason = "host_unavailable"
+	// ReasonUnexplained is a ticket parked with no open row to say why.
+	//
+	// Never stored. It is synthesised when a needs_you ticket has no attention, so that work
+	// which is invisible to both the queue and the Needs You screen is at least visible as the
+	// anomaly it is.
+	ReasonUnexplained     AttentionReason = "unexplained"
+	ReasonTicketCritique  AttentionReason = "ticket_critique"
+	ReasonHostUnavailable AttentionReason = "host_unavailable"
 )
 
 // AllAttentionReasons lists every reason, in the order PRODUCT.md §8 presents them.
 var AllAttentionReasons = []AttentionReason{
 	ReasonReviewPending, ReasonAgentQuestion, ReasonPermissionReq, ReasonValidationFailed,
 	ReasonMergeConflict, ReasonCheckoutDirty, ReasonProviderAuth, ReasonTicketCritique,
+	ReasonUnexplained,
 	ReasonHostUnavailable,
 }
 

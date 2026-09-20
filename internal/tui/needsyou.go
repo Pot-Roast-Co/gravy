@@ -82,6 +82,21 @@ func actReject() reasonAction {
 	}}
 }
 
+// actRetry puts a parked ticket back in the queue.
+//
+// For a reason that was never the ticket's fault — an expired login, a machine that was off —
+// nothing about the work needs to change, and the only thing missing was a working agent. The
+// row is answered by fixing that and saying so.
+func actRetry() reasonAction {
+	return reasonAction{Key: "t", Help: "try again", Run: func(_ *needsYou, item api.AttentionItem, ctx ViewContext) tea.Cmd {
+		id := item.Attention.TicketID
+		return func() tea.Msg {
+			_, err := ctx.Svc.Requeue(context.Background(), id)
+			return attentionActedMsg{verb: "queued again", err: err}
+		}
+	}}
+}
+
 func actAcknowledge() reasonAction {
 	return reasonAction{Key: "a", Help: "acknowledge", Run: func(_ *needsYou, item api.AttentionItem, ctx ViewContext) tea.Cmd {
 		id := item.Attention.ID
@@ -195,6 +210,29 @@ var reasonRegistry = map[core.AttentionReason]reasonSpec{
 		Actions: []reasonAction{actContinueLanding(), actReject()},
 	},
 
+	// An expired login stops everything, not just this ticket, and gravy cannot fix it: the
+	// human signs in and says so. Acknowledging was the only action offered before this entry
+	// existed, and it resolved the row while leaving the ticket parked — out of the queue, off
+	// this screen, and reachable from nowhere.
+	core.ReasonProviderAuth: {
+		Detail: func(item api.AttentionItem, ctx ViewContext) []string {
+			out := []string{ctx.Theme.Warning.Render(
+				"  the agent's login has expired, so nothing will run until it is signed in again")}
+			if m, ok := item.Attention.Payload["model"].(string); ok && m != "" {
+				out = append(out, ctx.Theme.Muted.Render("  model: "+m))
+			}
+			if n, ok := item.Attention.Payload["note"].(string); ok && n != "" {
+				out = append(out, ctx.Theme.Muted.Render(
+					"  "+trunc(n, max(0, ctx.Width-4))))
+			}
+			return append(out,
+				"",
+				ctx.Theme.Text.Render("  sign in, then press t:"),
+				ctx.Theme.Key.Render("    claude")+ctx.Theme.Muted.Render("   (or codex / copilot, whichever this route uses)"),
+			)
+		},
+		Actions: []reasonAction{actRetry(), actReject()},
+	},
 	core.ReasonHostUnavailable: {
 		Detail: func(item api.AttentionItem, ctx ViewContext) []string {
 			var out []string
@@ -208,7 +246,10 @@ var reasonRegistry = map[core.AttentionReason]reasonSpec{
 			}
 			return out
 		},
-		Actions: []reasonAction{actSendBack(), actAcknowledge(), actReject()},
+		// Acknowledge stays: a machine that was off is a thing a human may simply note and
+		// deal with later. Retry leads, because it is what actually gets the work moving once
+		// the machine is back, and acknowledging alone leaves the ticket parked.
+		Actions: []reasonAction{actRetry(), actSendBack(), actAcknowledge(), actReject()},
 	},
 }
 
@@ -216,6 +257,9 @@ var reasonRegistry = map[core.AttentionReason]reasonSpec{
 //
 // A queue that crashes on an unfamiliar row is worse than one that shows it plainly: the row
 // still tells the human something needs them, which is the whole job.
+// Retry is offered as well as acknowledge: an unknown reason still parked a ticket, and a screen
+// whose only action leaves the work unreachable is worse than one that admits it does not know
+// what the row means.
 var genericSpec = reasonSpec{
 	Detail: func(item api.AttentionItem, ctx ViewContext) []string {
 		out := []string{ctx.Theme.Muted.Render("  this version of Gravy has no detail view for this reason")}
@@ -230,7 +274,7 @@ var genericSpec = reasonSpec{
 		}
 		return out
 	},
-	Actions: []reasonAction{actAcknowledge()},
+	Actions: []reasonAction{actRetry(), actAcknowledge()},
 }
 
 func specFor(r core.AttentionReason) reasonSpec {

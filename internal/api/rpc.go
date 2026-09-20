@@ -137,6 +137,7 @@ const (
 	mKillRun          = "KillRun"
 	mContinue         = "Continue"
 	mMarkMerged       = "MarkMerged"
+	mRequeue          = "Requeue"
 	mListQueue        = "ListQueue"
 	mUpdateTicket     = "UpdateTicket"
 	mReorderTicket    = "ReorderTicket"
