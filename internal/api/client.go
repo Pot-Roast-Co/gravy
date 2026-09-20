@@ -220,6 +220,11 @@ func (c *Client) ListRuns(ctx context.Context, ticketID string) ([]core.Run, err
 	return out, c.call(ctx, mListRuns, ticketIDParams{TicketID: ticketID}, &out)
 }
 
+func (c *Client) ListProgress(ctx context.Context, ticketID string) ([]core.Progress, error) {
+	var out []core.Progress
+	return out, c.call(ctx, mListProgress, ticketIDParams{TicketID: ticketID}, &out)
+}
+
 func (c *Client) KillRun(ctx context.Context, runID string) error {
 	return c.call(ctx, mKillRun, runIDParams{RunID: runID}, nil)
 }

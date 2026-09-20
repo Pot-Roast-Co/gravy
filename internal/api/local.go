@@ -380,6 +380,11 @@ func (l *Local) ListRuns(ctx context.Context, ticketID string) ([]core.Run, erro
 	return l.db.ListRunsForTicket(ctx, ticketID)
 }
 
+// ListProgress returns a ticket's progress journal, oldest first.
+func (l *Local) ListProgress(ctx context.Context, ticketID string) ([]core.Progress, error) {
+	return l.db.ListProgress(ctx, ticketID)
+}
+
 // ListAttention returns the open Needs You queue.
 func (l *Local) ListAttention(ctx context.Context) ([]core.Attention, error) {
 	return l.db.ListOpenAttention(ctx)
@@ -486,7 +491,7 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 		for _, t := range tickets {
 			switch {
 			case inFlight(t.State):
-				rt := RunningTicket{Ticket: t, Project: p, Activity: activityFor(t.State)}
+				rt := RunningTicket{Ticket: t, Project: p, Activity: l.activity(ctx, t)}
 				runs, err := l.db.ListRunsForTicket(ctx, t.ID)
 				if err != nil {
 					return st, err
@@ -593,6 +598,21 @@ func inFlight(s core.State) bool {
 	default:
 		return false
 	}
+}
+
+// activity is what a ticket is doing now: the newest line of its progress journal.
+//
+// The journal is the better answer because a state name cannot distinguish fetching from
+// building a prompt from waiting on the third validation step — they are all "running". The
+// state mapping stays as the fallback for the window a ticket is in before anything has been
+// narrated, and for a journal a failed write left behind. A journal that cannot be read is not
+// worth failing a dashboard over, so a read error falls back too.
+func (l *Local) activity(ctx context.Context, t core.Ticket) string {
+	latest, err := l.db.LatestProgress(ctx, t.ID)
+	if err != nil || strings.TrimSpace(latest.Detail) == "" {
+		return activityFor(t.State)
+	}
+	return latest.Detail
 }
 
 // activityFor phrases a state as what the agent is doing, for a row a human scans.

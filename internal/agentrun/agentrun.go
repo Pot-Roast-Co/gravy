@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pot-roast-co/gravy/internal/contextbuild"
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/git"
 	"github.com/pot-roast-co/gravy/internal/host"
@@ -33,6 +34,9 @@ type Store interface {
 	CreateRun(ctx context.Context, r core.Run) error
 	UpdateRun(ctx context.Context, r core.Run) error
 	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
+	// AddProgress appends one entry to a ticket's journal. It is how every phase boundary
+	// becomes something a human can read without opening a log.
+	AddProgress(ctx context.Context, p core.Progress) error
 	OpenAttention(ctx context.Context, a core.Attention) error
 	ResolveAttentionForTicket(ctx context.Context, ticketID string) (int, error)
 	SetProviderUnavailable(ctx context.Context, a core.ProviderAvailability) error
@@ -298,6 +302,8 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 	// This ordering is the whole reason queued work builds on whatever merged before it. A
 	// worktree cut from a stale target silently omits the previous ticket's work, and the
 	// agent then reimplements or conflicts with it.
+	o.note(ctx, ticket.ID, "", core.PhaseFetch,
+		"fetching origin so the work starts on top of the latest %s", project.TargetBranch)
 	if err := repo.Fetch(ctx); err != nil {
 		return res, fmt.Errorf("agentrun: fetch %s: %w", project.Slug, err)
 	}
@@ -322,8 +328,12 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		if wt, err = repo.CreateWorktree(ctx, branch, base); err != nil {
 			return res, fmt.Errorf("agentrun: %w", err)
 		}
+		o.note(ctx, ticket.ID, "", core.PhaseWorktree,
+			"worktree cut at %s on %s, based on %s", wt.Path, wt.Branch, base)
 	} else {
 		o.log.Info("continuing in the existing worktree", "ticket", ticket.ID, "branch", branch)
+		o.note(ctx, ticket.ID, "", core.PhaseWorktree,
+			"continuing in the existing worktree at %s on %s", wt.Path, wt.Branch)
 	}
 	res.Worktree = wt
 
@@ -379,6 +389,13 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, fmt.Errorf("agentrun: %w", err)
 	}
 
+	// The result record, from the diff and the validation evidence. Never from what the agent
+	// said about itself: a self-report from the party with a motive to declare success is not
+	// evidence, and the journal is read as fact by whoever picks this ticket up.
+	o.note(ctx, ticket.ID, loop.runID, core.PhaseSummary,
+		"recording the result from the diff: commit %s on %s after %s, validation green",
+		shortCommit(loop.commit), wt.Branch, attemptsWord(loop.attempts))
+
 	// The advisory review runs here, between Reviewing and Review. Nothing below reads its
 	// verdict: it annotates the diff for a human and never decides the ticket's fate. Leaving
 	// the ticket in Reviewing would strand it — no human action moves it, and its project
@@ -409,8 +426,18 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, fmt.Errorf("agentrun: open review attention: %w", err)
 	}
 
+	o.note(ctx, ticket.ID, loop.runID, core.PhaseHandoff, "moved to Review — waiting on you")
+
 	res.FinalState = state
 	return res, nil
+}
+
+// attemptsWord renders an attempt count as something that reads as a sentence.
+func attemptsWord(n int) string {
+	if n == 1 {
+		return "1 attempt"
+	}
+	return fmt.Sprintf("%d attempts", n)
 }
 
 // loopResult is what the attempt loop produced.
@@ -500,7 +527,7 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 			res.commit = c
 		}
 
-		res.validation, err = o.runValidation(ctx, h, project, wt, runID)
+		res.validation, err = o.runValidation(ctx, h, ticket, project, wt, runID)
 		if err != nil {
 			return res, err
 		}
@@ -520,6 +547,9 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 		priorFailure = failureContext(outcome, res.validation)
 
 		if attempt < maxAttempts {
+			o.note(ctx, ticket.ID, runID, core.PhaseRetry,
+				"attempt %d of %d did not pass; retrying with the failure in the prompt",
+				attempt, maxAttempts)
 			retry := attempt
 			if err := o.updateTicketFields(ctx, ticket.ID, func(t *core.Ticket) {
 				t.RetryCount = retry
@@ -541,10 +571,17 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 		return "", provider.Outcome{}, fmt.Errorf("agentrun: provider %q is not registered", a.ProviderID)
 	}
 
+	maxAttempts := o.cfg.SelfCorrectionBudget + 1
+
 	prompt, err := o.prompts.Build(ctx, ticket, project, attempt)
 	if err != nil {
 		return "", provider.Outcome{}, fmt.Errorf("agentrun: build prompt: %w", err)
 	}
+	// Before the run row exists, so the entry carries no run id — which is the whole reason the
+	// journal hangs off the ticket.
+	o.note(ctx, ticket.ID, "", core.PhasePrompt,
+		"prompt built for attempt %d of %d: about %d tokens",
+		attempt.Number, maxAttempts, contextbuild.Tokens(prompt))
 
 	runID := o.newID()
 	runDir := filepath.Join(o.cfg.RunsDir, runID)
@@ -581,6 +618,9 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	if err != nil {
 		return runID, provider.Outcome{}, fmt.Errorf("agentrun: start agent: %w", err)
 	}
+	started := time.Now()
+	o.note(ctx, ticket.ID, runID, core.PhaseAgentStart, "%s/%s started%s, attempt %d of %d",
+		a.ProviderID, a.Model, pidNote(pidOf(handle)), attempt.Number, maxAttempts)
 
 	o.trackLive(ticket.ID, &liveRun{cancel: cancel, handle: handle})
 	defer o.untrackLive(ticket.ID)
@@ -617,6 +657,10 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	}
 	ended := time.Now()
 
+	o.note(ctx, ticket.ID, runID, core.PhaseAgentExit, "%s/%s exited %s after %d turns in %s%s",
+		a.ProviderID, a.Model, outcome.Class.String(), outcome.Turns,
+		took(ended.Sub(started)), evidence(outcome.Note))
+
 	run.State = core.StateValidating
 	run.FailureClass = outcome.Class
 	run.FailureNote = outcome.Note
@@ -635,24 +679,75 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	return runID, outcome, nil
 }
 
-// runValidation runs the project's steps and records each result.
-func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, project core.Project, wt git.Worktree, runID string) (validate.Results, error) {
+// runValidation runs the project's steps, recording and narrating each one as it starts and as
+// it settles.
+//
+// Per step rather than per sequence: validation is where a run spends its minutes, and a journal
+// written after the last step tells the human nothing for the ten of them they are waiting on
+// the first. The step that is running now is the sentence they most want, so it is written before
+// the command is, not after. The row and the settled sentence are written together so the two can
+// never disagree about what happened or in what order.
+func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, ticket core.Ticket, project core.Project, wt git.Worktree, runID string) (validate.Results, error) {
 	if len(project.Validation) == 0 {
 		return nil, nil
 	}
+
+	// The first recording failure is carried out rather than returned from the observer, which
+	// has nowhere to return to. The remaining steps still run and are still narrated: a database
+	// that would not take one row is no reason to stop telling the human what is happening.
+	var recordErr error
 	// A fresh runner per run, so each run's logs land under runs/<run-id>/validation rather
 	// than every run overwriting one shared file and destroying the evidence for the last.
-	results, err := o.newValidator(runID).Run(ctx, h, wt.Path, project.Validation)
+	results, err := runSteps(ctx, o.newValidator(runID), h, wt.Path, project.Validation, func(at validate.Observation) {
+		if at.Kind == validate.StepStarted {
+			o.note(ctx, ticket.ID, runID, core.PhaseValidationStep, "running %s", stepNow(at))
+			return
+		}
+		r := at.Result
+		// The id is the step's configured position, so the rows read back in the order the
+		// steps were written however the sequence ended. A start never makes a row: it is a
+		// sentence about a step, not a result for one.
+		id := fmt.Sprintf("%s-%d", runID, at.Index)
+		if aerr := o.store.AddValidation(ctx, id, runID, r.Step, r.ExitCode, r.Duration.Milliseconds(), r.LogPath); aerr != nil && recordErr == nil {
+			recordErr = fmt.Errorf("agentrun: record validation: %w", aerr)
+		}
+		o.note(ctx, ticket.ID, runID, core.PhaseValidationStep, "%s %s in %s (exit %d)",
+			r.Step, r.Outcome, took(r.Duration), r.ExitCode)
+	})
 	if err != nil {
 		return results, fmt.Errorf("agentrun: validation: %w", err)
 	}
-	for i, r := range results {
-		id := fmt.Sprintf("%s-%d", runID, i)
-		if err := o.store.AddValidation(ctx, id, runID, r.Step, r.ExitCode, r.Duration.Milliseconds(), r.LogPath); err != nil {
-			return results, fmt.Errorf("agentrun: record validation: %w", err)
-		}
+	return results, recordErr
+}
+
+// stepNow renders the step a human is waiting on: what is running, and how far through.
+func stepNow(at validate.Observation) string {
+	return fmt.Sprintf("%s (%s), step %d of %d",
+		at.Step.Name, flatten(at.Step.Cmd, 80), at.Index+1, at.Total)
+}
+
+// runSteps runs validation, reporting each step as it starts and settles when the runner can say.
+// observe is required; a caller with nothing to say should call the runner directly.
+//
+// The fallback narrates settled results in a batch afterwards rather than not at all: a runner
+// that cannot report as it goes — a stub in a test, an adapter written later — must still produce
+// the same results in the same order, just later than it might have, and with nothing to say
+// about a step while it was running, because it never said so.
+func runSteps(ctx context.Context, r validate.Runner, h host.Host, worktree string,
+	steps []validate.Step, observe validate.StepObserver) (validate.Results, error) {
+
+	if or, ok := r.(validate.ObservingRunner); ok {
+		return or.RunObserved(ctx, h, worktree, steps, observe)
 	}
-	return results, nil
+	results, err := r.Run(ctx, h, worktree, steps)
+	for i, res := range results {
+		at := validate.Observation{Kind: validate.StepSettled, Index: i, Total: len(steps), Result: res}
+		if i < len(steps) {
+			at.Step = steps[i]
+		}
+		observe(at)
+	}
+	return results, err
 }
 
 // handleProviderFailure cools down the model and requeues quota/rate-limit failures.
@@ -702,6 +797,9 @@ func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ti
 		}
 		o.log.Info("provider limit; ticket returned to routing", "ticket", ticket.ID,
 			"provider", a.ProviderID, "model", a.Model, "class", outcome.Class.String())
+		o.note(ctx, ticket.ID, "", core.PhaseHandoff,
+			"requeued: %s cooldown on %s/%s for %s",
+			cooldownWord(outcome.Class), a.ProviderID, a.Model, cooldown)
 		return nil
 	}
 
@@ -716,6 +814,15 @@ func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ti
 		"note":     outcome.Note,
 	})
 	return err
+}
+
+// cooldownWord names a provider-side limit the way a human would say it, rather than as the
+// class token the run row stores.
+func cooldownWord(c core.FailureClass) string {
+	if c == provider.RateLimited {
+		return "rate limit"
+	}
+	return "quota"
 }
 
 func (o *Orchestrator) cooldownFor(c core.FailureClass) time.Duration {
@@ -787,6 +894,10 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 	}, ticket.Title); err != nil {
 		return state, fmt.Errorf("agentrun: open attention: %w", err)
 	}
+
+	// Every route into Needs You passes through here, so narrating it here is what stops the
+	// next reason added from being the silent one.
+	o.note(ctx, ticket.ID, runID, core.PhaseHandoff, "parked in Needs You: %s", reason)
 	return state, nil
 }
 

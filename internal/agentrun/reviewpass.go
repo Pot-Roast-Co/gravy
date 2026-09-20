@@ -44,15 +44,39 @@ func (o *Orchestrator) runReview(ctx context.Context, ticket core.Ticket, projec
 
 	diff, err := repo.Diff(ctx, wt, project.TargetBranch)
 	if err != nil {
+		o.note(ctx, ticket.ID, loop.runID, core.PhaseReview,
+			"advisory review skipped: the diff could not be read%s", evidence(err.Error()))
 		o.recordVerdict(ctx, loop.runID, review.Verdict{
 			Unavailable: "the diff could not be read: " + err.Error()})
 		return
 	}
+	o.note(ctx, ticket.ID, loop.runID, core.PhaseReview,
+		"advisory review reading %d changed file(s) against %s",
+		len(diff.Files), project.TargetBranch)
 
 	v := o.reviewer.Review(ctx, review.Request{
 		Ticket: ticket, Project: project, Diff: diff, Validation: loop.validation,
 	})
 	o.recordVerdict(ctx, loop.runID, v)
+	o.note(ctx, ticket.ID, loop.runID, core.PhaseReview, "advisory review: %s", verdictLine(v))
+}
+
+// verdictLine renders an advisory verdict as one sentence.
+//
+// A review that could not run says so plainly. Advisory means it never changes what happens to
+// the ticket — which is exactly why a failed review must not read like a clean pass.
+func verdictLine(v review.Verdict) string {
+	if !v.Available() {
+		if v.Unavailable != "" {
+			return "unavailable" + evidence(v.Unavailable)
+		}
+		return "unavailable"
+	}
+	line := fmt.Sprintf("%s, %d finding(s)", v.Overall, len(v.Findings))
+	if s := strings.TrimSpace(v.Summary); s != "" {
+		line += evidence(s)
+	}
+	return line
 }
 
 func (o *Orchestrator) recordVerdict(ctx context.Context, runID string, v review.Verdict) {

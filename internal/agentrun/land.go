@@ -132,6 +132,8 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return "", fmt.Errorf("land: repository does not support landing")
 	}
 
+	o.note(ctx, ticket.ID, "", core.PhaseFetch,
+		"fetching origin before landing onto %s", project.TargetBranch)
 	if err := repo.Fetch(ctx); err != nil {
 		return l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
 			"error": fmt.Sprintf("fetch failed: %v", err),
@@ -158,11 +160,16 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return "", fmt.Errorf("land: %w", err)
 	}
 
+	// The rebase phase is narrated as worktree work, which is what it is: the ticket's branch
+	// being replayed onto a target that has moved since the work was reviewed.
+	o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebasing %s onto %s", wt.Branch, target)
 	rebase, err := lander.Rebase(ctx, wt, target)
 	if err != nil {
 		return "", fmt.Errorf("land: %w", err)
 	}
 	if !rebase.Clean {
+		o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebase stopped: %s",
+			rebaseTrouble(rebase))
 		// Gravy attempts nothing further. No resolution, no retry loop, no three-way
 		// cleverness: the worktree is preserved exactly as the human needs to find it, and
 		// the conflicting paths are recorded so they do not have to go looking.
@@ -186,11 +193,26 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return l.park(ctx, ticket, core.ReasonMergeConflict, payload)
 	}
 
+	o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebased cleanly onto %s", target)
+
 	// Validate every landing attempt. A no-op rebase can follow a failed validation
 	// or a human resolution, so it is not evidence that this tree is green.
 	if len(project.Validation) > 0 {
 		res.Revalidated = true
-		results, err := o.newValidator(o.newID()).Run(ctx, h, wt.Path, project.Validation)
+		// Narrated step by step, for the same reason the run's own validation is: an approval
+		// that sits for ten minutes on a test suite should say which step it is on.
+		results, err := runSteps(ctx, o.newValidator(o.newID()), h, wt.Path, project.Validation,
+			func(at validate.Observation) {
+				if at.Kind == validate.StepStarted {
+					o.note(ctx, ticket.ID, "", core.PhaseValidationStep,
+						"re-validating before landing: running %s", stepNow(at))
+					return
+				}
+				r := at.Result
+				o.note(ctx, ticket.ID, "", core.PhaseValidationStep,
+					"re-validating before landing: %s %s in %s (exit %d)",
+					r.Step, r.Outcome, took(r.Duration), r.ExitCode)
+			})
 		res.Validation = results
 		if err != nil {
 			return "", fmt.Errorf("land: re-validation: %w", err)
@@ -211,6 +233,8 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		if err != nil {
 			return "", fmt.Errorf("land: %w", err)
 		}
+		o.note(ctx, ticket.ID, "", core.PhaseHandoff,
+			"handed over to you: %s is rebased onto %s and green, not merged", wt.Branch, target)
 		return state, nil
 	}
 
@@ -239,6 +263,8 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		})
 	}
 	res.MergeCommit, res.Pushed = merged.MergeCommit, merged.Pushed
+	o.note(ctx, ticket.ID, "", core.PhaseHandoff, "squashed onto %s as %s%s",
+		project.TargetBranch, shortCommit(merged.MergeCommit), pushedWord(merged.Pushed))
 
 	// Done, then clean up. The order matters: a failure to remove a worktree must not undo a
 	// merge that already happened.
@@ -292,7 +318,33 @@ func (l *Lander) park(ctx context.Context, ticket core.Ticket, reason core.Atten
 	}, ticket.Title); err != nil {
 		return state, fmt.Errorf("land: open attention: %w", err)
 	}
+	o.note(ctx, ticket.ID, "", core.PhaseHandoff, "parked in Needs You: %s", reason)
 	return state, nil
+}
+
+// rebaseTrouble says what stopped a rebase, telling a refusal apart from a conflict.
+//
+// The distinction is the whole of the landing rule: git declining to start is not the same event
+// as commits that would not replay, and a human sent to look for overlapping edits that do not
+// exist has been sent to the wrong place.
+func rebaseTrouble(r git.RebaseResult) string {
+	what := fmt.Sprintf("%d conflicting file(s)", len(r.ConflictFiles))
+	if r.Refused {
+		what = "git would not start it"
+	}
+	if r.Detail != "" {
+		return what + evidence(r.Detail)
+	}
+	return what
+}
+
+// pushedWord says whether a merge reached the remote, because a squash that stayed local is a
+// different thing to have done.
+func pushedWord(pushed bool) string {
+	if pushed {
+		return ", pushed"
+	}
+	return ", not pushed"
 }
 
 // landRepo is the extra git surface landing needs beyond Repo.

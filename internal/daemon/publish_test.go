@@ -29,6 +29,7 @@ func (silentStore) AddValidation(context.Context, string, string, string, int, i
 func (silentStore) SetProviderUnavailable(context.Context, core.ProviderAvailability) error {
 	return nil
 }
+func (silentStore) AddProgress(context.Context, core.Progress) error { return nil }
 
 type recorder struct{ events []api.Event }
 
@@ -87,6 +88,30 @@ func TestDaemonWritesReachClients(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the run-started event does not identify the run: %+v", rec.events)
+	}
+}
+
+// TestProgressWakesClients: a journal entry nobody is told about is a journal nobody reads. The
+// Running screen is push-driven with no ticker, so an Activity that only changes in the database
+// changes nothing on the screen it was written for.
+//
+// A ticket-changed event rather than a run-changed one, because the phases before an agent starts
+// have no run at all — which is the entire reason the journal hangs off the ticket.
+func TestProgressWakesClients(t *testing.T) {
+	rec := &recorder{}
+	s := WithEvents(silentStore{}, rec)
+
+	if err := s.AddProgress(context.Background(), core.Progress{
+		ID: "pg1", TicketID: "t1", Phase: core.PhaseFetch, Detail: "fetching origin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rec.events) != 1 {
+		t.Fatalf("got %d events for one journal entry: %+v", len(rec.events), rec.events)
+	}
+	if got := rec.events[0]; got.Kind != api.EventTicketChanged || got.TicketID != "t1" {
+		t.Errorf("event = %+v, want a ticket-changed event naming t1", got)
 	}
 }
 

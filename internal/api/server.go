@@ -431,6 +431,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.ListRuns(ctx, p.TicketID)
 
+	case mListProgress:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ListProgress(ctx, p.TicketID)
+
 	case mGetReview:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {

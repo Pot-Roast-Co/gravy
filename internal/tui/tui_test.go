@@ -455,7 +455,11 @@ func (f *fakeService) DeleteTicket(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }
-func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error)    { return nil, nil }
+func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error) { return nil, nil }
+func (f *fakeService) ListProgress(context.Context, string) ([]core.Progress, error) {
+	return nil, nil
+}
+
 func (f *fakeService) ListAttention(context.Context) ([]core.Attention, error) { return nil, nil }
 func (f *fakeService) ResolveAttention(_ context.Context, id string) error {
 	if f.actionErr != nil {

@@ -272,3 +272,160 @@ func lastN(s string, n int) string {
 	}
 	return s[len(s)-n:]
 }
+
+// TestObserverSeesEachStepAsItSettles is what the optional interface exists for: a caller that
+// narrates validation needs the first step's result while the second is still running, not a
+// batch once the sequence is over.
+//
+// The observation is taken before the next step starts, so a runner that collected results and
+// reported them at the end would fail here — which is exactly the behaviour being replaced.
+func TestObserverSeesEachStepAsItSettles(t *testing.T) {
+	r, h, wt := testRunner(t)
+	marker := filepath.Join(wt, "second-started")
+
+	var seen []Result
+	results, err := r.RunObserved(context.Background(), h, wt, []core.Step{
+		// The second step records what the observer had been told by the time it ran.
+		{Name: "build", Cmd: "echo building", Required: true},
+		{Name: "test", Cmd: "touch " + marker + "; echo failing; exit 1", Required: true},
+		{Name: "lint", Cmd: "echo linting", Required: true},
+	}, func(at Observation) {
+		if at.Kind != StepSettled {
+			return
+		}
+		res := at.Result
+		if res.Step == "test" {
+			if _, err := os.Stat(marker); err != nil {
+				t.Errorf("the test step was observed before it ran: %v", err)
+			}
+		}
+		if len(seen) == 0 {
+			if _, err := os.Stat(marker); err == nil {
+				t.Error("the build step was not observed until the test step had started")
+			}
+		}
+		seen = append(seen, res)
+	})
+	if err != nil {
+		t.Fatalf("RunObserved: %v", err)
+	}
+
+	if len(seen) != len(results) {
+		t.Fatalf("observed %d steps, want %d", len(seen), len(results))
+	}
+	for i := range results {
+		if seen[i] != results[i] {
+			t.Errorf("observation %d = %+v, want %+v", i, seen[i], results[i])
+		}
+	}
+	// A step skipped after a required failure is observed too: "we never got here" is a thing
+	// the human needs told, and omitting it makes a skipped step indistinguishable from one
+	// still running.
+	if seen[2].Step != "lint" || seen[2].Outcome != Skipped {
+		t.Errorf("third observation = %+v, want the skipped lint step", seen[2])
+	}
+}
+
+// TestRunIsRunObservedWithoutAnObserver keeps the plain Runner contract from ARCHITECTURE §4.7
+// intact: nothing about the sequence changes when nobody is watching.
+func TestRunIsRunObservedWithoutAnObserver(t *testing.T) {
+	r, h, wt := testRunner(t)
+	steps := []core.Step{
+		{Name: "build", Cmd: "echo building", Required: true},
+		{Name: "test", Cmd: "exit 1", Required: true},
+		{Name: "lint", Cmd: "echo linting", Required: true},
+	}
+
+	plain, err := r.Run(context.Background(), h, wt, steps)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(plain) != 3 || plain[1].Outcome != Failed || plain[2].Outcome != Skipped {
+		t.Fatalf("Run with no observer = %+v", plain)
+	}
+
+	watched, err := r.RunObserved(context.Background(), h, wt, steps, func(Observation) {})
+	if err != nil {
+		t.Fatalf("RunObserved: %v", err)
+	}
+	if len(watched) != len(plain) {
+		t.Fatalf("watched %d steps, want %d", len(watched), len(plain))
+	}
+	// Duration and captured output differ run to run; what must not differ is which steps ran
+	// and how they ended.
+	for i := range plain {
+		a, b := plain[i], watched[i]
+		if a.Step != b.Step || a.Outcome != b.Outcome || a.ExitCode != b.ExitCode || a.Required != b.Required {
+			t.Errorf("step %d observed = %+v, want the unobserved %+v", i, b, a)
+		}
+	}
+}
+
+// TestObserverSeesAStepStartBeforeItsCommandRuns is the correction this ticket was sent back for:
+// the entry a human most wants is the one naming the step that is running now, and a journal that
+// can only report finished steps is silent for exactly as long as the slow step takes.
+//
+// The start has to be reported before the command executes or it is just a differently worded
+// result, so the step's command touches a marker and the assertion is made against the filesystem
+// rather than against the order the observer happened to be called in.
+func TestObserverSeesAStepStartBeforeItsCommandRuns(t *testing.T) {
+	r, h, wt := testRunner(t)
+	marker := filepath.Join(wt, "test-ran")
+
+	var seen []Observation
+	results, err := r.RunObserved(context.Background(), h, wt, []core.Step{
+		{Name: "build", Cmd: "echo building", Required: true},
+		{Name: "test", Cmd: "touch " + marker + "; exit 1", Required: true},
+		{Name: "lint", Cmd: "echo linting", Required: true},
+	}, func(at Observation) {
+		if at.Step.Name == "test" {
+			_, err := os.Stat(marker)
+			switch at.Kind {
+			case StepStarted:
+				if err == nil {
+					t.Error("the test step was announced only after its command had run")
+				}
+			case StepSettled:
+				if err != nil {
+					t.Errorf("the test step settled before its command ran: %v", err)
+				}
+			}
+		}
+		seen = append(seen, at)
+	})
+	if err != nil {
+		t.Fatalf("RunObserved: %v", err)
+	}
+
+	// A skipped step never started, so it is reported once. Announcing one would put a step
+	// that never ran on the Running screen as the thing currently happening.
+	want := []Observation{
+		{Kind: StepStarted, Index: 0, Total: 3},
+		{Kind: StepSettled, Index: 0, Total: 3},
+		{Kind: StepStarted, Index: 1, Total: 3},
+		{Kind: StepSettled, Index: 1, Total: 3},
+		{Kind: StepSettled, Index: 2, Total: 3},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("got %d observations, want %d: %+v", len(seen), len(want), seen)
+	}
+	for i, w := range want {
+		got := seen[i]
+		if got.Kind != w.Kind || got.Index != w.Index || got.Total != w.Total {
+			t.Errorf("observation %d = %s of step %d/%d, want %s of step %d/%d",
+				i, got.Kind, got.Index, got.Total, w.Kind, w.Index, w.Total)
+		}
+	}
+
+	// The start carries the configured step, because "running test (go test ./...)" is the
+	// sentence, and a caller holding only a name would have to be handed the sequence too.
+	if start := seen[2]; start.Step.Name != "test" || start.Step.Cmd == "" {
+		t.Errorf("the start observation = %+v, want the configured step", start.Step)
+	}
+	if got := seen[4].Result.Outcome; got != Skipped {
+		t.Errorf("the lint observation = %v, want the skipped result", got)
+	}
+	if n := len(results); n != 3 {
+		t.Errorf("got %d results, want 3", n)
+	}
+}

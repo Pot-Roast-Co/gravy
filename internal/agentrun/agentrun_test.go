@@ -202,6 +202,15 @@ func readAll(r interface{ Read([]byte) (int, error) }) (string, error) {
 // newHarness builds an upstream repo, a clone, a store, and a wired orchestrator.
 func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harness {
 	t.Helper()
+	return newHarnessWithValidator(t, scripts, cfg, nil)
+}
+
+// newHarnessWithValidator is newHarness with the validation runner replaced, for a test that
+// needs to watch the sequence from inside it rather than run real commands. A nil factory means
+// the real runner.
+func newHarnessWithValidator(t *testing.T, scripts []fake.Script, cfg agentrun.Config,
+	newValidator func(runID string) validate.Runner) *harness {
+	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
 	h := host.NewLocal("local", 8)
@@ -236,13 +245,17 @@ func newHarness(t *testing.T, scripts []fake.Script, cfg agentrun.Config) *harne
 	p := fake.New("fake", fake.WithScripts(scripts...))
 	bench := &workBench{inner: p, t: t}
 
+	if newValidator == nil {
+		newValidator = func(runID string) validate.Runner {
+			return validate.NewRunner(filepath.Join(home, "runs", runID, "validation"))
+		}
+	}
+
 	orch := agentrun.New(
 		dbStore{db},
 		agentrun.LocalRepos{Default: h, Home: home},
 		slots,
-		func(runID string) validate.Runner {
-			return validate.NewRunner(filepath.Join(home, "runs", runID, "validation"))
-		},
+		newValidator,
 		agentrun.SimplePrompt{},
 		cfg,
 		ids.next,

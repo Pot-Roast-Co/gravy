@@ -93,6 +93,17 @@ func (s *PublishingStore) AddValidation(ctx context.Context, id, runID, step str
 	return err
 }
 
+func (s *PublishingStore) AddProgress(ctx context.Context, p core.Progress) error {
+	err := s.Store.AddProgress(ctx, p)
+	if err == nil {
+		// A ticket-changed event rather than a run-changed one: the journal belongs to the
+		// ticket, the phases before an agent starts have no run at all, and the Activity a
+		// client renders for a running ticket is read from it.
+		s.publish(api.Event{Kind: api.EventTicketChanged, TicketID: p.TicketID})
+	}
+	return err
+}
+
 func (s *PublishingStore) OpenAttention(ctx context.Context, a core.Attention) error {
 	err := s.Store.OpenAttention(ctx, a)
 	if err == nil {

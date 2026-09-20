@@ -118,6 +118,7 @@ const (
 	mCreateTicket     = "CreateTicket"
 	mMoveTicket       = "MoveTicket"
 	mListRuns         = "ListRuns"
+	mListProgress     = "ListProgress"
 	mGetReview        = "GetReview"
 	mApprove          = "Approve"
 	mRequestChanges   = "RequestChanges"

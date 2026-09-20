@@ -118,6 +118,54 @@ type Runner interface {
 	Run(ctx context.Context, h host.Host, worktree string, steps []Step) (Results, error)
 }
 
+// ObservationKind says whether a step is beginning or has ended.
+type ObservationKind string
+
+// The observation kinds.
+const (
+	// StepStarted is reported immediately before a step's command is executed.
+	StepStarted ObservationKind = "started"
+	// StepSettled is reported the moment a step has a Result, including one recorded as
+	// Skipped because an earlier required step failed.
+	StepSettled ObservationKind = "settled"
+)
+
+// Observation is one thing that happened to one step of a sequence.
+type Observation struct {
+	Kind ObservationKind
+	// Step is the configured step, so an observer can name the command a human is waiting on
+	// without being handed the whole sequence to index into.
+	Step Step
+	// Index is the step's position in configured order and Total how many were configured:
+	// "step 2 of 5" is the part of a narration that says how much is left.
+	Index int
+	Total int
+	// Result is how the step ended. It is the zero Result for StepStarted, which has not.
+	Result Result
+}
+
+// StepObserver is told when each step begins and when it settles.
+//
+// It is called from the goroutine running the sequence, in configured order, with the start
+// reported before the command is executed and the result before the next step begins — which is
+// the property callers rely on. A validation sequence is where a run spends most of its minutes,
+// and a narration that can only say what has finished says nothing at all about the twelve-minute
+// test suite the human is actually waiting on.
+//
+// A skipped step never started, so it is reported once, settled.
+type StepObserver func(Observation)
+
+// ObservingRunner is a Runner that can report each step as it begins and completes.
+//
+// Optional rather than part of Runner: §4.7 of ARCHITECTURE.md defines that interface, and a
+// runner with nothing to say as it goes is still a perfectly good runner. Callers type-assert
+// for it and fall back to the plain Run, exactly as the orchestrator does for a provider handle
+// that can name its pid.
+type ObservingRunner interface {
+	Runner
+	RunObserved(ctx context.Context, h host.Host, worktree string, steps []Step, observe StepObserver) (Results, error)
+}
+
 // DefaultTailBytes is how much step output is kept inline. The full output always goes to the
 // step's log file.
 const DefaultTailBytes = 8 * 1024
@@ -148,26 +196,51 @@ func NewRunner(logDir string) *StepRunner {
 // minutes the human is waiting on. A failed optional step records a warning and the sequence
 // continues.
 func (r *StepRunner) Run(ctx context.Context, h host.Host, worktree string, steps []Step) (Results, error) {
+	return r.RunObserved(ctx, h, worktree, steps, nil)
+}
+
+// RunObserved is Run, telling observe about each step as it starts and as it settles.
+//
+// A nil observer is the plain Run, which is why Run is written in terms of this rather than the
+// other way round: one sequence, so a step cannot be recorded twice or reported in an order the
+// results do not have.
+func (r *StepRunner) RunObserved(ctx context.Context, h host.Host, worktree string, steps []Step, observe StepObserver) (Results, error) {
 	if worktree == "" {
 		return nil, fmt.Errorf("validate: no worktree given")
+	}
+
+	report := func(obs Observation) {
+		if observe != nil {
+			observe(obs)
+		}
 	}
 
 	results := make(Results, 0, len(steps))
 	stopped := false
 
-	for _, step := range steps {
+	for i, step := range steps {
+		at := Observation{Step: step, Index: i, Total: len(steps)}
+
 		if stopped {
-			results = append(results, Result{
-				Step: step.Name, Outcome: Skipped, Required: step.Required,
-			})
+			skipped := Result{Step: step.Name, Outcome: Skipped, Required: step.Required}
+			results = append(results, skipped)
+			at.Kind, at.Result = StepSettled, skipped
+			report(at)
 			continue
 		}
+
+		// Announced before the command exists, not after: the window this is for is the one
+		// where the step is running and nothing can be said about how it went.
+		at.Kind = StepStarted
+		report(at)
 
 		res, err := r.runStep(ctx, h, worktree, step)
 		if err != nil {
 			return results, err
 		}
 		results = append(results, res)
+		at.Kind, at.Result = StepSettled, res
+		report(at)
 
 		if res.Required && res.Failed() {
 			stopped = true
@@ -339,4 +412,7 @@ func tail(s string, n int) string {
 	return "…\n" + s
 }
 
-var _ Runner = (*StepRunner)(nil)
+var (
+	_ Runner          = (*StepRunner)(nil)
+	_ ObservingRunner = (*StepRunner)(nil)
+)

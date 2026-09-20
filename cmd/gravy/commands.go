@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -670,6 +671,9 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 
 	fmt.Println()
+	printRunning(os.Stdout, st.Running)
+
+	fmt.Println()
 	if len(st.Projects) == 0 {
 		fmt.Println("PROJECTS\n  none registered — gravy project add <path>")
 	} else {
@@ -707,6 +711,24 @@ func runStatus(ctx context.Context, args []string) error {
 		fmt.Printf("  %-8s %-12s workers %d/%d%s\n", h.ID, platform, h.UsedSlots, h.TotalSlots, hostNote(h))
 	}
 	return nil
+}
+
+// printRunning lists what the fleet is working on, each row saying what Gravy is doing rather
+// than only which state the ticket is in.
+//
+// The activity is the newest line of the ticket's progress journal, which is the difference
+// between "running" and "validating: go test failed in 42.1s (exit 1), retrying". It is capped
+// because a journal entry is a sentence and a terminal row is not.
+func printRunning(w io.Writer, running []api.RunningTicket) {
+	fmt.Fprintf(w, "RUNNING (%d)\n", len(running))
+	if len(running) == 0 {
+		fmt.Fprintln(w, "  nothing in flight")
+		return
+	}
+	for _, rt := range running {
+		fmt.Fprintf(w, "  %-10s %-8s %-6s %s\n", rt.Ticket.ID, rt.Ticket.State,
+			rt.Elapsed.Round(time.Second), truncateTo(firstLine(rt.Activity), 72))
+	}
 }
 
 // hostNote describes a host that is not simply online, and nothing at all for one that is.

@@ -58,7 +58,7 @@ func served(t *testing.T) (*Client, *Local, string) {
 // can break here is encoding: a field that does not survive marshalling, or a method the client
 // and the dispatch table spell differently.
 func TestRoundTripEveryMethod(t *testing.T) {
-	c, _, _ := served(t)
+	c, local, _ := served(t)
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {
@@ -123,6 +123,36 @@ func TestRoundTripEveryMethod(t *testing.T) {
 	t.Run("ListRuns", func(t *testing.T) {
 		if _, err := c.ListRuns(ctx, "GR-1"); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("ListProgress", func(t *testing.T) {
+		// Seeded through the store rather than by running a ticket: what can break at this
+		// layer is the wire — a phase that arrives empty, or entries that come back reordered.
+		at := time.Unix(1700000500, 0).UTC()
+		seeded := []core.Progress{
+			{ID: "pg1", TicketID: "GR-1", At: at, Phase: core.PhaseFetch,
+				Detail: "fetching origin so the work starts on top of the latest main"},
+			{ID: "pg2", TicketID: "GR-1", RunID: "run-1", At: at.Add(time.Second),
+				Phase: core.PhaseValidationStep, Detail: "test passed in 1.2s (exit 0)"},
+		}
+		for _, e := range seeded {
+			if err := local.db.AddProgress(ctx, e); err != nil {
+				t.Fatalf("AddProgress %s: %v", e.ID, err)
+			}
+		}
+
+		got, err := c.ListProgress(ctx, "GR-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(seeded) {
+			t.Fatalf("got %d entries, want %d: %+v", len(got), len(seeded), got)
+		}
+		for i, want := range seeded {
+			if got[i] != want {
+				t.Errorf("entry %d = %+v, want %+v", i, got[i], want)
+			}
 		}
 	})
 

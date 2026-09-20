@@ -360,6 +360,9 @@ func (h *handle) Events() <-chan provider.Event { return h.events }
 // Kill terminates the run and everything it started.
 func (h *handle) Kill() error { return h.proc.Kill() }
 
+// PID names the process behind this run, so the progress journal can say which one to look at.
+func (h *handle) PID() int { return h.proc.PID() }
+
 // Wait blocks until the run finishes and reports its outcome.
 func (h *handle) Wait() (provider.Outcome, error) {
 	<-h.done
