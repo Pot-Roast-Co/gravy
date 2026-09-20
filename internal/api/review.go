@@ -216,6 +216,35 @@ func (l *Local) MarkMerged(ctx context.Context, ticketID string) (core.State, er
 	return state, nil
 }
 
+// Requeue puts a parked ticket back in the queue.
+//
+// It is the way out of Needs You for a problem that was never the ticket's fault — an expired
+// login, a machine that was off — where nothing about the work needs to change and the only
+// thing missing was a working agent.
+//
+// Acknowledging such a row used to be the only offered action, and it resolved the row without
+// moving the ticket. That left work in needs_you with no open attention: not in the queue, not
+// on the Needs You screen, and not reachable from anywhere in the UI.
+func (l *Local) Requeue(ctx context.Context, ticketID string) (core.State, error) {
+	t, err := l.db.GetTicket(ctx, ticketID)
+	if err != nil {
+		return "", err
+	}
+	if t.State != core.StateNeedsYou {
+		return "", fmt.Errorf("ticket %s is %s, not parked", ticketID, t.State)
+	}
+	state, err := l.db.SetTicketState(ctx, ticketID, core.EventRequeue)
+	if err != nil {
+		return "", err
+	}
+	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
+		return state, err
+	}
+	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID, State: state})
+	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
+	return state, nil
+}
+
 // Reject abandons a ticket and removes its worktree.
 func (l *Local) Reject(ctx context.Context, ticketID string) error {
 	t, err := l.db.GetTicket(ctx, ticketID)

@@ -94,7 +94,9 @@ func TestEveryM0ReasonHasItsOwnActions(t *testing.T) {
 			[]string{"r send back with guidance", "x reject"}},
 		{"host_unavailable", 2,
 			[]string{"daemon stopped while this run was in flight"},
-			[]string{"a acknowledge"}},
+			// Retry leads now: acknowledging alone answers the row and leaves the ticket
+			// parked, which is how work became unreachable.
+			[]string{"t try again", "a acknowledge"}},
 		{"review_pending", 3,
 			[]string{"commit 604f7f5f"},
 			[]string{"enter open the review"}},

@@ -487,6 +487,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return nil, s.svc.CancelDiscussion(ctx, p.TicketID)
 
+	case mRequeue:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.Requeue(ctx, p.TicketID)
+
 	case mMarkMerged:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {
