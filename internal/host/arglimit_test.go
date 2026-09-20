@@ -54,17 +54,38 @@ func TestExecAllowsTheLongestArgumentThatExecs(t *testing.T) {
 }
 
 // A large payload on stdin is fine, which is the entire point: the limit is on arguments.
+//
+// stdout is drained while the process runs, as every real caller does. Not draining it is a
+// deadlock of the test's own making: cat cannot finish writing 512KiB into a pipe nobody is
+// emptying, so it never exits and there is nothing to wait for.
 func TestExecAcceptsALargePayloadOnStdin(t *testing.T) {
 	h := NewLocal("local", 1)
+	const size = 4 * MaxArgLen
+
 	proc, err := h.Exec(context.Background(), ExecSpec{
 		Cmd:   "cat",
-		Stdin: strings.NewReader(strings.Repeat("y", 4*MaxArgLen)),
+		Stdin: strings.NewReader(strings.Repeat("y", size)),
 	})
 	if err != nil {
 		t.Fatalf("a 512KiB stdin was refused: %v", err)
 	}
+
+	read := make(chan int, 1)
+	go func() {
+		b, _ := io.ReadAll(proc.Stdout())
+		read <- len(b)
+	}()
+
 	if _, err := proc.Wait(); err != nil {
 		t.Fatalf("Wait: %v", err)
+	}
+	select {
+	case n := <-read:
+		if n != size {
+			t.Errorf("cat echoed %d bytes, want %d — the whole payload did not get through", n, size)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("stdout never finished")
 	}
 }
 
