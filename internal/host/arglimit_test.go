@@ -131,3 +131,76 @@ func TestReadingOutputEndsWhenAGrandchildHoldsThePipe(t *testing.T) {
 	}
 	_ = proc.Kill()
 }
+
+// TestReadingEndsEvenWhenNobodyCallsWaitFirst is the regression, and it is the case the previous
+// fix could not reach.
+//
+// Callers read before they wait: the claude adapter scans stdout to EOF and only then calls
+// Wait. So when a grandchild held the pipe open past the agent's exit, the reader blocked, Wait
+// was never reached, and the grace period that closes the pipes — which lived inside Wait — never
+// started. A finished agent's answer sat in a log file while the screen said "thinking…".
+//
+// The reader here never calls Wait at all, which is the point.
+func TestReadingEndsEvenWhenNobodyCallsWaitFirst(t *testing.T) {
+	h := NewLocal("local", 1)
+
+	proc, err := h.Exec(context.Background(), ExecSpec{
+		Cmd:  "sh",
+		Args: []string{"-c", "echo answer; sleep 120 & exit 0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(proc.Stdout())
+		read <- string(b)
+	}()
+
+	select {
+	case got := <-read:
+		if !strings.Contains(got, "answer") {
+			t.Errorf("output written before exit was lost: %q", got)
+		}
+	case <-time.After(outputGrace + 15*time.Second):
+		t.Fatal("reading never ended, and nobody had called Wait to start the grace period")
+	}
+
+	// And the status is still correct afterwards, since reaping no longer depends on Wait.
+	st, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait after the fact: %v", err)
+	}
+	if st.Code != 0 {
+		t.Errorf("exit code = %d, want 0", st.Code)
+	}
+	_ = proc.Kill()
+}
+
+// Wait is safe to call from several places at once, now that it only reads what reap wrote.
+func TestWaitIsSafeConcurrently(t *testing.T) {
+	h := NewLocal("local", 1)
+	proc, err := h.Exec(context.Background(), ExecSpec{Cmd: "sh", Args: []string{"-c", "exit 3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	codes := make(chan int, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			st, _ := proc.Wait()
+			codes <- st.Code
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		select {
+		case c := <-codes:
+			if c != 3 {
+				t.Errorf("exit code = %d, want 3 — a caller saw a status that was not written yet", c)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("a concurrent Wait never returned")
+		}
+	}
+}

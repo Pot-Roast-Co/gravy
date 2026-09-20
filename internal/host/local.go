@@ -156,6 +156,18 @@ func (h *LocalHost) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 		started: started,
 		done:    make(chan struct{}),
 	}
+	// Reaping starts now, not when somebody calls Wait.
+	//
+	// Wait used to be where cmd.Wait ran, which made "the process has exited" something only
+	// a caller could discover — and callers read the output first: the claude adapter scans
+	// stdout to EOF and only then calls Wait. So when a grandchild held the pipe open past the
+	// agent's exit, the reader blocked, Wait was never reached, and the grace period that
+	// exists to break exactly that deadlock never started. The fix for it could not fire in
+	// the case it was written for.
+	//
+	// Exit is now observed independently of anyone reading, so the grace period begins when
+	// the process actually ends.
+	go p.reap()
 	p.watch(ctx, spec.Timeout)
 	return p, nil
 }
@@ -177,9 +189,8 @@ type localProcess struct {
 	timedOut bool
 	killed   bool
 
-	waitOnce sync.Once
-	status   ExitStatus
-	waitErr  error
+	status  ExitStatus
+	waitErr error
 }
 
 func (p *localProcess) Stdout() io.Reader { return p.stdout }
@@ -247,57 +258,72 @@ func (p *localProcess) Kill() error {
 
 // Wait blocks until the process exits and reports how it ended. It is safe to call more than
 // once and returns the same result each time.
-func (p *localProcess) Wait() (ExitStatus, error) {
-	p.waitOnce.Do(func() {
-		err := p.cmd.Wait()
-		close(p.done)
+// reap waits for the process and records its status. It runs once, from Exec.
+// reap waits for the process and records its status. It runs once, from Exec.
+//
+// Started there rather than from Wait so that "the process has exited" is observable without
+// anyone reading its output. Callers read first — the claude adapter scans stdout to EOF and
+// only then calls Wait — so a grandchild holding the pipe past the agent's exit blocked the
+// reader, Wait was never reached, and the grace period that exists to break that deadlock never
+// started. The fix for it could not fire in the case it was written for.
+func (p *localProcess) reap() {
+	err := p.cmd.Wait()
 
-		// The output pipes are closed a short while after the process exits, whether or not
-		// anyone has finished reading them.
-		//
-		// A pipe reaches EOF when every writer is gone, and the child is not necessarily the
-		// last one: anything it spawned inherits these descriptors and can outlive it. A
-		// reader then blocks forever on output that will never come, and callers that wait
-		// for their reader to finish — which is how an agent run decides a run is over —
-		// block with it. That wedged a daemon: the agent exited, a grandchild kept the pipe,
-		// and the worker slot and the serial project behind it were held indefinitely with no
-		// timeout anywhere above.
-		//
-		// The delay is the grace: anything the process actually wrote is buffered in the pipe
-		// and readable, and a normal run drains it long before this fires.
-		go func() {
-			time.Sleep(outputGrace)
-			p.stdout.Close()
-			p.stderr.Close()
-		}()
+	// done is closed last, after the status is written, because Wait returns both by reading
+	// them the moment it is closed. Closing first is a race that hands a caller a zero status
+	// for a process that exited non-zero.
+	defer close(p.done)
 
-		p.mu.Lock()
-		timedOut, killed := p.timedOut, p.killed
-		p.mu.Unlock()
+	// The output pipes close a short while after the process exits, whether or not anyone has
+	// finished reading them.
+	//
+	// A pipe reaches EOF when every writer is gone, and the process gravy started is not
+	// necessarily the last one: anything it spawned inherits these descriptors and can outlive
+	// it. A reader then blocks forever on output that will never come, and callers that wait
+	// for their reader to finish — which is how an agent run decides a run is over — block
+	// with it.
+	//
+	// The delay is the grace: anything the process actually wrote is buffered in the pipe and
+	// readable, and a normal run drains it long before this fires.
+	go func() {
+		time.Sleep(outputGrace)
+		p.stdout.Close()
+		p.stderr.Close()
+	}()
 
-		st := ExitStatus{Duration: time.Since(p.started), TimedOut: timedOut}
+	p.mu.Lock()
+	timedOut, killed := p.timedOut, p.killed
+	p.mu.Unlock()
 
-		var exitErr *exec.ExitError
-		switch {
-		case err == nil:
-			st.Code = 0
-		case errors.As(err, &exitErr):
-			st.Code = exitErr.ExitCode()
-			// A signalled process reports -1; record that it was signalled rather than
-			// inventing an exit code.
-			if st.Code < 0 {
-				st.Signaled = true
-				st.Code = 128 + signalNumber(exitErr)
-			}
-		default:
-			p.status, p.waitErr = st, fmt.Errorf("wait: %w", err)
-			return
-		}
-		if killed {
+	st := ExitStatus{Duration: time.Since(p.started), TimedOut: timedOut}
+
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		st.Code = 0
+	case errors.As(err, &exitErr):
+		st.Code = exitErr.ExitCode()
+		// A signalled process reports -1; record that it was signalled rather than
+		// inventing an exit code.
+		if st.Code < 0 {
 			st.Signaled = true
+			st.Code = 128 + signalNumber(exitErr)
 		}
-		p.status = st
-	})
+	default:
+		// Not an exit status at all — the wait itself failed. Recorded and returned through
+		// the deferred close, never by leaving done open, which would hang every caller.
+		p.status, p.waitErr = st, fmt.Errorf("wait: %w", err)
+		return
+	}
+	if killed {
+		st.Signaled = true
+	}
+	p.status = st
+}
+
+// Wait blocks until the process has been reaped and returns its status.
+func (p *localProcess) Wait() (ExitStatus, error) {
+	<-p.done
 	return p.status, p.waitErr
 }
 
