@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pot-roast-co/gravy/internal/contextbuild"
@@ -146,10 +147,14 @@ type Orchestrator struct {
 	live map[string]*liveRun
 }
 
-// liveRun tracks an executing run so it can be killed.
+// liveRun tracks an executing run so it can be killed, and so a client can see when it last
+// said anything.
 type liveRun struct {
 	cancel context.CancelFunc
 	handle provider.Handle
+	// lastEvent is the unix-nanosecond time of the run's latest event, or of its start
+	// before it has produced one. In memory only: after a restart there is no live run to ask.
+	lastEvent atomic.Int64
 }
 
 // New returns an orchestrator.
@@ -622,7 +627,9 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	o.note(ctx, ticket.ID, runID, core.PhaseAgentStart, "%s/%s started%s, attempt %d of %d",
 		a.ProviderID, a.Model, pidNote(pidOf(handle)), attempt.Number, maxAttempts)
 
-	o.trackLive(ticket.ID, &liveRun{cancel: cancel, handle: handle})
+	lr := &liveRun{cancel: cancel, handle: handle}
+	lr.lastEvent.Store(started.UnixNano())
+	o.trackLive(ticket.ID, lr)
 	defer o.untrackLive(ticket.ID)
 
 	// Events must be drained or the provider stalls once its buffer fills, so this goroutine
@@ -634,12 +641,26 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 			logw = nil
 		}
 	}
+	counts := newLiveCounts(o.store, run)
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
-		for ev := range handle.Events() {
-			if logw != nil {
-				_ = logw.WriteEvent(ev)
+		ticker := time.NewTicker(liveEvery)
+		defer ticker.Stop()
+		events := handle.Events()
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				lr.lastEvent.Store(time.Now().UnixNano())
+				if logw != nil {
+					_ = logw.WriteEvent(ev)
+				}
+				counts.observe(ctx, ev)
+			case <-ticker.C:
+				counts.tick(ctx)
 			}
 		}
 	}()
@@ -652,6 +673,8 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	case <-drained:
 	case <-time.After(5 * time.Second):
 	}
+	// Whatever the drain is still doing, it may not write the row after the final write does.
+	counts.stop()
 	if logw != nil {
 		_ = logw.Close()
 	}
@@ -972,6 +995,18 @@ func (o *Orchestrator) untrackLive(ticketID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	delete(o.live, ticketID)
+}
+
+// LastEvent reports when a ticket's live agent last produced an event, or when it started if it
+// has produced none. ok is false when the ticket has no agent running.
+func (o *Orchestrator) LastEvent(ticketID string) (at time.Time, ok bool) {
+	o.mu.Lock()
+	lr, ok := o.live[ticketID]
+	o.mu.Unlock()
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Unix(0, lr.lastEvent.Load()), true
 }
 
 // effectiveAllowlist is the project's allowlist plus its own validation commands.

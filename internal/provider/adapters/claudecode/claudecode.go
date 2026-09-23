@@ -395,6 +395,7 @@ func (h *handle) run() {
 	var (
 		result   *streamEvent
 		stdoutSB strings.Builder
+		parser   lineParser
 	)
 
 	scanner := bufio.NewScanner(h.proc.Stdout())
@@ -408,7 +409,7 @@ func (h *handle) run() {
 		stdoutSB.WriteString(line)
 		stdoutSB.WriteByte('\n')
 
-		for _, e := range parseLine(line) {
+		for _, e := range parser.parse(line) {
 			select {
 			case h.events <- e:
 			default:

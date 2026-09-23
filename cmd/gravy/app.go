@@ -261,7 +261,7 @@ func newApp(ctx context.Context) (*app, error) {
 	orch = orch.WithNotifier(notifier)
 
 	svc := api.NewLocal(db, sched, hosts, newID).
-		WithLander(lander{orch}).WithLogs(logs).WithKiller(orch).
+		WithLander(lander{orch}).WithLogs(logs).WithKiller(orch).WithLiveness(orch).
 		WithCheckouts(orch.Checkouts()).WithRereviewer(orch).
 		WithPlanner(orch.Plan(
 			func(ctx context.Context, route core.Route, c core.Constraints) (core.Choice, error) {

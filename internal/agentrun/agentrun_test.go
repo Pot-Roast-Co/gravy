@@ -701,6 +701,66 @@ func TestKillTerminatesTheRun(t *testing.T) {
 	assertSlotsBalanced(t, h)
 }
 
+// TestRunCountersMoveMidRun: a client watching a run sees its turns and tokens climb while the
+// agent is still going, not a zero that jumps at the end. The run blocks until killed, so any
+// movement observed was necessarily written before Wait returned.
+func TestRunCountersMoveMidRun(t *testing.T) {
+	h := newHarness(t, []fake.Script{{
+		Events: []provider.Event{
+			{Kind: provider.EventStarted, Text: "session s"},
+			{Kind: provider.EventToolUse, Tool: "Bash", Text: "ls"},
+			{Kind: provider.EventUsage, Fields: map[string]any{"input_tokens": 1200, "output_tokens": 80}},
+		},
+		BlockUntilKilled: true,
+	}}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed(nil)
+
+	before := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.orch.Run(context.Background(), h.assignment())
+		done <- err
+	}()
+	defer func() {
+		_ = h.orch.Kill("GR-100")
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("the run did not end after Kill")
+		}
+	}()
+
+	var live core.Run
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := h.db.ListRunsForTicket(context.Background(), "GR-100")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) > 0 && runs[0].TokensIn > 0 {
+			live = runs[0]
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("the run ended before the test could look at it")
+	default:
+	}
+	if live.Turns != 1 || live.TokensIn != 1200 || live.TokensOut != 80 {
+		t.Fatalf("mid-run row = turns %d, in %d, out %d; want 1, 1200, 80", live.Turns, live.TokensIn, live.TokensOut)
+	}
+	if live.State != core.StateRunning || live.EndedAt != nil {
+		t.Errorf("a live counter write must not end the run: state %s, ended %v", live.State, live.EndedAt)
+	}
+
+	at, ok := h.orch.LastEvent("GR-100")
+	if !ok || at.Before(before) {
+		t.Errorf("LastEvent = %v, %v; want a time during the run", at, ok)
+	}
+}
+
 func TestKillUnknownTicket(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	if err := h.orch.Kill("nope"); err == nil {

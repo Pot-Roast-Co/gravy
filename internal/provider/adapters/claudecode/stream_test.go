@@ -170,6 +170,61 @@ func TestTerminalResult(t *testing.T) {
 	}
 }
 
+// TestParseUsageOncePerMessage: the CLI repeats each assistant message, usage and all, once per
+// content block. Usage must be reported once per message id, or live counts double.
+func TestParseUsageOncePerMessage(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "docs", "fixtures", "claude-code", "stream-tool-use.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	var (
+		p       lineParser
+		usage   []provider.Event
+		result  *streamEvent
+		in, out int
+	)
+	for _, line := range strings.Split(string(data), "\n") {
+		for _, e := range p.parse(line) {
+			if e.Kind == provider.EventUsage {
+				usage = append(usage, e)
+				in += e.Fields["input_tokens"].(int)
+				out += e.Fields["output_tokens"].(int)
+			}
+		}
+		if se := terminalResult(line); se != nil {
+			result = se
+		}
+	}
+	if result == nil {
+		t.Fatal("fixture has no result line")
+	}
+
+	if len(usage) != 3 {
+		t.Fatalf("got %d usage events, want 3 (one per assistant message)", len(usage))
+	}
+	if len(usage) != result.NumTurns {
+		t.Errorf("usage events = %d, result num_turns = %d", len(usage), result.NumTurns)
+	}
+	// The same sum computeOutcome makes, so the live figure lands where the final one will.
+	wantIn := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens
+	if in != wantIn {
+		t.Errorf("summed input = %d, result input = %d", in, wantIn)
+	}
+	// Streamed messages carry output counted before generation finished, so the live figure
+	// can only trail the result's; the final write corrects it.
+	if out <= 0 || out > result.Usage.OutputTokens {
+		t.Errorf("summed output = %d, want between 1 and result's %d", out, result.Usage.OutputTokens)
+	}
+
+	first := usage[0].Fields
+	if first["uncached_input_tokens"] != 10 || first["cache_read_input_tokens"] != 16245 ||
+		first["cache_creation_input_tokens"] != 3001 {
+		t.Errorf("raw parts not carried: %v", first)
+	}
+}
+
 func TestNewUUIDIsValid(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {

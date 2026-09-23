@@ -151,8 +151,9 @@ func TestOutcomeFromRealStreams(t *testing.T) {
 		if out.Class != provider.Success {
 			t.Errorf("class = %v, want success", out.Class)
 		}
-		if out.TokensIn == 0 || out.TokensOut == 0 {
-			t.Errorf("tokens not carried: in=%d out=%d", out.TokensIn, out.TokensOut)
+		// The fixture reports 62241 input, 57088 of it cached; the cached share is not added.
+		if out.TokensIn != 62241 || out.TokensOut != 395 {
+			t.Errorf("tokens = in %d, out %d; want in 62241, out 395", out.TokensIn, out.TokensOut)
 		}
 		if out.CostUSD != nil {
 			t.Error("codex reports no cost; inventing one would go stale silently")

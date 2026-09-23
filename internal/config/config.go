@@ -97,10 +97,11 @@ type Timeouts struct {
 	Run Duration `yaml:"run"`
 	// ValidationStep caps a single validation command.
 	ValidationStep Duration `yaml:"validation_step"`
-	// Stall is how long a run may emit no events before it is treated as hung.
+	// Stall is how long a run may emit no events before it is reported as quiet.
 	//
 	// This is the better liveness signal, because a wedged run and a slow one are
-	// indistinguishable by process state alone. Zero disables stall detection.
+	// indistinguishable by process state alone. It is reported, never acted on: nothing is
+	// killed or requeued for being quiet. Zero disables the report.
 	Stall Duration `yaml:"stall"`
 }
 

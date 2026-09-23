@@ -234,6 +234,10 @@ type RunningTicket struct {
 	Elapsed time.Duration
 	// Activity is what it is doing now, phrased for a human rather than as a state name.
 	Activity string
+	// LastOutput is how long since the agent last produced an event, or since it started if it
+	// has produced none. Zero when no agent is running for the ticket, such as during
+	// validation.
+	LastOutput time.Duration
 }
 
 // QueuedTicket is one Ready ticket.

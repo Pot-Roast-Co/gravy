@@ -55,9 +55,9 @@ func computeOutcome(p *Provider, status host.ExitStatus, usage *usageTotals, std
 	}
 
 	if usage != nil {
-		// Cached input still cost a request and is counted, matching how the claude-code
-		// adapter totals cache reads.
-		out.TokensIn = usage.InputTokens + usage.CachedInputTokens
+		// cached_input_tokens is the share of input_tokens served from cache, not extra to it:
+		// adding the two double-counts and disagrees with the live row and the usage line.
+		out.TokensIn = usage.InputTokens
 		out.TokensOut = usage.OutputTokens
 		out.Turns = usage.Turns
 	}

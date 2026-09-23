@@ -36,6 +36,8 @@ type Local struct {
 	logs *runlog.Store
 	// killer is nil on a client that may not stop work.
 	killer Killer
+	// liveness is nil on a client that is not running agents itself.
+	liveness Liveness
 	// planner is nil on a client that may not plan.
 	planner Planner
 	// update is the last release check's answer, written by whoever runs the check and read
@@ -68,6 +70,18 @@ type Local struct {
 // how running works, and a read-only client has no business being able to kill a run.
 type Killer interface {
 	Kill(ticketID string) error
+}
+
+// Liveness reports when a ticket's running agent last produced output. ok is false when no
+// agent is running for the ticket — between attempts, say, or during validation.
+type Liveness interface {
+	LastEvent(ticketID string) (at time.Time, ok bool)
+}
+
+// WithLiveness lets Status say how long each running agent has been silent.
+func (l *Local) WithLiveness(v Liveness) *Local {
+	l.liveness = v
+	return l
 }
 
 // WithKiller lets the service stop runs.
@@ -440,6 +454,9 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 	byProject := make(map[string]core.Project, len(projects))
 	byTicket := make(map[string]core.Ticket)
 	now := l.now()
+	l.cfgMu.RLock()
+	quietAfter := l.cfg.Timeouts.Stall.D()
+	l.cfgMu.RUnlock()
 
 	for _, p := range projects {
 		byProject[p.ID] = p
@@ -503,6 +520,7 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 						rt.Elapsed = runs[0].EndedAt.Sub(runs[0].StartedAt)
 					}
 				}
+				l.noteQuiet(&rt, now, quietAfter)
 				st.Running = append(st.Running, rt)
 			case t.State == core.StateReady && !hidden:
 				// Held carries the project's explanation, so a ticket that will not start
@@ -613,6 +631,33 @@ func (l *Local) activity(ctx context.Context, t core.Ticket) string {
 		return activityFor(t.State)
 	}
 	return latest.Detail
+}
+
+// noteQuiet fills in how long a running agent has been silent, and says so in its activity once
+// that passes the configured threshold.
+//
+// Reporting is all it does. A run that is thinking hard and one that is wedged look the same
+// from here, so the call on killing it belongs to the human reading the row.
+func (l *Local) noteQuiet(rt *RunningTicket, now time.Time, threshold time.Duration) {
+	if l.liveness == nil {
+		return
+	}
+	at, ok := l.liveness.LastEvent(rt.Ticket.ID)
+	if !ok {
+		return
+	}
+	rt.LastOutput = max(now.Sub(at), 0)
+	if threshold > 0 && rt.LastOutput >= threshold {
+		rt.Activity += " — no output for " + roughly(rt.LastOutput)
+	}
+}
+
+// roughly renders a silence the way a person would say it: "4m", not "4m12.3s".
+func roughly(d time.Duration) string {
+	if d < time.Minute {
+		return d.Round(time.Second).String()
+	}
+	return strings.TrimSuffix(d.Truncate(time.Minute).String(), "0s")
 }
 
 // activityFor phrases a state as what the agent is doing, for a row a human scans.
