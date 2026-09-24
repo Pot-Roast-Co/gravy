@@ -220,22 +220,32 @@ func splitRows(ctx ViewContext) (needs, running, ready []dashRow) {
 		})
 	}
 
+	// Activity is a sentence from the journal rather than a state name, so it gets about half
+	// of what the fixed columns leave — bounded, so the agent keeps the rest.
+	activityWidth := clamp((w-12-20-6-4)/2, 12, 48)
 	for _, r := range ctx.Status.Running {
 		agent := fmt.Sprintf("%s/%s", r.Run.ProviderID, r.Run.Model)
 		if r.Run.HostID != "" {
 			agent += "@" + r.Run.HostID
 		}
+		activity, quiet := splitQuiet(r.Activity)
+		cells := []col{
+			{text: projectName(r.Project), width: 12, style: th.Accent},
+			{text: branchName(r.Ticket.Branch), width: 20, style: th.Muted},
+			// The agent flexes: "which model on which host" is the question this row
+			// exists to answer, so it is the last thing that should be truncated.
+			{text: agent, flex: true, style: th.Muted},
+			{text: activity, width: activityWidth, style: th.Success},
+		}
+		if quiet != "" {
+			// Its own cell, so a long activity cannot truncate away the one warning on the row.
+			q := "no output " + quiet
+			cells = append(cells, col{text: q, width: len(q), style: th.Warning})
+		}
+		cells = append(cells, col{text: age(r.Elapsed), width: 6, right: true, style: th.Muted})
 		running = append(running, dashRow{
 			id: r.Ticket.ID, ticketID: r.Ticket.ID, dest: SectionRunning,
-			lines: []string{columns(w,
-				col{text: projectName(r.Project), width: 12, style: th.Accent},
-				col{text: branchName(r.Ticket.Branch), width: 20, style: th.Muted},
-				// The agent flexes: "which model on which host" is the question this row
-				// exists to answer, so it is the last thing that should be truncated.
-				col{text: agent, flex: true, style: th.Muted},
-				col{text: r.Activity, width: 12, style: th.Success},
-				col{text: age(r.Elapsed), width: 6, right: true, style: th.Muted},
-			)},
+			lines: []string{columns(w, cells...)},
 		})
 	}
 
@@ -256,6 +266,21 @@ func splitRows(ctx ViewContext) (needs, running, ready []dashRow) {
 		})
 	}
 	return needs, running, ready
+}
+
+// quietMarker is how the API appends an agent's silence to its activity once it passes the
+// configured threshold.
+const quietMarker = " — no output for "
+
+// splitQuiet separates an activity from the silence the API appended to it, so the silence can
+// be drawn as the warning it is. The threshold decision stays the daemon's; quiet is empty when
+// it made none.
+func splitQuiet(activity string) (base, quiet string) {
+	i := strings.LastIndex(activity, quietMarker)
+	if i < 0 {
+		return activity, ""
+	}
+	return activity[:i], activity[i+len(quietMarker):]
 }
 
 // dashRows is every selectable row, in the order the screen presents them.

@@ -37,6 +37,16 @@ func helpView(k KeyMap, th Theme, width int) string {
 			th.Key.Render(s.Key()), strings.Repeat(" ", widest-len(s.Key())), th.Text.Render(s.Title()))
 	}
 
+	// One line, after the sections: the overlay has to fit a short terminal, and the global
+	// keys are what must never be cut off.
+	b.WriteString("\n")
+	running := make([]string, 0, len(runningBindings))
+	for _, bind := range runningBindings {
+		running = append(running, th.Key.Render(bind.Label())+" "+th.Text.Render(bind.Short))
+	}
+	b.WriteString(th.Header.Render("On Running  ") + strings.Join(running, th.Muted.Render(" · ")))
+	b.WriteString("\n")
+
 	body := strings.TrimRight(b.String(), "\n")
 	// A narrow terminal gets the plain list: a border that cannot fit would wrap into noise.
 	if width < 30 {

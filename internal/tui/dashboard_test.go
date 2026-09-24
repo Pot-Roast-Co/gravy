@@ -266,3 +266,22 @@ func TestCursorSurvivesAShrinkingQueue(t *testing.T) {
 		}
 	}
 }
+
+// TestRunningRowShowsActivityAndSilence: the row carries the journal's sentence rather than a
+// state name, wide enough to read, and an agent gone quiet is flagged on its own.
+func TestRunningRowShowsActivityAndSilence(t *testing.T) {
+	f := populated()
+	f.status.Running[0].Activity = "running test (go test ./...), step 3 of 3 — no output for 6m"
+	m := boot(t, f, 140, 30)
+	view := m.View()
+
+	if !strings.Contains(view, "running test (go test ./...)") {
+		t.Errorf("the activity is cut down to a state-name width:\n%s", view)
+	}
+	if !strings.Contains(view, "no output 6m") {
+		t.Errorf("the silence is not flagged:\n%s", view)
+	}
+	if strings.Contains(view, "no output for 6m") {
+		t.Errorf("the silence is left inside the activity rather than drawn as a warning:\n%s", view)
+	}
+}

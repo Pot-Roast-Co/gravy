@@ -195,6 +195,18 @@ The TUI's number row is the ticket lifecycle, and `,` opens settings:
 1 Dashboard  2 Plan  3 Projects  4 Backlog  5 Ready  6 Running  7 Review  8 Needs You
 ```
 
+**6 Running** follows one ticket from fetch to hand-off. The header shows the current phase,
+elapsed time, live turns and tokens, the attempt against the self-correction budget, and
+"no output for Xm" in amber when the agent goes quiet. Below it, the progress timeline lists
+each step: fetch, worktree, prompt, agent start and exit, each validation step with its exit
+code and duration, and retries with their reason. Press `t` to collapse or expand it; it opens
+by default before the agent starts and during validation. The log pane shows agent events as
+readable lines, with tool calls, messages, errors and thinking each styled differently. When a
+retry starts, the log switches to the new attempt. When the ticket leaves Running, the screen
+keeps its final timeline and says where the ticket went: "moved to Review · press 7", or
+"parked in Needs You: <reason> · press 8". On the dashboard, each Running row shows the same
+activity line.
+
 On Ready, `space` sends tickets back to Backlog and `r` rejects them after confirmation.
 Use `x` to select multiple tickets for either action. Backlog supports `D` to permanently delete a ticket.
 
