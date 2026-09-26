@@ -49,3 +49,24 @@ func Shell() string {
 	}
 	return "/bin/sh"
 }
+
+// Difftool reports whether git in dir knows which difftool to open.
+//
+// Without one, git difftool guesses from a short list, and when the guess finds nothing it
+// prints its complaint over the suspended TUI and exits — the human sees a flash of text and
+// a bare exit status. Asking first lets the caller say what to set instead.
+//
+// git difftool reads GIT_DIFF_TOOL, then diff.tool, then merge.tool; any of them will do.
+func Difftool(dir string) error {
+	if strings.TrimSpace(os.Getenv("GIT_DIFF_TOOL")) != "" {
+		return nil
+	}
+	for _, key := range []string{"diff.tool", "merge.tool"} {
+		cmd := exec.Command("git", "config", "--get", key)
+		cmd.Dir = dir
+		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("no difftool configured — try git config --global diff.tool nvimdiff")
+}

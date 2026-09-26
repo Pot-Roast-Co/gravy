@@ -1,6 +1,7 @@
 package host
 
 import (
+	"os/exec"
 	"testing"
 )
 
@@ -70,5 +71,47 @@ func TestLocalCommandRunsInTheWorktree(t *testing.T) {
 	}
 	if len(cmd.Args) < 2 || cmd.Args[1] != "status" {
 		t.Errorf("Args = %v", cmd.Args)
+	}
+}
+
+func TestDifftoolWantsOneConfigured(t *testing.T) {
+	dir := t.TempDir()
+	// A repository with no user or system config behind it, so only what the test sets counts.
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_DIFF_TOOL", "")
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	gitConfig := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"config"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %v: %v: %s", args, err, out)
+		}
+	}
+
+	if err := Difftool(dir); err == nil {
+		t.Fatal("Difftool() = nil with nothing configured, want an error naming what to set")
+	}
+
+	t.Setenv("GIT_DIFF_TOOL", "vimdiff")
+	if err := Difftool(dir); err != nil {
+		t.Errorf("Difftool() with GIT_DIFF_TOOL: %v", err)
+	}
+	t.Setenv("GIT_DIFF_TOOL", "")
+
+	// merge.tool is git's own fallback for difftool.
+	gitConfig("merge.tool", "meld")
+	if err := Difftool(dir); err != nil {
+		t.Errorf("Difftool() with merge.tool: %v", err)
+	}
+	gitConfig("--unset", "merge.tool")
+
+	gitConfig("diff.tool", "nvimdiff")
+	if err := Difftool(dir); err != nil {
+		t.Errorf("Difftool() with diff.tool: %v", err)
 	}
 }

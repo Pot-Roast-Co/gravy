@@ -992,6 +992,9 @@ func reviewCommand(tool externalTool, worktree string, files []string) (*host.Cm
 		return host.LocalCommand(host.Shell(), nil, worktree), nil
 
 	case externalDifftool:
+		if err := host.Difftool(worktree); err != nil {
+			return nil, err
+		}
 		// Against the commit's parent, which is the diff the card is showing.
 		return host.LocalCommand("git", []string{"difftool", "--no-prompt", "HEAD~1"}, worktree), nil
 
