@@ -31,6 +31,9 @@ type Service interface {
 	// project as saved. It is the step between planning a goal and building it: implementation
 	// tickets cannot start until a project has somewhere to work.
 	AttachRepository(ctx context.Context, projectID, path string) (core.Project, error)
+	// CreateRepository makes a new repository for a project that has none — a directory, a
+	// first commit, and optionally a GitHub repository — and attaches it.
+	CreateRepository(ctx context.Context, projectID string, req CreateRepoReq) (core.Project, error)
 	// ArchiveProject takes a finished repository out of the working set, or puts it back.
 	//
 	// Its own method rather than a field UpdateProject writes: archiving is a state change

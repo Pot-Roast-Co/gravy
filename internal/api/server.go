@@ -358,6 +358,13 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.AttachRepository(ctx, p.ProjectID, p.Path)
 
+	case mCreateRepo:
+		var p createRepoParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.CreateRepository(ctx, p.ProjectID, p.Req)
+
 	case mGetSettings:
 		return s.svc.GetSettings(ctx)
 

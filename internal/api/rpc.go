@@ -145,6 +145,7 @@ const (
 	mDeleteTicket     = "DeleteTicket"
 	mUpdateProject    = "UpdateProject"
 	mAttachRepo       = "AttachRepository"
+	mCreateRepo       = "CreateRepository"
 	mGetSettings      = "GetSettings"
 	mUpdateSettings   = "UpdateSettings"
 	// nEvent is the notification the server pushes on the Events stream.
@@ -207,6 +208,10 @@ type (
 	attachRepoParams struct {
 		ProjectID string `json:"project_id"`
 		Path      string `json:"path"`
+	}
+	createRepoParams struct {
+		ProjectID string        `json:"project_id"`
+		Req       CreateRepoReq `json:"req"`
 	}
 
 	updateProjectParams struct {

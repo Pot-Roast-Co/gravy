@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -41,6 +42,8 @@ func runProject(ctx context.Context, args []string) error {
 		return projectAdd(ctx, rest)
 	case "set-repo":
 		return projectSetRepo(ctx, rest)
+	case "create-repo":
+		return projectCreateRepo(ctx, rest)
 	case "set-target":
 		return projectSetTarget(ctx, rest)
 	case "archive":
@@ -51,7 +54,7 @@ func runProject(ctx context.Context, args []string) error {
 		return projectList(ctx, rest)
 	default:
 		return fmt.Errorf(
-			"unknown project command %q (try: add, list, set-repo, set-target, archive, unarchive)", sub)
+			"unknown project command %q (try: add, list, create-repo, set-repo, set-target, archive, unarchive)", sub)
 	}
 }
 
@@ -253,6 +256,83 @@ func projectSetRepo(ctx context.Context, args []string) error {
 		fmt.Printf("  detected %d allowed command(s); review them with `gravy` -> Projects\n", n)
 	}
 	return nil
+}
+
+// projectCreateRepo makes a planned project a new repository and attaches it.
+//
+// set-repo's partner for the case where there is nothing yet to point at: the directory, the
+// first commit and, with --github, the GitHub repository are all made here, so a planned
+// project goes from "no repository yet" to runnable in one command.
+func projectCreateRepo(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy project create-repo", flag.ContinueOnError)
+	dir := fs.String("dir", "", "directory to create (default: ~/Projects/<project name>)")
+	github := fs.Bool("github", false, "also create a private GitHub repository with gh, and push")
+	public := fs.Bool("public", false, "make the GitHub repository public (with --github)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy project create-repo [flags] <slug|id>")
+		fmt.Fprintln(os.Stderr, "\nMakes a new repository for a project with none, with a first commit, and attaches it.")
+		fs.PrintDefaults()
+	}
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		fs.Usage()
+		return fmt.Errorf("expected a project")
+	}
+
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	p, err := findProject(ctx, a.svc, rest[0])
+	if err != nil {
+		return err
+	}
+	path := *dir
+	if path == "" {
+		if p.HostID != "" && p.HostID != "local" {
+			return fmt.Errorf("%s lives on %s; say where with --dir <absolute path>", p.Slug, p.HostID)
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("find home directory: %w", err)
+		}
+		path = filepath.Join(home, "Projects", repoDirName(p))
+	}
+
+	saved, err := a.svc.CreateRepository(ctx, p.ID, api.CreateRepoReq{
+		Path: path, GitHub: *github, Public: *public,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s now works in %s\n", saved.Slug, saved.RepoPath)
+	fmt.Printf("  target branch %s\n", saved.TargetBranch)
+	if *github {
+		fmt.Println("  pushed to GitHub")
+	}
+	return nil
+}
+
+// repoDirName is the directory a new repository gets: the project's name as the human wrote
+// it, with only the characters a path cannot hold replaced. "jobApplicationHelper" stays
+// "jobApplicationHelper", which is what they will look for.
+func repoDirName(p core.Project) string {
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		return p.Slug
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', ' ':
+			return '-'
+		}
+		return r
+	}, name)
 }
 
 // projectSetTarget changes the branch a project's approved work merges into.

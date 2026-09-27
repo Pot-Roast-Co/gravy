@@ -496,7 +496,8 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 			// they sit in Ready looking like work about to start, and nothing says the one
 			// thing standing in the way. Planning is what a project with no repository is for,
 			// so this is the expected end of that road rather than a misconfiguration.
-			ps.Blocked = "no repository yet — gravy project set-repo " + p.Slug + " <path>"
+			ps.Blocked = "no repository yet — gravy project create-repo " + p.Slug +
+				" (or set-repo " + p.Slug + " <path>)"
 		case ps.Active != nil && !p.ParallelMode && ps.Counts[core.StateReady] > 0:
 			verb := "in flight"
 			if ps.Active.State == core.StateReview {

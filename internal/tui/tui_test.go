@@ -258,6 +258,10 @@ func (f *fakeService) AttachRepository(_ context.Context, projectID, path string
 	return core.Project{ID: projectID, RepoPath: path}, nil
 }
 
+func (f *fakeService) CreateRepository(ctx context.Context, projectID string, req api.CreateRepoReq) (core.Project, error) {
+	return f.AttachRepository(ctx, projectID, req.Path)
+}
+
 func (f *fakeService) Requeue(_ context.Context, ticketID string) (core.State, error) {
 	if f.actionErr != nil {
 		return "", f.actionErr

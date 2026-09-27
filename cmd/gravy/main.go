@@ -92,6 +92,8 @@ func usage() {
 
   gravy project add <path>     register a repository
   gravy project list           what is registered
+  gravy project create-repo <slug> [--github]
+                               make a planned project a new repository (~/Projects/<name>)
   gravy project set-repo <slug> <path>
                                give a planned project a repository to work in
   gravy project set-target <slug> <branch>
