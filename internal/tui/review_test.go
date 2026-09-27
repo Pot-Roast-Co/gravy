@@ -396,6 +396,9 @@ func TestExternalEscapesHandOffTheTerminal(t *testing.T) {
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "true") // a real program, so building the command succeeds
 	t.Setenv("SHELL", "/bin/sh")
+	// The difftool key asks git which tool to open and refuses without one. The machine the
+	// suite runs on may have none configured — CI does not — so the test names one itself.
+	t.Setenv("GIT_DIFF_TOOL", "vimdiff")
 
 	for _, k := range []string{"d", "!"} {
 		m := openReview(t, f, 80, 24)
