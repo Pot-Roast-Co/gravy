@@ -100,7 +100,7 @@ func (l *Loop) RunUntilIdle(ctx context.Context) error {
 			// Nothing running and the last tick assigned nothing: the queue is drained of
 			// everything it can act on without a human.
 			assignments, err := l.sched.Tick(ctx)
-			if err != nil {
+			if err != nil && len(assignments) == 0 {
 				return err
 			}
 			if len(assignments) == 0 {
@@ -120,15 +120,17 @@ func (l *Loop) RunUntilIdle(ctx context.Context) error {
 
 // tick assigns and starts whatever the scheduler decides is eligible.
 func (l *Loop) tick(ctx context.Context) error {
+	// Assignments come back alongside errors: what could be decided starts, and the tickets
+	// that could not be considered are reported after, so one project's trouble does not
+	// hold every other project's queue.
 	assignments, err := l.sched.Tick(ctx)
-	if err != nil {
-		return fmt.Errorf("daemon: %w", err)
-	}
-
 	for _, a := range assignments {
 		if l.claim(a.TicketID) {
 			l.start(ctx, a)
 		}
+	}
+	if err != nil {
+		return fmt.Errorf("daemon: %w", err)
 	}
 	return nil
 }

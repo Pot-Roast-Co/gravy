@@ -462,9 +462,16 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 		byProject[p.ID] = p
 		ps := ProjectStatus{Project: p, Counts: map[core.State]int{}}
 
+		// One project that cannot be read is that project's problem. Returning here used to
+		// fail the whole snapshot, and every client renders the snapshot, so a bad row in one
+		// repository blanked the screen for all of them as "daemon unreachable".
 		tickets, err := l.db.ListTickets(ctx, p.ID)
 		if err != nil {
-			return st, err
+			ps.Blocked = "could not read this project's tickets: " + err.Error()
+			if !p.Archived || f.IncludeArchived {
+				st.Projects = append(st.Projects, ps)
+			}
+			continue
 		}
 		for i, t := range tickets {
 			byTicket[t.ID] = t
@@ -510,10 +517,8 @@ func (l *Local) Status(ctx context.Context, f ProjectFilter) (SystemStatus, erro
 			switch {
 			case inFlight(t.State):
 				rt := RunningTicket{Ticket: t, Project: p, Activity: l.activity(ctx, t)}
-				runs, err := l.db.ListRunsForTicket(ctx, t.ID)
-				if err != nil {
-					return st, err
-				}
+				// A run that cannot be read costs this row its timings, not the snapshot.
+				runs, _ := l.db.ListRunsForTicket(ctx, t.ID)
 				if len(runs) > 0 {
 					rt.Run = runs[0]
 					rt.Elapsed = now.Sub(runs[0].StartedAt)

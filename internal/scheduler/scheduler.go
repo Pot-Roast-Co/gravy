@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -133,11 +134,17 @@ func (s *Scheduler) Tick(ctx context.Context) ([]Assignment, error) {
 	// room for before any of it has started.
 	claimedRoutes := map[core.Route]int{}
 
+	// A ticket that cannot be considered costs that ticket its turn, not the tick. Returning on
+	// the first error used to throw away every assignment made so far and stop every project's
+	// queue until the one bad ticket went away — one missing project did exactly that, every
+	// two seconds, for a day. The errors still come back, after the assignments, to be logged.
 	var out []Assignment
+	var errs []error
 	for _, t := range tickets {
 		decision, err := s.consider(ctx, t, pool, claimed, claimedRoutes)
 		if err != nil {
-			return nil, err
+			errs = append(errs, fmt.Errorf("ticket %s: %w", t.ID, err))
+			continue
 		}
 		if decision.assignment == nil {
 			continue
@@ -147,7 +154,7 @@ func (s *Scheduler) Tick(ctx context.Context) ([]Assignment, error) {
 		claimedRoutes[t.Route]++
 		pool.claim(decision.assignment.HostID)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // Explain answers why a ticket is or is not running.

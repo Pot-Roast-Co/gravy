@@ -971,3 +971,36 @@ func TestHandedOffFreesTheSerialQueue(t *testing.T) {
 		t.Fatalf("a handed-off ticket is still holding the serial queue: %s", ex.Reason)
 	}
 }
+
+// brokenDeps is a store whose dependency lookup fails for one ticket.
+type brokenDeps struct {
+	*fakeStore
+	broken string
+}
+
+func (b brokenDeps) DepsOf(ctx context.Context, ticketID string) ([]string, error) {
+	if ticketID == b.broken {
+		return nil, fmt.Errorf("disk I/O error reading dependencies")
+	}
+	return b.fakeStore.DepsOf(ctx, ticketID)
+}
+
+// TestOneBadTicketDoesNotStopOtherProjects is the regression.
+//
+// The first error considering any ticket used to end the tick and discard every assignment made
+// so far, so one unreadable ticket in one repository stopped every repository's queue.
+func TestOneBadTicketDoesNotStopOtherProjects(t *testing.T) {
+	st := newStore().addProject(project("p1", "broken-repo")).addProject(project("p2", "fine-repo"))
+	bad := ticket("bad", "p1", core.StateReady, 1)
+	bad.Priority = 9 // considered first, so the old code never reached the other ticket
+	st.addTicket(bad)
+	st.addTicket(ticket("good", "p2", core.StateReady, 1))
+
+	got, err := newScheduler(brokenDeps{st, "bad"}, newPool(mac("m1", 4))).Tick(context.Background())
+	if want := []string{"good"}; fmt.Sprint(assignedIDs(got)) != fmt.Sprint(want) {
+		t.Errorf("assigned %v, want %v: another project's ticket was held up", assignedIDs(got), want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "bad") {
+		t.Errorf("err = %v, want the bad ticket reported", err)
+	}
+}
