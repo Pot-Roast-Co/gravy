@@ -195,6 +195,22 @@ func (o *Orchestrator) anyHost() host.Host {
 // RegisterHost makes a host available to runs.
 func (o *Orchestrator) RegisterHost(h host.Host) { o.hosts[h.ID()] = h }
 
+// slotsFor is the worker pool a run on hostID draws from: that machine's own.
+//
+// Every run used to claim from the local machine's pool, wherever it ran. A run on another
+// machine took one of this machine's slots — so local projects waited behind remote work — and
+// never touched its own machine's count, so the scheduler saw remote hosts as always idle and
+// never enforced their limits. The shared pool is only the fallback, for a host that was never
+// registered.
+func (o *Orchestrator) slotsFor(hostID string) Slots {
+	if h, ok := o.hosts[hostID]; ok {
+		if s, ok := h.(Slots); ok {
+			return s
+		}
+	}
+	return o.slots
+}
+
 // RegisterProvider makes a provider available to runs.
 func (o *Orchestrator) RegisterProvider(p provider.Provider) { o.providers[p.ID()] = p }
 
@@ -225,14 +241,15 @@ type Result struct {
 // leaked slot permanently shrinks the pool, and the failure is invisible until the queue
 // mysteriously stops moving.
 func (o *Orchestrator) Run(ctx context.Context, a Assignment) (res Result, err error) {
-	if !o.slots.TryClaim() {
+	slots := o.slotsFor(a.HostID)
+	if !slots.TryClaim() {
 		return Result{}, errors.New("agentrun: no worker slot available")
 	}
 	released := false
 	release := func() {
 		if !released {
 			released = true
-			o.slots.Release()
+			slots.Release()
 		}
 	}
 	defer func() {

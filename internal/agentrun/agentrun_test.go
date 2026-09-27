@@ -773,7 +773,10 @@ func TestKillUnknownTicket(t *testing.T) {
 func TestNoWorkerSlotAvailable(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	h.seed(nil)
-	h.slots.total = 0
+	// A run draws on the slots of the machine it is assigned to, so that machine is the one
+	// that must be full.
+	for h.h.(interface{ TryClaim() bool }).TryClaim() {
+	}
 
 	if _, err := h.orch.Run(context.Background(), h.assignment()); err == nil {
 		t.Error("Run proceeded with no worker slot available")
