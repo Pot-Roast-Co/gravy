@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,11 +29,6 @@ const (
 	reviewTry
 	reviewPreviewCommand
 	reviewTrySaving
-	// reviewLanding is the window between pressing "a" and the merge finishing. It exists
-	// because that window is minutes long — rebase, re-validation, push — and the screen used
-	// to spend all of it looking untouched, which invites a second press the state machine
-	// then refuses.
-	reviewLanding
 	// reviewApproving is the moment between pressing "a" and choosing what approval means.
 	// Approving is one decision with three outcomes, and they differ in how far gravy carries
 	// the work — far enough to reach the remote, far enough to reach the target branch, or not
@@ -83,17 +79,41 @@ type review struct {
 	sweepIdx int
 	// swept counts the tickets actually decided, so the exit line can say what was done.
 	swept int
+
+	// landing holds the tickets approved from this screen whose landing has not answered yet.
+	//
+	// It is per ticket on purpose. Landing takes minutes — rebase, re-validation, push — and it
+	// used to put the whole screen into a landing mode that refused every decision until the
+	// daemon answered. The screen reviews every project's work, so one slow or stuck landing
+	// held up review for all of them. Now the approval runs in the background, the card moves
+	// on, and only the ticket that is landing refuses a second decision.
+	landing map[string]bool
 }
 
-func newReview() *review { return &review{expanded: map[string]bool{}, talk: newDiscussion()} }
+func newReview() *review {
+	return &review{expanded: map[string]bool{}, talk: newDiscussion(), landing: map[string]bool{}}
+}
+
+// Time limits for the calls this screen makes. None of them used to have one, so a daemon that
+// never answered left the screen waiting forever with no way to tell it from slow work.
+const (
+	// reviewLoadTimeout bounds reading one ticket's evidence.
+	reviewLoadTimeout = time.Minute
+	// rereviewTimeout covers the advisory pass with its retries.
+	rereviewTimeout = 15 * time.Minute
+	// decideTimeout bounds rejecting and sending changes, which do no git work that can hang.
+	decideTimeout = 2 * time.Minute
+	// landTimeout is generous: validation steps alone may take tens of minutes. It is there so
+	// an approval that never answers eventually says so, not to hurry a real landing.
+	landTimeout = 45 * time.Minute
+)
 
 // CapturesKeys is true while a prompt is open or a sweep is running, both of which bind keys the
 // global keymap also claims.
 func (r *review) CapturesKeys() bool {
-	// Landing is deliberately not key-capturing. It runs in the daemon and outlives this
-	// screen, so holding the human here for the minutes it takes would be a worse bargain than
-	// letting them go and look at something else.
-	return (r.mode != reviewBrowsing && r.mode != reviewLanding) || len(r.sweep) > 0
+	// Landing is not a mode at all: it runs in the background, per ticket, and outlives this
+	// screen, so nothing about it holds the keyboard.
+	return r.mode != reviewBrowsing || len(r.sweep) > 0
 }
 
 // Messages the screen raises for itself.
@@ -101,8 +121,11 @@ type (
 	reviewLoadedMsg struct{ bundle api.ReviewBundle }
 	reviewErrMsg    struct{ err error }
 	reviewActedMsg  struct {
-		verb string
-		err  error
+		// ticketID is the ticket the action was about. A landing answers minutes later, by
+		// which time the card may show another ticket, so the answer must say whose it is.
+		ticketID string
+		verb     string
+		err      error
 		// state is what the ticket reached, for actions that have more than one non-error
 		// outcome. Landing can park instead of merging, and parking reports no error.
 		state core.State
@@ -111,7 +134,9 @@ type (
 
 func loadReview(svc api.Service, ticketID string) tea.Cmd {
 	return func() tea.Msg {
-		b, err := svc.GetReview(context.Background(), ticketID)
+		c, cancel := context.WithTimeout(context.Background(), reviewLoadTimeout)
+		defer cancel()
+		b, err := svc.GetReview(c, ticketID)
 		if err != nil {
 			return reviewErrMsg{err}
 		}
@@ -147,6 +172,15 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, nil
 
 	case rereviewedMsg:
+		if msg.ticketID != "" && msg.ticketID != r.ticketID {
+			// A verdict for a ticket no longer on the card: say so, reload nothing.
+			if msg.err != nil {
+				r.notice = shortID(msg.ticketID) + " review: " + msg.err.Error()
+			} else {
+				r.notice = shortID(msg.ticketID) + " has a fresh verdict"
+			}
+			return r, nil
+		}
 		if msg.err != nil {
 			r.notice = "review: " + msg.err.Error()
 			return r, nil
@@ -238,42 +272,29 @@ func (r *review) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, nil
 
 	case reviewActedMsg:
+		if r.isLanding(msg.ticketID) {
+			// A background landing answering. It says how it went and leaves the card alone:
+			// the human has moved on to other work, perhaps in another project.
+			r.doneLanding(msg.ticketID)
+			if strings.HasPrefix(r.notice, "sweep finished") {
+				// Keep the sweep's summary; the landing's outcome goes after it.
+				r.notice += " · " + actedNotice(msg)
+			} else {
+				r.notice = actedNotice(msg)
+			}
+			return r, nil
+		}
+		if msg.ticketID != "" && msg.ticketID != r.ticketID {
+			r.notice = actedNotice(msg)
+			return r, nil
+		}
 		r.mode = reviewBrowsing
+		r.notice = actedNotice(msg)
 		if msg.err != nil {
-			// A duplicate approval is not a failed one. The work is landing or landed, and
-			// saying "failed" over a merge that succeeded is how a correct refusal becomes a
-			// bug report.
-			if errors.Is(msg.err, core.ErrAlreadyLanded) {
-				r.notice = "already landing — the first approval is still going"
-				return r, nil
-			}
-			r.notice = fmt.Sprintf("%s failed: %v", msg.verb, msg.err)
 			return r, nil
 		}
-		// A landing that parked did not land, and saying it did is how a human learns their
-		// work merged when it is sitting in Needs You with a failed validation. Parking is
-		// not an error, so only the state can tell these apart.
-		if msg.state == core.StateHandedOff {
-			r.notice = shortID(r.ticketID) + " is yours — branch and worktree kept, nothing merged"
-			r.ticketID, r.loaded = "", false
-			if len(r.sweep) > 0 {
-				r.swept++
-				return r, r.advance(ctx)
-			}
-			return r, nil
-		}
-		if msg.state == core.StateNeedsYou {
-			r.notice = shortID(r.ticketID) + " did not land — parked for you, see Needs You (8)"
-			r.ticketID, r.loaded = "", false
-			if len(r.sweep) > 0 {
-				r.swept++
-				return r, r.advance(ctx)
-			}
-			return r, nil
-		}
-		// The ticket has left the review queue, so the screen must stop showing work that is
-		// already decided.
-		r.notice = fmt.Sprintf("%s %s", shortID(r.ticketID), msg.verb)
+		// The ticket has left the review queue — decided, parked or handed off — so the
+		// screen must stop showing work that is already decided.
 		r.ticketID, r.loaded = "", false
 		if len(r.sweep) > 0 {
 			r.swept++
@@ -304,13 +325,13 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		return r, nil
 	}
 
-	// While a landing is in flight the decisions have already been made, so the keys that make
-	// one are refused rather than queued. This is the actual fix for the double press: the
-	// second "a" never reaches the daemon, so the daemon never has to refuse it.
-	if r.mode == reviewLanding {
+	// While this ticket is landing its decision has already been made, so the keys that make
+	// one are refused rather than queued: the second "a" never reaches the daemon. Only this
+	// ticket — every other ticket on the screen is still open to review.
+	if r.isLanding(r.ticketID) {
 		switch key {
 		case "a", "r", "x", "v", "T", "s":
-			r.notice = "landing — this takes a few minutes; it finishes even if you leave"
+			r.notice = shortID(r.ticketID) + " is landing in the background; it finishes even if you leave"
 			return r, nil
 		}
 	}
@@ -327,8 +348,10 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 			id := r.ticketID
 			r.mode = reviewBrowsing
 			return r, func() tea.Msg {
-				err := ctx.Svc.Reject(context.Background(), id)
-				return reviewActedMsg{verb: "rejected", err: err}
+				c, cancel := context.WithTimeout(context.Background(), decideTimeout)
+				defer cancel()
+				err := ctx.Svc.Reject(c, id)
+				return reviewActedMsg{ticketID: id, verb: "rejected", err: err}
 			}
 		default:
 			r.mode = reviewBrowsing
@@ -391,7 +414,9 @@ func (r *review) handleKey(msg tea.KeyMsg, ctx ViewContext) (Screen, tea.Cmd) {
 		}
 		r.notice = "asking for a fresh verdict…"
 		return r, func() tea.Msg {
-			return rereviewedMsg{err: svc.Rereview(context.Background(), id)}
+			c, cancel := context.WithTimeout(context.Background(), rereviewTimeout)
+			defer cancel()
+			return rereviewedMsg{ticketID: id, err: svc.Rereview(c, id)}
 		}
 	case "tab":
 		if n := len(r.bundle.Diff.Files); n > 0 {
@@ -645,11 +670,88 @@ func (r *review) approve(ctx ViewContext, how core.Approval) (Screen, tea.Cmd) {
 	case core.ApproveHandOff:
 		verb, notice = "approved and handed to you", "rebasing and re-validating, then it is yours"
 	}
-	r.mode, r.notice = reviewLanding, notice
-	return r, func() tea.Msg {
-		state, err := ctx.Svc.Approve(context.Background(), id, how)
-		return reviewActedMsg{verb: verb, err: err, state: state}
+	land := func() tea.Msg {
+		c, cancel := context.WithTimeout(context.Background(), landTimeout)
+		defer cancel()
+		state, err := ctx.Svc.Approve(c, id, how)
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("no answer after %s — it may still finish; check Running and Needs You", landTimeout)
+		}
+		return reviewActedMsg{ticketID: id, verb: verb, err: err, state: state}
 	}
+
+	// The decision is made; the card moves on while the landing runs.
+	r.landing[id] = true
+	r.mode = reviewBrowsing
+	r.notice = shortID(id) + " " + notice + " in the background — keep reviewing"
+	r.ticketID, r.loaded = "", false
+	if len(r.sweep) > 0 {
+		r.swept++
+		return r, tea.Batch(land, r.advance(ctx))
+	}
+	if next := r.nextPendingReview(ctx); next != "" {
+		r.ticketID, r.err, r.cursor = next, nil, 0
+		r.expanded = map[string]bool{}
+		return r, tea.Batch(land, loadReview(ctx.Svc, next))
+	}
+	return r, land
+}
+
+// nextPendingReview is the first ticket awaiting review that is not already landing from here.
+// The status snapshot can still list a just-approved ticket until the next refresh.
+func (r *review) nextPendingReview(ctx ViewContext) string {
+	for _, a := range ctx.Status.Attention {
+		if a.Attention.Reason == core.ReasonReviewPending && !r.isLanding(a.Attention.TicketID) {
+			return a.Attention.TicketID
+		}
+	}
+	return ""
+}
+
+// isLanding reports whether id is landing from this screen. Ticket ids reach the screen both
+// whole and shortened, and a short id is a prefix of the whole one.
+func (r *review) isLanding(id string) bool {
+	if id == "" {
+		return false
+	}
+	for landing := range r.landing {
+		if landing == id || strings.HasPrefix(landing, id) || strings.HasPrefix(id, landing) {
+			return true
+		}
+	}
+	return false
+}
+
+// doneLanding forgets a landing that has answered, in whichever form its id arrived.
+func (r *review) doneLanding(id string) {
+	for landing := range r.landing {
+		if landing == id || strings.HasPrefix(landing, id) || strings.HasPrefix(id, landing) {
+			delete(r.landing, landing)
+		}
+	}
+}
+
+// actedNotice says how an action on a ticket turned out, naming the ticket.
+func actedNotice(msg reviewActedMsg) string {
+	id := shortID(msg.ticketID)
+	if msg.err != nil {
+		// A duplicate approval is not a failed one. The work is landing or landed, and saying
+		// "failed" over a merge that succeeded is how a correct refusal becomes a bug report.
+		if errors.Is(msg.err, core.ErrAlreadyLanded) {
+			return strings.TrimSpace(id + " already landing — the first approval is still going")
+		}
+		return strings.TrimSpace(fmt.Sprintf("%s %s failed: %v", id, msg.verb, msg.err))
+	}
+	// A landing that parked did not land, and saying it did is how a human learns their work
+	// merged when it is sitting in Needs You with a failed validation. Parking is not an error,
+	// so only the state can tell these apart.
+	switch msg.state {
+	case core.StateHandedOff:
+		return strings.TrimSpace(id + " is yours — branch and worktree kept, nothing merged")
+	case core.StateNeedsYou:
+		return strings.TrimSpace(id + " did not land — parked for you, see Needs You (8)")
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s %s", id, msg.verb))
 }
 
 func (r *review) footer(th Theme, width int) string {
@@ -657,9 +759,6 @@ func (r *review) footer(th Theme, width int) string {
 	case reviewConfirmReject:
 		return th.Danger.Render("reject this ticket and delete its worktree? ") +
 			th.Muted.Render("y / n")
-	}
-	if r.mode == reviewLanding {
-		return th.Accent.Render(trunc(r.notice, width))
 	}
 	if r.mode == reviewApproving {
 		target := branchName(r.bundle.Project.TargetBranch)
@@ -893,7 +992,10 @@ func (r *review) verdictLines(b api.ReviewBundle, th Theme, width int) []string 
 }
 
 // rereviewedMsg reports a re-run of the advisory review.
-type rereviewedMsg struct{ err error }
+type rereviewedMsg struct {
+	ticketID string
+	err      error
+}
 
 // checkoutReadyMsg carries a prepared review checkout back to the screen.
 type checkoutReadyMsg struct {

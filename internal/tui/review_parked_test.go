@@ -15,14 +15,12 @@ import (
 // failed against a target that had moved, the ticket parked with validation_failed, and the only
 // thing that said so was a row on another screen.
 func TestParkedLandingDoesNotReportSuccess(t *testing.T) {
-	r, _, ctx := landingReview(t)
-	r.mode = reviewLanding
-
-	screen, _ := r.Update(reviewActedMsg{
-		verb:  "approved and landed",
-		state: core.StateNeedsYou,
-	}, ctx)
-	rv := screen.(*review)
+	r, _, _ := landingReview(t)
+	rv := landed(r, reviewActedMsg{
+		ticketID: r.ticketID,
+		verb:     "approved and landed",
+		state:    core.StateNeedsYou,
+	})
 
 	if strings.Contains(rv.notice, "approved and landed") {
 		t.Errorf("said the work landed when it parked: %q", rv.notice)
@@ -37,11 +35,8 @@ func TestParkedLandingDoesNotReportSuccess(t *testing.T) {
 
 // A landing that actually merged still reports success.
 func TestLandedReportsSuccess(t *testing.T) {
-	r, _, ctx := landingReview(t)
-	r.mode = reviewLanding
-
-	screen, _ := r.Update(reviewActedMsg{verb: "approved and landed", state: core.StateDone}, ctx)
-	rv := screen.(*review)
+	r, _, _ := landingReview(t)
+	rv := landed(r, reviewActedMsg{ticketID: r.ticketID, verb: "approved and landed", state: core.StateDone})
 
 	if !strings.Contains(rv.notice, "approved and landed") {
 		t.Errorf("a successful landing stopped saying so: %q", rv.notice)
@@ -51,16 +46,15 @@ func TestLandedReportsSuccess(t *testing.T) {
 	}
 }
 
-// Parking still clears the card: the ticket has left Review either way, and leaving it on screen
-// invites approving it again.
+// Approving clears the card straight away, whatever the landing later reports: the ticket has
+// left Review either way, and leaving it on screen invites approving it again.
 func TestParkedLandingLeavesTheReviewScreen(t *testing.T) {
 	r, _, ctx := landingReview(t)
-	r.mode = reviewLanding
+	id := r.ticketID
+	rv, _ := approveOpen(t, r, ctx)
+	rv = landed(rv, reviewActedMsg{ticketID: id, verb: "approved and landed", state: core.StateNeedsYou})
 
-	screen, _ := r.Update(reviewActedMsg{verb: "approved and landed", state: core.StateNeedsYou}, ctx)
-	rv := screen.(*review)
-
-	if rv.ticketID != "" {
+	if rv.ticketID == id {
 		t.Errorf("parked ticket %q is still on the review card", rv.ticketID)
 	}
 	if rv.mode != reviewBrowsing {

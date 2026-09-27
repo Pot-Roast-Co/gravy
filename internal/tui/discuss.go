@@ -277,10 +277,12 @@ func (d *discussion) confirmSend(ctx ViewContext) tea.Cmd {
 	id, svc := d.ticketID, ctx.Svc
 	d.mode, d.busy, d.notice = discussReading, true, ""
 	return func() tea.Msg {
-		err := svc.SendChanges(context.Background(), api.SendChangesReq{
+		c, cancel := context.WithTimeout(context.Background(), decideTimeout)
+		defer cancel()
+		err := svc.SendChanges(c, api.SendChangesReq{
 			TicketID: id, Proposal: draft, Confirm: true,
 		})
-		return reviewActedMsg{verb: "sent back for changes", err: err}
+		return reviewActedMsg{ticketID: id, verb: "sent back for changes", err: err}
 	}
 }
 

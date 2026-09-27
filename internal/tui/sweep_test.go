@@ -92,7 +92,7 @@ func TestSweepVisitsEveryReviewOnceAndExits(t *testing.T) {
 		if cmd == nil {
 			t.Fatalf("approve produced no command at step %d", i+1)
 		}
-		m = send(t, m, cmd())
+		m = drive(t, m, cmd)
 		if i+1 < len(order) {
 			m = send(t, m, reviewLoadedMsg{bundle: bundleFor(f, order[i+1])})
 		}
@@ -131,7 +131,7 @@ func TestSweepApprovesThroughTheSameCodePath(t *testing.T) {
 	if dcmd == nil {
 		t.Fatal("approve from the review screen produced no command")
 	}
-	send(t, direct, dcmd())
+	drive(t, direct, dcmd)
 	fromScreen := append([]string{}, f.approved...)
 
 	// And from inside a sweep.
@@ -142,7 +142,7 @@ func TestSweepApprovesThroughTheSameCodePath(t *testing.T) {
 	if scmd == nil {
 		t.Fatal("approve inside the sweep produced no command")
 	}
-	send(t, m, scmd())
+	drive(t, m, scmd)
 
 	if len(fromScreen) != 1 || len(f.approved) != 1 || fromScreen[0] != f.approved[0] {
 		t.Errorf("sweep approved %v, screen approved %v — they must be the same call",
@@ -171,7 +171,7 @@ func TestExitingMidSweepLeavesTheRestUntouched(t *testing.T) {
 
 	m, _ = sendCmd(t, m, key("a"))
 	m, cmd := sendCmd(t, m, key("enter"))
-	m = send(t, m, cmd())
+	m = drive(t, m, cmd)
 	m = send(t, m, reviewLoadedMsg{bundle: bundleFor(f, "m2")})
 
 	m = send(t, m, key("q")) // exit the sweep, not the program
@@ -209,7 +209,7 @@ func TestNoBulkApproveAffordance(t *testing.T) {
 
 	m, _ = sendCmd(t, m, key("a"))
 	m, cmd := sendCmd(t, m, key("enter"))
-	m = send(t, m, cmd())
+	m = drive(t, m, cmd)
 	if len(f.approved) != 1 {
 		t.Fatalf("one keystroke approved %d tickets", len(f.approved))
 	}

@@ -73,13 +73,10 @@ func TestApproveChooserCancels(t *testing.T) {
 
 // A handed-off ticket did not merge, and the screen says so rather than reporting a landing.
 func TestHandedOffReadsAsHandedOff(t *testing.T) {
-	r, _, ctx := landingReview(t)
-	r.mode = reviewLanding
-
-	screen, _ := r.Update(reviewActedMsg{
-		verb: "approved and handed to you", state: core.StateHandedOff,
-	}, ctx)
-	rv := screen.(*review)
+	r, _, _ := landingReview(t)
+	rv := landed(r, reviewActedMsg{
+		ticketID: r.ticketID, verb: "approved and handed to you", state: core.StateHandedOff,
+	})
 
 	if strings.Contains(rv.notice, "landed") {
 		t.Errorf("a hand-off claimed a landing: %q", rv.notice)

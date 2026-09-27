@@ -155,7 +155,7 @@ func TestApproveCallsTheGate(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("choosing an outcome produced no command")
 	}
-	m = send(t, m, cmd())
+	m = drive(t, m, cmd)
 
 	if len(f.approved) != 1 || f.approved[0] != f.review.Ticket.ID {
 		t.Fatalf("approved = %v, want the open ticket", f.approved)
@@ -543,7 +543,7 @@ func TestApproveDiscardsTheCheckout(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a then enter did not approve")
 	}
-	send(t, m, cmd())
+	drive(t, m, cmd)
 
 	if len(f.approved) != 1 {
 		t.Fatalf("approve called %d times", len(f.approved))
