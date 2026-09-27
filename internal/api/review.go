@@ -280,22 +280,52 @@ func (l *Local) Reject(ctx context.Context, ticketID string) error {
 	// Its review checkout goes with it, for the same reason.
 	_ = l.DiscardReviewCheckout(ctx, ticketID)
 
-	// A rejected ticket's worktree is dead weight on disk. Failing to remove it must not fail
-	// the rejection, which has already been recorded — report it and move on.
-	if t.WorktreePath != "" {
-		if p, perr := l.db.GetProject(ctx, t.ProjectID); perr == nil {
-			if h := l.aHost(); h != nil {
-				repo := git.NewLocalRepo(h, p.RepoPath, "")
-				wt := git.Worktree{Path: t.WorktreePath, Branch: t.Branch, Base: p.TargetBranch}
-				err = repo.RemoveWorktree(ctx, wt)
-			}
-		}
-	}
+	// A rejected ticket's worktree and branch are dead weight: rejecting is discarding the work.
+	// Failing to remove them must not fail the rejection, which has already been recorded —
+	// report it and move on.
+	//
+	// The branch used to survive. Only the worktree went, so every rejected ticket left a
+	// gravy/<id> branch in the repository for good; nothing else ever deletes one. And both
+	// were removed on whichever host came first, not the project's own, so a project on
+	// another machine had its rejection cleaned up on the wrong one.
+	err = l.discardTicketWork(ctx, t)
 
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID, State: state})
 	l.events.publish(Event{Kind: EventAttentionChanged, TicketID: ticketID})
 	if err != nil {
-		return fmt.Errorf("ticket %s was rejected, but its worktree could not be removed: %w", ticketID, err)
+		return fmt.Errorf("ticket %s was rejected, but its worktree or branch could not be removed: %w", ticketID, err)
+	}
+	return nil
+}
+
+// discardTicketWork removes a ticket's worktree and branch on the project's own host.
+func (l *Local) discardTicketWork(ctx context.Context, t core.Ticket) error {
+	if t.WorktreePath == "" && t.Branch == "" {
+		return nil
+	}
+	p, err := l.db.GetProject(ctx, t.ProjectID)
+	if err != nil || strings.TrimSpace(p.RepoPath) == "" {
+		return nil // no repository, so nothing was ever checked out
+	}
+	h, err := l.hostFor(p.HostID)
+	if err != nil {
+		return err
+	}
+	repo := git.NewLocalRepo(h, p.RepoPath, "")
+	if t.WorktreePath != "" {
+		wt := git.Worktree{Path: t.WorktreePath, Branch: t.Branch, Base: p.TargetBranch}
+		if err := repo.RemoveWorktree(ctx, wt); err != nil {
+			return err
+		}
+	}
+	// A ticket that never ran has a branch name but no branch; that is not a failure.
+	if t.Branch != "" {
+		if _, code, err := runGit(ctx, h, p.RepoPath, "rev-parse", "--verify", "--quiet",
+			"refs/heads/"+t.Branch); err == nil && code == 0 {
+			if err := repo.DeleteBranch(ctx, t.Branch); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
