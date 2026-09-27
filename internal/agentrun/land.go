@@ -99,8 +99,41 @@ func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval
 	res.Target = project.TargetBranch
 
 	state, err := l.land(ctx, &res, ticket, project, repo, wt, h, how)
+	if err != nil && res.MergeCommit == "" {
+		if parked, ok := l.parkAfterError(ctx, ticket, err); ok {
+			state = parked
+		}
+	}
 	res.State = state
 	return res, err
+}
+
+// parkAfterError puts a ticket that landing left in Landing into Needs You, where it can be
+// seen and retried.
+//
+// The failures landing expects — a conflict, a red re-validation, a dirty checkout — already
+// park. The rest used to return an error and leave the ticket in Landing, a state with no way
+// out: no kill, no requeue, no retry, and for a serial project no next ticket either, ever.
+//
+// It parks only when nothing merged; the caller checks that, because retrying a landing that
+// already merged would land it twice. It uses a context that outlives cancellation, so a
+// landing cut short by a shutdown still leaves its ticket somewhere a human will find it.
+func (l *Lander) parkAfterError(ctx context.Context, ticket core.Ticket, cause error) (core.State, bool) {
+	ctx = context.WithoutCancel(ctx)
+	current, err := l.orch.store.GetTicket(ctx, ticket.ID)
+	if err != nil || current.State != core.StateLanding {
+		return "", false
+	}
+	state, err := l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
+		"error":  cause.Error(),
+		"stage":  "landing",
+		"reason": "landing stopped with an error before anything was merged",
+	})
+	if err != nil {
+		l.orch.log.Warn("could not park a ticket that failed to land", "ticket", ticket.ID, "error", err)
+		return "", false
+	}
+	return state, true
 }
 
 // Continue retries landing after a human has resolved a conflict in the worktree.

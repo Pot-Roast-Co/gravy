@@ -599,3 +599,56 @@ func TestApproveLocalMergesWithoutPushing(t *testing.T) {
 		t.Errorf("the remote moved: %q -> %q", remoteBefore, after)
 	}
 }
+
+// TestALandingThatErrorsIsParkedNotStranded is the regression.
+//
+// The failures landing expects park the ticket in Needs You. The rest — here, a target branch
+// that cannot be resolved — returned an error and left the ticket in Landing, a state with no
+// exit: no kill, no retry, and for a serial project no next ticket, ever.
+func TestALandingThatErrorsIsParkedNotStranded(t *testing.T) {
+	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
+	h.seed(nil)
+	landReady(t, h, "feature.txt", "the work\n")
+	ctx := context.Background()
+
+	tk, err := h.db.GetTicket(ctx, "GR-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := h.db.GetProject(ctx, tk.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.TargetBranch = "no-such-branch"
+	if err := h.db.UpdateProject(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.orch.Land().Approve(ctx, "GR-100", core.ApprovePush)
+	if err == nil {
+		t.Fatal("landing onto a branch that does not exist succeeded")
+	}
+	if res.State != core.StateNeedsYou {
+		t.Errorf("result state = %q, want needs_you", res.State)
+	}
+	tk, _ = h.db.GetTicket(ctx, "GR-100")
+	if tk.State != core.StateNeedsYou {
+		t.Fatalf("ticket is %s: an erroring landing stranded it", tk.State)
+	}
+	open, err := h.db.ListOpenAttention(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, a := range open {
+		if a.TicketID == "GR-100" && a.Reason == core.ReasonMergeConflict && a.Payload["stage"] == "landing" {
+			found = true
+			if e, _ := a.Payload["error"].(string); e == "" {
+				t.Error("the parked landing does not say what went wrong")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no landing attention for the parked ticket: %+v", open)
+	}
+}

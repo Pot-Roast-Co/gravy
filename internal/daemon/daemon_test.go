@@ -304,3 +304,31 @@ func TestReconcileRecoversReviewAfterRunEnded(t *testing.T) {
 		})
 	}
 }
+
+// TestReconcileRecoversAnInterruptedLanding: a daemon that stopped mid-landing left the ticket
+// in Landing, which nothing could move it out of. Startup now parks it where it can be retried.
+func TestReconcileRecoversAnInterruptedLanding(t *testing.T) {
+	home, db, svc := fixture(t)
+	ctx := context.Background()
+	tk := core.Ticket{ID: "landing-ticket", ProjectID: "p1", Title: "was landing", State: core.StateLanding,
+		Route: core.RouteImplementation, WorktreePath: "preserved-worktree", CreatedAt: time.Now()}
+	if err := db.CreateTicket(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	d := New(home, svc, idleRunner{}, db, func() string { return "recovered-landing" }, nil)
+	if n, err := d.Reconcile(ctx); err != nil || n != 1 {
+		t.Fatalf("reconcile %d: %v", n, err)
+	}
+	got, err := db.GetTicket(ctx, tk.ID)
+	if err != nil || got.State != core.StateNeedsYou || got.WorktreePath != tk.WorktreePath {
+		t.Fatalf("ticket %+v, %v", got, err)
+	}
+	attention, err := db.ListOpenAttention(ctx)
+	if err != nil || len(attention) != 1 || attention[0].Reason != core.ReasonMergeConflict ||
+		attention[0].Payload["stage"] != "landing" {
+		t.Fatalf("attention %+v, %v", attention, err)
+	}
+	if n, err := d.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("second reconcile %d: %v", n, err)
+	}
+}

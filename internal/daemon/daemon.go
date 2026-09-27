@@ -269,6 +269,39 @@ func (d *Daemon) Reconcile(ctx context.Context) (int, error) {
 		touched++
 		d.log.Warn("recovered an interrupted review", "ticket", ticket.ID, "run", runID)
 	}
+
+	// Landing runs inside the daemon, so a daemon that stopped mid-landing left its ticket in
+	// Landing, which has no exit a human can take and which holds a serial project's queue
+	// shut for good. Park it where it can be seen and retried.
+	//
+	// One ticket that cannot be recovered is logged and skipped. Returning would refuse to
+	// start the daemon — for every project — over one ticket in one of them.
+	landing, err := d.store.ListTicketsByState(ctx, core.StateLanding)
+	if err != nil {
+		return touched, err
+	}
+	for _, ticket := range landing {
+		if err := d.store.OpenAttention(ctx, core.Attention{
+			ID: d.newID(), ProjectID: ticket.ProjectID, TicketID: ticket.ID,
+			Reason: core.ReasonMergeConflict,
+			Payload: map[string]any{
+				"stage": "landing",
+				"error": "the daemon stopped while this ticket was landing",
+				"reason": "check whether the target branch already has this work before retrying: " +
+					"the landing may have merged before it was interrupted",
+			},
+			CreatedAt: time.Now(),
+		}); err != nil {
+			d.log.Warn("could not recover an interrupted landing", "ticket", ticket.ID, "error", err)
+			continue
+		}
+		if _, err := d.store.SetTicketState(ctx, ticket.ID, core.EventLandFailed); err != nil {
+			d.log.Warn("could not recover an interrupted landing", "ticket", ticket.ID, "error", err)
+			continue
+		}
+		touched++
+		d.log.Warn("recovered an interrupted landing", "ticket", ticket.ID)
+	}
 	return touched, nil
 }
 
