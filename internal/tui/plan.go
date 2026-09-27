@@ -16,6 +16,9 @@ import (
 
 // planTurnMsg is one answer from the planner.
 type planTurnMsg struct {
+	// runID is the turn this answers. A conversation reset while a turn is out makes the
+	// answer stale, and a stale answer must not land in whatever conversation is open now.
+	runID string
 	reply api.PlanReply
 	err   error
 }
@@ -74,6 +77,12 @@ type plan struct {
 	// route is what the approved tickets will ask for. A route, never a model.
 	route core.Route
 
+	// turn is the run id of the turn in flight, empty when none is. Only its answer is
+	// applied: without this a turn answered after "x" reset the screen wrote its session and
+	// tickets into the next conversation, even one about another project, and approving would
+	// put one project's tickets in another's backlog.
+	turn string
+
 	input   string
 	editing bool
 	busy    bool
@@ -106,7 +115,7 @@ func (p *plan) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return p, nil
 
 	case planLogOpenedMsg:
-		if !p.busy {
+		if !p.busy || msg.runID != p.turn {
 			msg.stop() // the turn finished before the tail opened
 			return p, nil
 		}
@@ -127,6 +136,10 @@ func (p *plan) Update(msg tea.Msg, ctx ViewContext) (Screen, tea.Cmd) {
 		return p, nil
 
 	case planTurnMsg:
+		if msg.runID != p.turn {
+			return p, nil // the conversation it belonged to is gone
+		}
+		p.turn = ""
 		p.busy = false
 		p.endTail()
 		if msg.err != nil {
@@ -302,6 +315,7 @@ func (p *plan) ask(ctx ViewContext, message, display string) tea.Cmd {
 	// A correlation id chosen here, so the tail can be opened at the same moment the turn is
 	// sent rather than after it returns — which would be after the pause it exists to explain.
 	runID := planRunID()
+	p.turn = runID
 	svc, session := ctx.Svc, p.session
 	agent := p.agent
 	var history strings.Builder
@@ -321,7 +335,7 @@ func (p *plan) ask(ctx ViewContext, message, display string) tea.Cmd {
 		reply, err := svc.Plan(context.Background(), api.PlanReq{
 			ProjectID: project, Message: message, Session: session, RunID: runID, History: transcript, Agent: agent,
 		})
-		return planTurnMsg{reply: reply, err: err}
+		return planTurnMsg{runID: runID, reply: reply, err: err}
 	}
 	return tea.Batch(turn, openPlanLog(svc, runID))
 }

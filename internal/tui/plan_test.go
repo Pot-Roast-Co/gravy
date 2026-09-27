@@ -899,3 +899,49 @@ func TestTypingIsVisibleOnAFreshPlanScreen(t *testing.T) {
 		t.Errorf("typed text is not on screen:\n%s", m.View())
 	}
 }
+
+// TestAStaleTurnDoesNotLandInTheNextConversation is the regression.
+//
+// A turn's answer carried nothing saying which turn it answered. Pressing x while a turn was out
+// reset the screen, and when the old answer arrived it wrote its session and proposed tickets
+// into whatever conversation was open — even one about another project — so approving would put
+// one project's tickets in another's backlog.
+func TestAStaleTurnDoesNotLandInTheNextConversation(t *testing.T) {
+	f := newFake()
+	ctx := ViewContext{Theme: DefaultTheme(), Svc: f, Width: 100, Height: 30}
+
+	p := newPlan()
+	p.pinnedID, p.pinnedName = "project-a", "Project A"
+	if p.ask(ctx, "what next for A?", "") == nil {
+		t.Fatal("asking about A sent nothing")
+	}
+	stale := p.turn
+
+	screen, _ := p.handleKey(key("x"), ctx) // start over while A's turn is still out
+	p = screen.(*plan)
+	p.pinnedID, p.pinnedName = "project-b", "Project B"
+	if p.ask(ctx, "what next for B?", "") == nil {
+		t.Fatal("asking about B sent nothing")
+	}
+
+	// A's answer arrives late.
+	screen, _ = p.Update(planTurnMsg{runID: stale, reply: api.PlanReply{
+		Session: "session-for-a", Reply: "Here is A's plan.", Tickets: proposal("A's ticket"),
+	}}, ctx)
+	p = screen.(*plan)
+	if len(p.tickets) != 0 || p.session != "" {
+		t.Fatalf("A's stale answer landed in B's conversation: session %q, tickets %v", p.session, p.tickets)
+	}
+	if !p.busy {
+		t.Error("the stale answer ended B's turn")
+	}
+
+	// B's own answer still lands.
+	screen, _ = p.Update(planTurnMsg{runID: p.turn, reply: api.PlanReply{
+		Session: "session-for-b", Reply: "Here is B's plan.", Tickets: proposal("B's ticket"),
+	}}, ctx)
+	p = screen.(*plan)
+	if p.session != "session-for-b" || len(p.tickets) != 1 || p.tickets[0].Title != "B's ticket" {
+		t.Errorf("B's answer did not land: session %q, tickets %v", p.session, p.tickets)
+	}
+}
