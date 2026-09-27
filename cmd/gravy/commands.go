@@ -44,6 +44,8 @@ func runProject(ctx context.Context, args []string) error {
 		return projectSetRepo(ctx, rest)
 	case "create-repo":
 		return projectCreateRepo(ctx, rest)
+	case "delete", "rm":
+		return projectDelete(ctx, rest)
 	case "set-target":
 		return projectSetTarget(ctx, rest)
 	case "archive":
@@ -54,7 +56,7 @@ func runProject(ctx context.Context, args []string) error {
 		return projectList(ctx, rest)
 	default:
 		return fmt.Errorf(
-			"unknown project command %q (try: add, list, create-repo, set-repo, set-target, archive, unarchive)", sub)
+			"unknown project command %q (try: add, list, create-repo, set-repo, set-target, archive, unarchive, delete)", sub)
 	}
 }
 
@@ -255,6 +257,63 @@ func projectSetRepo(ctx context.Context, args []string) error {
 	if n := len(saved.Allowlist.Commands); n > 0 {
 		fmt.Printf("  detected %d allowed command(s); review them with `gravy` -> Projects\n", n)
 	}
+	return nil
+}
+
+// projectDelete removes a project from gravy, with its tickets, runs and history.
+//
+// Deleting is for a project registered by mistake or abandoned outright; a finished repository
+// is archived instead, which keeps its history. It asks for the project's name to be typed,
+// because nothing brings the tickets back. The repository on disk is not touched.
+func projectDelete(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("gravy project delete", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: gravy project delete [--yes] <slug|id>")
+		fmt.Fprintln(os.Stderr, "\nRemoves a project and its tickets from gravy. Your repository is not touched.")
+		fmt.Fprintln(os.Stderr, "To keep the history of a finished project, use `gravy project archive` instead.")
+		fs.PrintDefaults()
+	}
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		fs.Usage()
+		return fmt.Errorf("expected a project")
+	}
+
+	a, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+
+	p, err := findProject(ctx, a.svc, rest[0])
+	if err != nil {
+		return err
+	}
+	tickets, err := a.svc.ListTickets(ctx, api.TicketFilter{ProjectID: p.ID})
+	if err != nil {
+		return err
+	}
+
+	if !*yes {
+		fmt.Printf("This removes %s from gravy: %d ticket(s) with their runs and history,\n", p.Slug, len(tickets))
+		fmt.Println("and the worktrees and branches gravy made for them.")
+		if p.RepoPath != "" {
+			fmt.Printf("The repository at %s and its branches are left as they are.\n", p.RepoPath)
+		}
+		fmt.Printf("Type %s to confirm: ", p.Slug)
+		var typed string
+		if _, err := fmt.Scanln(&typed); err != nil || strings.TrimSpace(typed) != p.Slug {
+			return fmt.Errorf("not deleted")
+		}
+	}
+	if err := a.svc.DeleteProject(ctx, p.ID); err != nil {
+		return err
+	}
+	fmt.Printf("deleted %s\n", p.Slug)
 	return nil
 }
 

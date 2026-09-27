@@ -747,6 +747,26 @@ func (l *Local) DeleteProject(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	tickets, err := l.db.ListTickets(ctx, id)
+	if err != nil {
+		return err
+	}
+	// Not while an agent or a landing is working in it: deleting the records would orphan a
+	// process that is still writing to a worktree nothing points at any more.
+	for _, t := range tickets {
+		if inFlight(t.State) {
+			return fmt.Errorf("%s has work in flight (%s is %s); kill or wait for it, then delete",
+				p.Slug, t.ID, t.State)
+		}
+	}
+	// Its tickets' worktrees and branches go with it. The records cascade away below, and
+	// after that nothing would know these belonged to anything — gravy never deletes a branch
+	// it has no ticket for. The repository itself and its target branch are not touched.
+	for _, t := range tickets {
+		if err := l.discardTicketWork(ctx, t); err != nil {
+			return fmt.Errorf("delete project %s: clean up %s: %w", p.Slug, t.ID, err)
+		}
+	}
 	if err := l.db.DeleteProject(ctx, id); err != nil {
 		return fmt.Errorf("delete project %s: %w", p.Slug, err)
 	}
