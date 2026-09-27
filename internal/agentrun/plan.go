@@ -211,7 +211,7 @@ func (p *Planner) planOnce(ctx context.Context, turn core.PlanTurn, choice core.
 	if out.Class == provider.QuotaExhausted || out.Class == provider.RateLimited {
 		return core.PlanResult{}, &planningLimit{outcome: out}
 	}
-	if out.Class != provider.Success {
+	if out.Class != provider.Success && !refusedButFinished(out) {
 		return core.PlanResult{}, fmt.Errorf("planner failed: %s", out.Note)
 	}
 
@@ -486,6 +486,11 @@ func parsePlan(text string) (string, []core.PlannedTicket) {
 }
 
 // lastJSONBlock returns the text with its final fenced json block removed, and that block.
+//
+// The closing fence is looked for at the start of a line. A ticket body may quote a config
+// example in its own fence, and cutting at the first bare fence truncated the block mid-string,
+// failed the decode, and silently dropped the whole proposal. A json string cannot hold a raw
+// newline, so a fence that opens a line is never inside one.
 func lastJSONBlock(text string) (rest, block string) {
 	const fence = "```"
 	for _, opener := range []string{fence + "json\n", fence + "JSON\n"} {
@@ -494,9 +499,12 @@ func lastJSONBlock(text string) (rest, block string) {
 			continue
 		}
 		body := text[start+len(opener):]
-		end := strings.Index(body, fence)
+		end := strings.Index(body, "\n"+fence)
 		if end < 0 {
-			continue
+			// A closing fence glued to the last line, which is still worth reading.
+			if end = strings.Index(body, fence); end < 0 {
+				continue
+			}
 		}
 		return text[:start], body[:end]
 	}

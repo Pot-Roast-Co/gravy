@@ -177,7 +177,7 @@ func (d *Discussion) once(ctx context.Context, turn core.DiscussionTurn, choice 
 	if out.Class == provider.QuotaExhausted || out.Class == provider.RateLimited {
 		return core.DiscussionResult{}, &planningLimit{outcome: out}
 	}
-	if out.Class != provider.Success {
+	if out.Class != provider.Success && !refusedButFinished(out) {
 		return core.DiscussionResult{}, fmt.Errorf("the discussion failed: %s", out.Note)
 	}
 
@@ -192,6 +192,22 @@ func (d *Discussion) once(ctx context.Context, turn core.DiscussionTurn, choice 
 		return result, fmt.Errorf("the agent answered with nothing — %s", out.Note)
 	}
 	return result, nil
+}
+
+// refusedButFinished reports a conversational turn whose only failure is that some of its
+// looking around was refused.
+//
+// The adapter fails any run with a refused tool call, which is right for implementation: a
+// refused Write means the work was not done. A discussion or a plan produces an answer, not a
+// diff, and an agent refused one chained `git log && gh pr view` goes on to answer from what it
+// could read. Failing that turn threw the answer away and showed the human "permission denied"
+// instead — on a turn that had finished.
+//
+// A clean exit is required, so a turn that was killed, timed out or errored still fails. A turn
+// that was refused everything and said nothing is still caught by the empty-answer check.
+func refusedButFinished(out provider.Outcome) bool {
+	return out.Class == provider.TaskFailure && len(out.Denials) > 0 &&
+		out.ExitCode == 0 && !out.TimedOut
 }
 
 // readOnlyAllowlist is what a discussion may run: looking around, and nothing else.
@@ -293,6 +309,10 @@ takes and no more: when the correction is clear and nothing is in tension, say s
 
 Do not modify any file, do not write code, and do not commit. This conversation produces an
 instruction, not a diff.
+
+Read files with the file tools rather than the shell. If you do run a shell command, run one
+simple command: a chain joined by ";", "|" or "&&" is refused whatever it contains, and so is
+anything outside git's read-only subcommands, such as gh.
 
 # How to propose
 
