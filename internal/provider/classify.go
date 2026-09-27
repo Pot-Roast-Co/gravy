@@ -24,6 +24,11 @@ type Classification struct {
 // Note renders the classification for the run's failure_note column.
 func (c Classification) Note() string {
 	switch {
+	case c.Defaulted && c.Evidence != "":
+		// The CLI's own last words are the only clue to a failure no rule knows. Leaving them
+		// out made "no rule matched" the whole story for reviews that died in under a second
+		// with nothing on stdout.
+		return fmt.Sprintf("%s (no rule matched; defaulted): %s", c.Class, c.Evidence)
 	case c.Defaulted:
 		return fmt.Sprintf("%s (no rule matched; defaulted)", c.Class)
 	case c.Evidence != "":

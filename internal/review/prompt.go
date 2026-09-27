@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/pot-roast-co/gravy/internal/core"
 )
 
 // BuildPrompt assembles the review prompt within a character budget.
@@ -48,6 +50,10 @@ answer when the change is fine.
 		b.WriteString("\n\n")
 	}
 
+	writeDecisions(&b, req.Decisions)
+	writeCriteria(&b, acceptanceCriteria(req.Ticket.Body))
+	writePrevious(&b, req.Previous)
+
 	if len(req.Validation) > 0 {
 		b.WriteString("## Validation\n\n")
 		for _, v := range req.Validation {
@@ -59,6 +65,115 @@ answer when the change is fine.
 	b.WriteString("## Diff\n\n")
 	b.WriteString(renderDiff(req, budget-b.Len()))
 	return b.String()
+}
+
+// writeDecisions renders what the human has agreed since the ticket was written.
+//
+// These amend the ticket, and the reviewer is told so in as many words. Shown only the ticket's
+// original text, it flagged a deliberate narrowing as missing scope on every round — the
+// human had already decided, and the verdict kept asking them to decide again.
+func writeDecisions(b *strings.Builder, decisions []core.ChangeInstruction) {
+	var kept []core.ChangeInstruction
+	for _, d := range decisions {
+		if d = d.Normalized(); !d.Empty() {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		return
+	}
+
+	b.WriteString(`## Decisions the human has made since the ticket was written
+
+These amend the ticket, oldest first. Where one narrows, drops or changes a requirement, judge
+the change against the decision, not the ticket's original wording. Do not report a gap the
+human has already accepted, and do not ask them to decide something they have decided.
+
+`)
+	for i, d := range kept {
+		fmt.Fprintf(b, "%d. %s\n", i+1, d.Correction)
+		for _, p := range d.Preserve {
+			fmt.Fprintf(b, "   - Preserve: %s\n", p)
+		}
+	}
+	b.WriteString("\n")
+}
+
+// acceptanceCriteria returns the ticket's bullet points, in order.
+//
+// A ticket's "done looks like" list is bullets by convention, and nothing else in a ticket body
+// is reliably shaped. Any bullet counts, nested ones included: over-including costs the reviewer
+// a line, and a criterion left out is exactly the one nobody checks.
+func acceptanceCriteria(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		for _, marker := range []string{"- ", "* ", "+ "} {
+			if item, ok := strings.CutPrefix(line, marker); ok {
+				if item = strings.TrimSpace(item); item != "" {
+					out = append(out, item)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+// writeCriteria asks for the ticket to be checked one criterion at a time.
+//
+// A reviewer asked only for defects reviews the code that exists and never notices the code that
+// does not: a ticket whose list asked for a settings page with a refresh button was reviewed
+// clean without one, and the league it imported could not be reached from anywhere in the app.
+// A missing criterion leaves nothing in the diff to object to, so it has to be asked for.
+func writeCriteria(b *strings.Builder, criteria []string) {
+	if len(criteria) == 0 {
+		return
+	}
+
+	b.WriteString(`## Check each of the ticket's acceptance criteria
+
+Go through these one at a time and find where the diff delivers each. For any the diff does not
+deliver at all, report a finding that quotes the criterion and says what is missing: "high"
+when the change is unusable without it, "medium" otherwise. A criterion a decision above narrowed
+or dropped is judged by the decision. Report only criteria that are missing or clearly broken,
+not the ones that are met; if every criterion is met, say nothing about them.
+
+`)
+	for _, c := range criteria {
+		fmt.Fprintf(b, "- %s\n", c)
+	}
+	b.WriteString("\n")
+}
+
+// writePrevious renders the last round's findings, so this round can say what changed.
+//
+// Without them every round is a first review: a finding that cannot be fixed in code — a
+// manual check nobody can run from a diff — came back word for word each time.
+func writePrevious(b *strings.Builder, prev *Verdict) {
+	if prev == nil || !prev.Available() || len(prev.Findings) == 0 {
+		return
+	}
+
+	b.WriteString(`## Your findings on the previous round
+
+The work was revised after these. Do not repeat one that has been addressed or that a decision
+above settles. Repeat one only if it still applies to this diff, and say that it is still open.
+Something that can only be checked outside the diff (a manual run, a measurement, a build on
+another machine) is not a defect in the diff; mention it once in the summary at most.
+
+`)
+	for _, f := range prev.Findings {
+		where := f.File
+		if where != "" && f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.File, f.Line)
+		}
+		if where == "" {
+			where = "general"
+		}
+		fmt.Fprintf(b, "- [%s] %s: %s\n", f.Severity, where, strings.TrimSpace(f.Rationale))
+	}
+	b.WriteString("\n")
 }
 
 // renderDiff writes as many whole files as fit, then says what it left out.

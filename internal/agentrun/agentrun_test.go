@@ -1128,7 +1128,7 @@ func TestAFailedReviewDoesNotBlockReachingReview(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{
 		SelfCorrectionBudget: 2, RunTimeout: time.Minute, MaxTurns: 10,
 	})
-	h.orch.WithReviewer(review.New(brokenReviewModel{}, 0))
+	h.orch.WithReviewer(review.New(brokenReviewModel{}, 0).WithRetryDelay(0))
 	h.seed([]core.Step{{Name: "test", Cmd: "true", Required: true}})
 
 	res, err := runWithAgentWork(t, h, "hello.txt", "hello\n")

@@ -13,6 +13,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/git"
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/review"
+	"github.com/pot-roast-co/gravy/internal/validate"
 )
 
 // WithReviewer enables the advisory review pass.
@@ -54,11 +55,58 @@ func (o *Orchestrator) runReview(ctx context.Context, ticket core.Ticket, projec
 		"advisory review reading %d changed file(s) against %s",
 		len(diff.Files), project.TargetBranch)
 
-	v := o.reviewer.Review(ctx, review.Request{
-		Ticket: ticket, Project: project, Diff: diff, Validation: loop.validation,
-	})
+	req := review.Request{Ticket: ticket, Project: project, Diff: diff, Validation: loop.validation}
+	o.reviewContext(ctx, &req, loop.runID)
+	v := o.reviewer.Review(ctx, req)
 	o.recordVerdict(ctx, loop.runID, v)
 	o.note(ctx, ticket.ID, loop.runID, core.PhaseReview, "advisory review: %s", verdictLine(v))
+}
+
+// reviewContext adds what happened since the ticket was written: the decisions the human has
+// agreed, and the verdict on the round before runID.
+//
+// Both are best effort. A review missing its history is still worth more than no review, so
+// a read that fails leaves the request as it was.
+func (o *Orchestrator) reviewContext(ctx context.Context, req *review.Request, runID string) {
+	if decisions, err := o.store.ListChangeInstructions(ctx, req.Ticket.ID); err == nil {
+		req.Decisions = decisions
+	}
+	runs, err := o.store.ListRunsForTicket(ctx, req.Ticket.ID)
+	if err != nil {
+		return
+	}
+	// Newest first, so the first readable verdict on another run is the previous round's.
+	for _, r := range runs {
+		if r.ID == runID || strings.TrimSpace(r.Verdict) == "" {
+			continue
+		}
+		var v review.Verdict
+		if json.Unmarshal([]byte(r.Verdict), &v) == nil && v.Available() {
+			req.Previous = &v
+			return
+		}
+	}
+}
+
+// recordedValidation reads a run's validation back as results the reviewer can show.
+//
+// The store keeps exit codes, not outcomes, so a step reads as passed or failed. That is
+// coarser than the automatic pass sees, and still far better than no validation at all.
+func (o *Orchestrator) recordedValidation(ctx context.Context, runID string) validate.Results {
+	rows, err := o.store.ListValidations(ctx, runID)
+	if err != nil {
+		return nil
+	}
+	out := make(validate.Results, 0, len(rows))
+	for _, r := range rows {
+		outcome := validate.Passed
+		if r.ExitCode != 0 {
+			outcome = validate.Failed
+		}
+		out = append(out, validate.Result{Step: r.Step, Outcome: outcome, ExitCode: r.ExitCode,
+			LogPath: r.LogPath})
+	}
+	return out
 }
 
 // verdictLine renders an advisory verdict as one sentence.
@@ -238,7 +286,10 @@ func (o *Orchestrator) Rereview(ctx context.Context, ticketID string) error {
 		return fmt.Errorf("the diff could not be read: %w", err)
 	}
 
-	v := o.reviewer.Review(ctx, review.Request{Ticket: ticket, Project: project, Diff: diff})
+	req := review.Request{Ticket: ticket, Project: project, Diff: diff,
+		Validation: o.recordedValidation(ctx, runs[0].ID)}
+	o.reviewContext(ctx, &req, runs[0].ID)
+	v := o.reviewer.Review(ctx, req)
 	o.recordVerdict(ctx, runs[0].ID, v)
 	if v.Unavailable != "" {
 		return fmt.Errorf("%s", v.Unavailable)

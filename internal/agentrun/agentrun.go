@@ -19,6 +19,7 @@ import (
 	"github.com/pot-roast-co/gravy/internal/provider"
 	"github.com/pot-roast-co/gravy/internal/review"
 	"github.com/pot-roast-co/gravy/internal/runlog"
+	"github.com/pot-roast-co/gravy/internal/store"
 	"github.com/pot-roast-co/gravy/internal/validate"
 )
 
@@ -45,6 +46,9 @@ type Store interface {
 	// The prompt carries all of them, because the preservation constraints of the first
 	// correction are still binding during the third.
 	ListChangeInstructions(ctx context.Context, ticketID string) ([]core.ChangeInstruction, error)
+	// ListValidations returns a run's recorded validation steps. A review asked for again reads
+	// them, so it sees the same evidence the automatic pass did.
+	ListValidations(ctx context.Context, runID string) ([]store.Validation, error)
 }
 
 // Repos supplies a git repository manager per project.

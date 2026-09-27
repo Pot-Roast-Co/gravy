@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pot-roast-co/gravy/internal/core"
 	"github.com/pot-roast-co/gravy/internal/git"
@@ -77,7 +78,9 @@ func TestUnparseableDegradesToUnavailable(t *testing.T) {
 		{"model failed", &stubModel{err: fmt.Errorf("quota exhausted")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := New(tc.model, 0).Review(context.Background(), request())
+			r := New(tc.model, 0)
+			r.sleep = noWait
+			v := r.Review(context.Background(), request())
 			if v.Available() {
 				t.Fatalf("an unusable answer produced a usable verdict: %+v", v)
 			}
@@ -202,5 +205,176 @@ func TestParseFindsJSONAmongProse(t *testing.T) {
 		if v.Overall != Pass {
 			t.Errorf("answer %d: overall = %q", i, v.Overall)
 		}
+	}
+}
+
+// flakyModel fails a set number of times, then answers.
+type flakyModel struct {
+	failures int
+	answer   string
+	calls    int
+}
+
+func (m *flakyModel) Complete(context.Context, core.Project, string) (string, error) {
+	m.calls++
+	if m.calls <= m.failures {
+		return "", fmt.Errorf("the reviewer failed: task_failure (no rule matched; defaulted)")
+	}
+	return m.answer, nil
+}
+
+func noWait(context.Context, time.Duration) error { return nil }
+
+// TestTransientFailureIsRetried is the bug a human kept working around: the automatic review
+// died, and pressing v a moment later worked. The retry belongs here, not in the human.
+func TestTransientFailureIsRetried(t *testing.T) {
+	m := &flakyModel{failures: Attempts - 1, answer: `{"overall":"pass","summary":"fine","findings":[]}`}
+	r := New(m, 0)
+	r.sleep = noWait
+
+	v := r.Review(context.Background(), request())
+	if !v.Available() || v.Overall != Pass {
+		t.Fatalf("verdict = %+v, want the answer from the last attempt", v)
+	}
+	if m.calls != Attempts {
+		t.Errorf("calls = %d, want %d", m.calls, Attempts)
+	}
+}
+
+// TestPersistentFailureSaysHowHardItTried: after every attempt fails, the verdict says so, so
+// the human knows pressing v once more is not the obvious fix.
+func TestPersistentFailureSaysHowHardItTried(t *testing.T) {
+	m := &flakyModel{failures: 100}
+	r := New(m, 0)
+	r.sleep = noWait
+
+	v := r.Review(context.Background(), request())
+	if v.Available() {
+		t.Fatalf("a failing model produced a verdict: %+v", v)
+	}
+	if m.calls != Attempts {
+		t.Errorf("calls = %d, want %d", m.calls, Attempts)
+	}
+	if !strings.Contains(v.Unavailable, fmt.Sprintf("after %d attempts", Attempts)) {
+		t.Errorf("unavailable = %q, want the attempt count", v.Unavailable)
+	}
+}
+
+// TestCancelledReviewStopsRetrying: a daemon shutting down must not sit out the backoff.
+func TestCancelledReviewStopsRetrying(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &flakyModel{failures: 100}
+	r := New(m, 0)
+	r.sleep = func(context.Context, time.Duration) error { cancel(); return context.Canceled }
+
+	if v := r.Review(ctx, request()); v.Available() {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if m.calls != 1 {
+		t.Errorf("calls = %d, want 1: a cancelled review kept trying", m.calls)
+	}
+}
+
+// TestPromptCarriesDecisions is the other half of "the same review every round". The ticket
+// said "ESPN and sheet"; the human narrowed it to ESPN; a reviewer shown only the ticket
+// reported the narrowing as missing scope on every round.
+func TestPromptCarriesDecisions(t *testing.T) {
+	req := request()
+	req.Decisions = []core.ChangeInstruction{
+		{Correction: "  Narrow the ticket: projections come from ESPN only.  ",
+			Preserve: []string{"consensus rank still uses the sheet", " "}},
+		{Correction: " "},
+	}
+	p := BuildPrompt(req, 0)
+
+	for _, want := range []string{
+		"Decisions the human has made",
+		"1. Narrow the ticket: projections come from ESPN only.",
+		"Preserve: consensus rank still uses the sheet",
+		"not the ticket's original wording",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(p, "2. ") {
+		t.Error("an empty instruction was rendered as a decision")
+	}
+	if strings.Index(p, "Decisions the human") > strings.Index(p, "## Diff") {
+		t.Error("decisions should come before the diff, next to the ticket they amend")
+	}
+}
+
+// TestPromptCarriesPreviousFindings: a round that cannot see the last one repeats it word for
+// word, including checks nobody can run from a diff.
+func TestPromptCarriesPreviousFindings(t *testing.T) {
+	req := request()
+	req.Previous = &Verdict{Overall: Concerns, Findings: []Finding{
+		{Severity: Medium, File: "calc.go", Line: 2, Rationale: "b may be zero"},
+		{Severity: Low, Rationale: "exports were not run"},
+	}}
+	p := BuildPrompt(req, 0)
+
+	for _, want := range []string{
+		"findings on the previous round",
+		"[medium] calc.go:2: b may be zero",
+		"[low] general: exports were not run",
+		"not a defect in the diff",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+
+	// A first round, or a previous round with nothing to say, adds nothing.
+	for _, prev := range []*Verdict{nil, {Unavailable: "no answer"}, {Overall: Pass}} {
+		req.Previous = prev
+		if strings.Contains(BuildPrompt(req, 0), "previous round") {
+			t.Errorf("previous %+v rendered a section", prev)
+		}
+	}
+}
+
+// TestPromptAsksForEachCriterion is the ticket that was reviewed clean without half of itself.
+// Its list asked for a settings page with a refresh button; no page was built, and nothing in
+// the diff was wrong, so a reviewer asked only for defects had nothing to say.
+func TestPromptAsksForEachCriterion(t *testing.T) {
+	req := request()
+	req.Ticket.Body = `First implementation of the provider.
+
+Done looks like:
+- Import the player pool. Upsert; re-runnable.
+  - nested: injury status too
+* Settings page showing the import with a refresh button
+-
+Not a bullet - even with a dash in it.`
+	p := BuildPrompt(req, 0)
+
+	for _, want := range []string{
+		"Check each of the ticket's acceptance criteria",
+		"- Import the player pool. Upsert; re-runnable.\n",
+		"- nested: injury status too\n",
+		"- Settings page showing the import with a refresh button\n",
+		"judged by the decision",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+	start := strings.Index(p, "Check each of the ticket's")
+	section := p[start:]
+	section = section[:strings.Index(section, "\n## ")]
+	if strings.Contains(section, "Not a bullet") {
+		t.Error("prose was taken for a criterion")
+	}
+	if got := strings.Count(section, "\n- "); got != 3 {
+		t.Errorf("criteria listed = %d, want 3:\n%s", got, section)
+	}
+}
+
+// A ticket with no list is reviewed as it always was.
+func TestPromptWithoutCriteriaAddsNothing(t *testing.T) {
+	if p := BuildPrompt(request(), 0); strings.Contains(p, "acceptance criteria") {
+		t.Errorf("a ticket with no bullets got a criteria section:\n%s", p)
 	}
 }

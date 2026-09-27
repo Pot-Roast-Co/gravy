@@ -147,6 +147,10 @@ func TestClassificationRecordsEvidence(t *testing.T) {
 	if !strings.Contains(def.Note(), "defaulted") {
 		t.Errorf("defaulted Note() = %q, want it to say so", def.Note())
 	}
+	// And it carries what the CLI said, which is the only clue to a failure no rule knows.
+	if !strings.Contains(def.Note(), "something nobody has seen before") {
+		t.Errorf("defaulted Note() = %q, want the CLI's stderr", def.Note())
+	}
 }
 
 func TestRuleOrderingFirstMatchWins(t *testing.T) {
