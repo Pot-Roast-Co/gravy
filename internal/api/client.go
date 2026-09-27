@@ -220,9 +220,9 @@ func (c *Client) ListRuns(ctx context.Context, ticketID string) ([]core.Run, err
 	return out, c.call(ctx, mListRuns, ticketIDParams{TicketID: ticketID}, &out)
 }
 
-func (c *Client) ListProgress(ctx context.Context, ticketID string) ([]core.Progress, error) {
-	var out []core.Progress
-	return out, c.call(ctx, mListProgress, ticketIDParams{TicketID: ticketID}, &out)
+func (c *Client) ListHistory(ctx context.Context, ticketID string) ([]core.Activity, error) {
+	var out []core.Activity
+	return out, c.call(ctx, mListHistory, ticketIDParams{TicketID: ticketID}, &out)
 }
 
 func (c *Client) KillRun(ctx context.Context, runID string) error {

@@ -102,7 +102,7 @@ type fakeService struct {
 	moveErr      error
 	runs         []core.Run
 	explain      api.Explanation
-	progress     []core.Progress
+	progress     []core.Activity
 }
 
 func newFake() *fakeService {
@@ -457,7 +457,7 @@ func (f *fakeService) DeleteTicket(_ context.Context, id string) error {
 	return nil
 }
 func (f *fakeService) ListRuns(context.Context, string) ([]core.Run, error) { return f.runs, nil }
-func (f *fakeService) ListProgress(context.Context, string) ([]core.Progress, error) {
+func (f *fakeService) ListHistory(context.Context, string) ([]core.Activity, error) {
 	return f.progress, nil
 }
 

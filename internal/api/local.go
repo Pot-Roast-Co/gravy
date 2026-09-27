@@ -106,6 +106,9 @@ func (l *Local) KillRun(ctx context.Context, runID string) error {
 	if err := l.killer.Kill(run.TicketID); err != nil {
 		return err
 	}
+	l.recordHuman(ctx, run.TicketID, runID, core.KindKilled, map[string]any{
+		"provider": run.ProviderID, "model": run.Model,
+	}, "killed %s/%s", run.ProviderID, run.Model)
 	l.events.publish(Event{Kind: EventRunChanged, TicketID: run.TicketID, RunID: runID})
 	return nil
 }
@@ -341,6 +344,9 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 	if err := l.db.CreateTicket(ctx, t); err != nil {
 		return core.Ticket{}, err
 	}
+	l.recordHuman(ctx, t.ID, "", core.KindCreated, map[string]any{
+		"title": t.Title, "route": t.Route, "priority": t.Priority, "depends_on": req.DependsOn,
+	}, "created %q", t.Title)
 
 	for _, dep := range req.DependsOn {
 		if _, err := l.db.GetTicket(ctx, dep); err != nil {
@@ -357,6 +363,9 @@ func (l *Local) CreateTicket(ctx context.Context, req CreateTicketReq) (core.Tic
 			return core.Ticket{}, err
 		}
 		t.State = state
+		l.recordHuman(ctx, t.ID, "", core.KindQueued, map[string]any{
+			"event": string(core.EventMarkReady), "state": string(state),
+		}, "queued")
 	}
 	l.events.publish(Event{Kind: EventTicketChanged, ProjectID: t.ProjectID, TicketID: t.ID, State: t.State})
 	return t, nil
@@ -377,6 +386,9 @@ func (l *Local) MoveTicket(ctx context.Context, id string, ev core.Event) (core.
 	if err != nil {
 		return state, err
 	}
+	kind, detail := moveKind(ev)
+	l.recordHuman(ctx, id, "", kind, map[string]any{"event": string(ev), "state": string(state)},
+		"%s", detail)
 	// An abandoned ticket is nobody's outstanding judgement call, so it must not keep sitting in
 	// Needs You.
 	if ev == core.EventReject {
@@ -394,9 +406,9 @@ func (l *Local) ListRuns(ctx context.Context, ticketID string) ([]core.Run, erro
 	return l.db.ListRunsForTicket(ctx, ticketID)
 }
 
-// ListProgress returns a ticket's progress journal, oldest first.
-func (l *Local) ListProgress(ctx context.Context, ticketID string) ([]core.Progress, error) {
-	return l.db.ListProgress(ctx, ticketID)
+// ListHistory returns a ticket's history, oldest first.
+func (l *Local) ListHistory(ctx context.Context, ticketID string) ([]core.Activity, error) {
+	return l.db.ListHistory(ctx, ticketID)
 }
 
 // ListAttention returns the open Needs You queue.
@@ -626,7 +638,7 @@ func inFlight(s core.State) bool {
 // narrated, and for a journal a failed write left behind. A journal that cannot be read is not
 // worth failing a dashboard over, so a read error falls back too.
 func (l *Local) activity(ctx context.Context, t core.Ticket) string {
-	latest, err := l.db.LatestProgress(ctx, t.ID)
+	latest, err := l.db.LatestActivity(ctx, t.ID)
 	if err != nil || strings.TrimSpace(latest.Detail) == "" {
 		return activityFor(t.State)
 	}

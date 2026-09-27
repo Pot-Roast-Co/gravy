@@ -431,12 +431,23 @@ func (s *Server) dispatch(ctx context.Context, method string, raw json.RawMessag
 		}
 		return s.svc.ListRuns(ctx, p.TicketID)
 
+	case mListHistory:
+		var p ticketIDParams
+		if err := unmarshalParams(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.svc.ListHistory(ctx, p.TicketID)
+
 	case mListProgress:
 		var p ticketIDParams
 		if err := unmarshalParams(raw, &p); err != nil {
 			return nil, err
 		}
-		return s.svc.ListProgress(ctx, p.TicketID)
+		rows, err := s.svc.ListHistory(ctx, p.TicketID)
+		if err != nil {
+			return nil, err
+		}
+		return asLegacyProgress(rows), nil
 
 	case mGetReview:
 		var p ticketIDParams

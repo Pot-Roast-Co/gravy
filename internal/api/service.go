@@ -71,11 +71,12 @@ type Service interface {
 
 	// runs
 	ListRuns(ctx context.Context, ticketID string) ([]core.Run, error)
-	// ListProgress returns a ticket's progress journal, oldest first: what Gravy was doing,
-	// phase by phase, as opposed to which state the ticket sits in. It hangs off the ticket
-	// rather than a run because the fetch, the worktree and the first prompt build all happen
-	// before any run row exists, and landing happens long after the last one ended.
-	ListProgress(ctx context.Context, ticketID string) ([]core.Progress, error)
+	// ListHistory returns a ticket's history, oldest first: every human action on it, every
+	// step that changed it, and what Gravy was doing phase by phase in between, as opposed to
+	// which state the ticket sits in. It hangs off the ticket rather than a run because the
+	// fetch, the worktree and the first prompt build all happen before any run row exists, and
+	// landing happens long after the last one ended.
+	ListHistory(ctx context.Context, ticketID string) ([]core.Activity, error)
 	// StreamLogs follows a run's output. Like Events, the stop function ends the
 	// subscription and the channel closes when ctx does.
 	StreamLogs(ctx context.Context, runID string) (<-chan LogLine, func(), error)

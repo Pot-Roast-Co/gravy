@@ -59,9 +59,9 @@ func TestActivityIsTheNewestJournalEntry(t *testing.T) {
 	}
 
 	const fetching = "fetching origin so the work starts on top of the latest main"
-	if err := db.AddProgress(ctx, core.Progress{
+	if err := db.AddActivity(ctx, core.Activity{
 		ID: "pg1", TicketID: "GR-2", At: time.Unix(1700000600, 0).UTC(),
-		Phase: core.PhaseFetch, Detail: fetching,
+		Kind: core.KindFetch, Detail: fetching,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +77,9 @@ func TestActivityIsTheNewestJournalEntry(t *testing.T) {
 	// And it is the newest entry, not the first: the Running screen says what Gravy is doing
 	// now, which is the entire reason the journal beats the state name.
 	const building = "prompt built for attempt 1 of 3: about 1200 tokens"
-	if err := db.AddProgress(ctx, core.Progress{
+	if err := db.AddActivity(ctx, core.Activity{
 		ID: "pg2", TicketID: "GR-2", At: time.Unix(1700000601, 0).UTC(),
-		Phase: core.PhasePrompt, Detail: building,
+		Kind: core.KindPrompt, Detail: building,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,26 +92,26 @@ func TestActivityIsTheNewestJournalEntry(t *testing.T) {
 	}
 }
 
-// TestListProgressReturnsTheJournalOldestFirst: a journal read newest-first reads as a run
+// TestListHistoryReturnsTheJournalOldestFirst: a journal read newest-first reads as a run
 // played backwards, and the phases only mean anything in the order they happened.
-func TestListProgressReturnsTheJournalOldestFirst(t *testing.T) {
+func TestListHistoryReturnsTheJournalOldestFirst(t *testing.T) {
 	svc, db := atReview(t)
 	ctx := context.Background()
 
 	details := []string{"fetching origin", "worktree cut", "fake/m started (pid 42)"}
 	for i, d := range details {
-		if err := db.AddProgress(ctx, core.Progress{
+		if err := db.AddActivity(ctx, core.Activity{
 			ID:       string(rune('a' + i)),
 			TicketID: "GR-1",
 			At:       time.Unix(1700000700, 0).Add(time.Duration(i) * time.Second).UTC(),
-			Phase:    core.PhaseFetch,
+			Kind:     core.KindFetch,
 			Detail:   d,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	got, err := svc.ListProgress(ctx, "GR-1")
+	got, err := svc.ListHistory(ctx, "GR-1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,21 +44,21 @@ func (o *Orchestrator) runReview(ctx context.Context, ticket core.Ticket, projec
 
 	diff, err := repo.Diff(ctx, wt, project.TargetBranch)
 	if err != nil {
-		o.note(ctx, ticket.ID, loop.runID, core.PhaseReview,
+		o.note(ctx, ticket.ID, loop.runID, core.KindReview,
 			"advisory review skipped: the diff could not be read%s", evidence(err.Error()))
-		o.recordVerdict(ctx, loop.runID, review.Verdict{
+		o.recordVerdict(ctx, ticket.ID, loop.runID, review.Verdict{
 			Unavailable: "the diff could not be read: " + err.Error()})
 		return
 	}
-	o.note(ctx, ticket.ID, loop.runID, core.PhaseReview,
+	o.note(ctx, ticket.ID, loop.runID, core.KindReview,
 		"advisory review reading %d changed file(s) against %s",
 		len(diff.Files), project.TargetBranch)
 
 	v := o.reviewer.Review(ctx, review.Request{
 		Ticket: ticket, Project: project, Diff: diff, Validation: loop.validation,
 	})
-	o.recordVerdict(ctx, loop.runID, v)
-	o.note(ctx, ticket.ID, loop.runID, core.PhaseReview, "advisory review: %s", verdictLine(v))
+	o.recordVerdict(ctx, ticket.ID, loop.runID, v)
+	o.note(ctx, ticket.ID, loop.runID, core.KindReview, "advisory review: %s", verdictLine(v))
 }
 
 // verdictLine renders an advisory verdict as one sentence.
@@ -79,7 +79,11 @@ func verdictLine(v review.Verdict) string {
 	return line
 }
 
-func (o *Orchestrator) recordVerdict(ctx context.Context, runID string, v review.Verdict) {
+// recordVerdict stores a verdict on its run, and says so in the ticket's history.
+//
+// The history entry is only a record that a verdict exists and what it said. Like the verdict
+// itself it decides nothing: no state moves and no attention opens because of it.
+func (o *Orchestrator) recordVerdict(ctx context.Context, ticketID, runID string, v review.Verdict) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return
@@ -91,7 +95,13 @@ func (o *Orchestrator) recordVerdict(ctx context.Context, runID string, v review
 	run.Verdict = string(b)
 	if err := o.store.UpdateRun(ctx, run); err != nil {
 		o.log.Warn("could not record the review verdict", "run", runID, "error", err)
+		return
 	}
+	payload := map[string]any{"overall": string(v.Overall), "findings": len(v.Findings)}
+	if !v.Available() {
+		payload["overall"], payload["unavailable"] = "", v.Unavailable
+	}
+	o.noteWith(ctx, ticketID, runID, core.KindVerdict, payload, "verdict recorded: %s", verdictLine(v))
 }
 
 // providerModel runs the review prompt through a registered agent CLI.
@@ -239,7 +249,7 @@ func (o *Orchestrator) Rereview(ctx context.Context, ticketID string) error {
 	}
 
 	v := o.reviewer.Review(ctx, review.Request{Ticket: ticket, Project: project, Diff: diff})
-	o.recordVerdict(ctx, runs[0].ID, v)
+	o.recordVerdict(ctx, ticketID, runs[0].ID, v)
 	if v.Unavailable != "" {
 		return fmt.Errorf("%s", v.Unavailable)
 	}

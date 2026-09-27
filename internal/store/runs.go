@@ -62,7 +62,7 @@ func (d *DB) UpdateRun(ctx context.Context, r core.Run) error {
 // ListRunsForTicket returns a ticket's runs, newest first.
 func (d *DB) ListRunsForTicket(ctx context.Context, ticketID string) ([]core.Run, error) {
 	return d.queryRuns(ctx,
-		`SELECT `+runColumns+` FROM runs WHERE ticket_id = ? ORDER BY started_at DESC`, ticketID)
+		`SELECT `+runColumns+` FROM runs WHERE ticket_id = ? ORDER BY started_at DESC, rowid DESC`, ticketID)
 }
 
 // ListUnfinishedRuns returns runs that never recorded an end.

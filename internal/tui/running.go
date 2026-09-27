@@ -26,7 +26,7 @@ const maxLogLines = 2000
 
 // phaseLogSwitch marks a timeline line this screen wrote itself: the log moving to a newer
 // attempt. It is never stored, so it lives here rather than among core's phases.
-const phaseLogSwitch core.ProgressPhase = "log"
+const phaseLogSwitch core.ActivityKind = "log"
 
 // running is the per-run detail: what an agent is doing, why it was given this work, and the
 // one key that stops it.
@@ -46,9 +46,9 @@ type running struct {
 	explain api.Explanation
 	// journal is the ticket's progress journal, oldest first. It is what the screen shows
 	// before any agent exists and after the agent has gone, which is most of a ticket's life.
-	journal []core.Progress
+	journal []core.Activity
 	// switches are the log-stream changes this screen made, narrated into the timeline.
-	switches []core.Progress
+	switches []core.Activity
 
 	// A reload in flight absorbs further pushes into pending rather than stacking reads; the
 	// reload that answers re-issues itself once, so the last push is never the one dropped.
@@ -84,7 +84,7 @@ type (
 		ticketID string
 		runs     []core.Run
 		explain  api.Explanation
-		journal  []core.Progress
+		journal  []core.Activity
 		// journalOK is false when the journal could not be read, so a transient failure keeps
 		// the timeline already on screen rather than blanking it.
 		journalOK bool
@@ -115,7 +115,7 @@ func loadRunDetail(svc api.Service, ticketID string) tea.Cmd {
 		// The explanation and the journal are advisory: a ticket that cannot be explained or
 		// narrated is still worth showing, so their failure is not the screen's failure.
 		ex, _ := svc.ExplainTicket(ctx, ticketID)
-		journal, jerr := svc.ListProgress(ctx, ticketID)
+		journal, jerr := svc.ListHistory(ctx, ticketID)
 		return runDetailMsg{
 			ticketID: ticketID, runs: runs, explain: ex, journal: journal, journalOK: jerr == nil,
 		}
@@ -268,8 +268,8 @@ func (r *running) switchStream(runID string, attempt int) {
 		r.stopLogs = nil
 	}
 	r.lines, r.offset, r.follow, r.streamDone = nil, 0, true, false
-	r.switches = append(r.switches, core.Progress{
-		TicketID: r.ticketID, RunID: runID, At: time.Now(), Phase: phaseLogSwitch,
+	r.switches = append(r.switches, core.Activity{
+		TicketID: r.ticketID, RunID: runID, At: time.Now(), Kind: phaseLogSwitch,
 		Detail: fmt.Sprintf("log now follows attempt %d (run %s)", attempt, shortID(runID)),
 	})
 }
@@ -463,7 +463,7 @@ func (r *running) headerLines(ctx ViewContext) []string {
 	stats := []string{}
 	latest, hasLatest := r.latestEntry()
 	if hasLatest {
-		stats = append(stats, phaseLabel(latest.Phase))
+		stats = append(stats, phaseLabel(latest.Kind))
 	}
 	stats = append(stats,
 		age(r.elapsed(rt, live, current))+" elapsed",
@@ -527,7 +527,7 @@ func (r *running) elapsed(rt api.RunningTicket, live bool, current core.Run) tim
 		return current.EndedAt.Sub(current.StartedAt)
 	}
 	for i := len(r.journal) - 1; i >= 0; i-- {
-		if r.journal[i].Phase == core.PhaseFetch {
+		if r.journal[i].Kind == core.KindFetch {
 			return time.Since(r.journal[i].At)
 		}
 	}
@@ -538,7 +538,7 @@ func (r *running) elapsed(rt api.RunningTicket, live bool, current core.Run) tim
 // attempt count alone when it has not.
 func (r *running) attempt() string {
 	for i := len(r.journal) - 1; i >= 0; i-- {
-		if r.journal[i].Phase != core.PhaseAgentStart {
+		if r.journal[i].Kind != core.KindAgentStart {
 			continue
 		}
 		if m := attemptRe.FindStringSubmatch(r.journal[i].Detail); m != nil {
@@ -548,9 +548,9 @@ func (r *running) attempt() string {
 	return fmt.Sprintf("attempt %d", max(1, len(r.runs)))
 }
 
-func (r *running) latestEntry() (core.Progress, bool) {
+func (r *running) latestEntry() (core.Activity, bool) {
 	if len(r.journal) == 0 {
-		return core.Progress{}, false
+		return core.Activity{}, false
 	}
 	return r.journal[len(r.journal)-1], true
 }
@@ -592,7 +592,7 @@ func (r *running) handoff(ctx ViewContext) string {
 	}
 	// A state this screen has no words for: the journal's own last hand-off says it best.
 	for i := len(r.journal) - 1; i >= 0; i-- {
-		if r.journal[i].Phase == core.PhaseHandoff {
+		if handsOff(r.journal[i].Kind) {
 			return r.journal[i].Detail
 		}
 	}
@@ -604,7 +604,7 @@ func (r *running) handoff(ctx ViewContext) string {
 func (r *running) parkedReason() string {
 	const prefix = "parked in Needs You: "
 	for i := len(r.journal) - 1; i >= 0; i-- {
-		if d := r.journal[i].Detail; r.journal[i].Phase == core.PhaseHandoff && strings.HasPrefix(d, prefix) {
+		if d := r.journal[i].Detail; handsOff(r.journal[i].Kind) && strings.HasPrefix(d, prefix) {
 			return strings.TrimPrefix(d, prefix)
 		}
 	}
@@ -637,8 +637,8 @@ func (r *running) timelineLines(ctx ViewContext, limit int) []string {
 }
 
 // timeline merges the journal with the screen's own log-switch notes, oldest first.
-func (r *running) timeline() []core.Progress {
-	out := make([]core.Progress, 0, len(r.journal)+len(r.switches))
+func (r *running) timeline() []core.Activity {
+	out := make([]core.Activity, 0, len(r.journal)+len(r.switches))
 	out = append(out, r.journal...)
 	out = append(out, r.switches...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
@@ -647,13 +647,13 @@ func (r *running) timeline() []core.Progress {
 
 var exitRe = regexp.MustCompile(`\(exit (-?\d+)\)`)
 
-func (r *running) timelineLine(ctx ViewContext, e core.Progress, newest bool) string {
+func (r *running) timelineLine(ctx ViewContext, e core.Activity, newest bool) string {
 	th := ctx.Theme
 	detail := e.Detail
 	style := th.Text
 
-	switch e.Phase {
-	case core.PhaseValidationStep:
+	switch e.Kind {
+	case core.KindValidationStep:
 		if m := exitRe.FindStringSubmatch(detail); m != nil {
 			style = th.Success
 			if code, _ := strconv.Atoi(m[1]); code != 0 {
@@ -662,23 +662,23 @@ func (r *running) timelineLine(ctx ViewContext, e core.Progress, newest bool) st
 		} else if newest {
 			style = th.Accent // the step in progress
 		}
-	case core.PhaseRetry:
+	case core.KindRetry:
 		style = th.Warning
 		if why := r.retryReason(e); why != "" {
 			detail += " — " + why
 		}
-	case core.PhaseHandoff, phaseLogSwitch:
+	case core.KindHandoff, core.KindParked, core.KindCooldown, core.KindLanded, phaseLogSwitch:
 		style = th.Accent
 	}
 
-	prefix := fmt.Sprintf("  %s  %-8s ", e.At.Local().Format("15:04:05"), phaseTag(e.Phase))
+	prefix := fmt.Sprintf("  %s  %-8s ", e.At.Local().Format("15:04:05"), phaseTag(e.Kind))
 	return th.Muted.Render(prefix) +
 		style.Render(trunc(detail, max(0, ctx.Width-lipgloss.Width(prefix))))
 }
 
 // retryReason is why an attempt was retried: its classification when the agent failed, or the
 // validation step that went red when the agent thought it had succeeded.
-func (r *running) retryReason(e core.Progress) string {
+func (r *running) retryReason(e core.Activity) string {
 	for _, run := range r.runs {
 		if run.ID == e.RunID && run.EndedAt != nil && run.FailureClass != core.Success {
 			if run.FailureNote == "" {
@@ -692,7 +692,7 @@ func (r *running) retryReason(e core.Progress) string {
 		if j.At.After(e.At) {
 			break
 		}
-		if j.Phase != core.PhaseValidationStep || j.RunID != e.RunID {
+		if j.Kind != core.KindValidationStep || j.RunID != e.RunID {
 			continue
 		}
 		if m := exitRe.FindStringSubmatch(j.Detail); m != nil && m[1] != "0" {
@@ -703,11 +703,11 @@ func (r *running) retryReason(e core.Progress) string {
 }
 
 // phaseTag is a phase's short name in the timeline's column.
-func phaseTag(p core.ProgressPhase) string {
+func phaseTag(p core.ActivityKind) string {
 	switch p {
-	case core.PhaseAgentStart, core.PhaseAgentExit:
+	case core.KindAgentStart, core.KindAgentExit:
 		return "agent"
-	case core.PhaseValidationStep:
+	case core.KindValidationStep:
 		return "validate"
 	default:
 		return string(p)
@@ -715,31 +715,45 @@ func phaseTag(p core.ProgressPhase) string {
 }
 
 // phaseLabel is what the header says the ticket is doing, from its latest journal entry.
-func phaseLabel(p core.ProgressPhase) string {
+func phaseLabel(p core.ActivityKind) string {
 	switch p {
-	case core.PhaseFetch:
+	case core.KindFetch:
 		return "fetching"
-	case core.PhaseWorktree:
+	case core.KindWorktree:
 		return "preparing the worktree"
-	case core.PhasePrompt:
+	case core.KindPrompt:
 		return "building the prompt"
-	case core.PhaseAgentStart:
+	case core.KindAgentStart:
 		return "agent working"
-	case core.PhaseAgentExit:
+	case core.KindAgentExit:
 		return "agent finished"
-	case core.PhaseValidationStep:
+	case core.KindValidationStep:
 		return "validating"
-	case core.PhaseRetry:
+	case core.KindRetry:
 		return "retrying"
-	case core.PhaseSummary:
+	case core.KindSummary:
 		return "writing the summary"
-	case core.PhaseReview:
+	case core.KindReview, core.KindVerdict:
 		return "reviewing"
-	case core.PhaseHandoff:
-		return "handed off"
+	case core.KindCommit:
+		return "committed"
 	default:
+		if handsOff(p) {
+			return "handed off"
+		}
 		return string(p)
 	}
+}
+
+// handsOff reports an entry saying where a ticket went next. Parking, a cooldown's requeue and
+// landing were all written as hand-offs before the history gave them kinds of their own, and
+// the screen still reads them as one.
+func handsOff(k core.ActivityKind) bool {
+	switch k {
+	case core.KindHandoff, core.KindParked, core.KindCooldown, core.KindLanded:
+		return true
+	}
+	return false
 }
 
 func (r *running) logLines(ctx ViewContext, height int) []string {

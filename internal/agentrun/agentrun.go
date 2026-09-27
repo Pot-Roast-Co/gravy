@@ -35,9 +35,9 @@ type Store interface {
 	CreateRun(ctx context.Context, r core.Run) error
 	UpdateRun(ctx context.Context, r core.Run) error
 	AddValidation(ctx context.Context, id, runID, step string, exitCode int, durationMS int64, logPath string) error
-	// AddProgress appends one entry to a ticket's journal. It is how every phase boundary
+	// AddActivity appends one entry to a ticket's journal. It is how every phase boundary
 	// becomes something a human can read without opening a log.
-	AddProgress(ctx context.Context, p core.Progress) error
+	AddActivity(ctx context.Context, p core.Activity) error
 	OpenAttention(ctx context.Context, a core.Attention) error
 	ResolveAttentionForTicket(ctx context.Context, ticketID string) (int, error)
 	SetProviderUnavailable(ctx context.Context, a core.ProviderAvailability) error
@@ -307,7 +307,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 	// This ordering is the whole reason queued work builds on whatever merged before it. A
 	// worktree cut from a stale target silently omits the previous ticket's work, and the
 	// agent then reimplements or conflicts with it.
-	o.note(ctx, ticket.ID, "", core.PhaseFetch,
+	o.note(ctx, ticket.ID, "", core.KindFetch,
 		"fetching origin so the work starts on top of the latest %s", project.TargetBranch)
 	if err := repo.Fetch(ctx); err != nil {
 		return res, fmt.Errorf("agentrun: fetch %s: %w", project.Slug, err)
@@ -333,11 +333,11 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		if wt, err = repo.CreateWorktree(ctx, branch, base); err != nil {
 			return res, fmt.Errorf("agentrun: %w", err)
 		}
-		o.note(ctx, ticket.ID, "", core.PhaseWorktree,
+		o.note(ctx, ticket.ID, "", core.KindWorktree,
 			"worktree cut at %s on %s, based on %s", wt.Path, wt.Branch, base)
 	} else {
 		o.log.Info("continuing in the existing worktree", "ticket", ticket.ID, "branch", branch)
-		o.note(ctx, ticket.ID, "", core.PhaseWorktree,
+		o.note(ctx, ticket.ID, "", core.KindWorktree,
 			"continuing in the existing worktree at %s on %s", wt.Path, wt.Branch)
 	}
 	res.Worktree = wt
@@ -397,7 +397,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 	// The result record, from the diff and the validation evidence. Never from what the agent
 	// said about itself: a self-report from the party with a motive to declare success is not
 	// evidence, and the journal is read as fact by whoever picks this ticket up.
-	o.note(ctx, ticket.ID, loop.runID, core.PhaseSummary,
+	o.note(ctx, ticket.ID, loop.runID, core.KindSummary,
 		"recording the result from the diff: commit %s on %s after %s, validation green",
 		shortCommit(loop.commit), wt.Branch, attemptsWord(loop.attempts))
 
@@ -431,7 +431,7 @@ func (o *Orchestrator) run(ctx context.Context, a Assignment) (Result, error) {
 		return res, fmt.Errorf("agentrun: open review attention: %w", err)
 	}
 
-	o.note(ctx, ticket.ID, loop.runID, core.PhaseHandoff, "moved to Review — waiting on you")
+	o.note(ctx, ticket.ID, loop.runID, core.KindHandoff, "moved to Review — waiting on you")
 
 	res.FinalState = state
 	return res, nil
@@ -530,6 +530,7 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 		}
 		if c != "" {
 			res.commit = c
+			o.noteCommit(ctx, ticket.ID, runID, repo, wt, c)
 		}
 
 		res.validation, err = o.runValidation(ctx, h, ticket, project, wt, runID)
@@ -552,7 +553,7 @@ func (o *Orchestrator) attemptLoop(ctx context.Context, ticket core.Ticket, proj
 		priorFailure = failureContext(outcome, res.validation)
 
 		if attempt < maxAttempts {
-			o.note(ctx, ticket.ID, runID, core.PhaseRetry,
+			o.note(ctx, ticket.ID, runID, core.KindRetry,
 				"attempt %d of %d did not pass; retrying with the failure in the prompt",
 				attempt, maxAttempts)
 			retry := attempt
@@ -584,7 +585,7 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	}
 	// Before the run row exists, so the entry carries no run id — which is the whole reason the
 	// journal hangs off the ticket.
-	o.note(ctx, ticket.ID, "", core.PhasePrompt,
+	o.note(ctx, ticket.ID, "", core.KindPrompt,
 		"prompt built for attempt %d of %d: about %d tokens",
 		attempt.Number, maxAttempts, contextbuild.Tokens(prompt))
 
@@ -624,8 +625,19 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 		return runID, provider.Outcome{}, fmt.Errorf("agentrun: start agent: %w", err)
 	}
 	started := time.Now()
-	o.note(ctx, ticket.ID, runID, core.PhaseAgentStart, "%s/%s started%s, attempt %d of %d",
-		a.ProviderID, a.Model, pidNote(pidOf(handle)), attempt.Number, maxAttempts)
+	pid := pidOf(handle)
+	startPayload := map[string]any{
+		"provider": a.ProviderID, "model": a.Model, "host": a.HostID, "attempt": attempt.Number,
+	}
+	if pid > 0 {
+		startPayload["pid"] = pid
+	}
+	o.record(ctx, core.Activity{
+		TicketID: ticket.ID, RunID: runID, Kind: core.KindAgentStart,
+		Actor: core.AgentActor(a.ProviderID, a.Model), Payload: startPayload,
+		Detail: fmt.Sprintf("%s/%s started%s, attempt %d of %d",
+			a.ProviderID, a.Model, pidNote(pid), attempt.Number, maxAttempts),
+	})
 
 	lr := &liveRun{cancel: cancel, handle: handle}
 	lr.lastEvent.Store(started.UnixNano())
@@ -680,9 +692,17 @@ func (o *Orchestrator) executeAgent(ctx context.Context, ticket core.Ticket, pro
 	}
 	ended := time.Now()
 
-	o.note(ctx, ticket.ID, runID, core.PhaseAgentExit, "%s/%s exited %s after %d turns in %s%s",
-		a.ProviderID, a.Model, outcome.Class.String(), outcome.Turns,
-		took(ended.Sub(started)), evidence(outcome.Note))
+	o.record(ctx, core.Activity{
+		TicketID: ticket.ID, RunID: runID, Kind: core.KindAgentExit,
+		Actor: core.AgentActor(a.ProviderID, a.Model),
+		Payload: map[string]any{
+			"class": outcome.Class.String(), "turns": outcome.Turns,
+			"tokens_in": outcome.TokensIn, "tokens_out": outcome.TokensOut, "cost_usd": outcome.CostUSD,
+		},
+		Detail: fmt.Sprintf("%s/%s exited %s after %d turns in %s%s",
+			a.ProviderID, a.Model, outcome.Class.String(), outcome.Turns,
+			took(ended.Sub(started)), evidence(outcome.Note)),
+	})
 
 	run.State = core.StateValidating
 	run.FailureClass = outcome.Class
@@ -723,7 +743,7 @@ func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, ticket co
 	// than every run overwriting one shared file and destroying the evidence for the last.
 	results, err := runSteps(ctx, o.newValidator(runID), h, wt.Path, project.Validation, func(at validate.Observation) {
 		if at.Kind == validate.StepStarted {
-			o.note(ctx, ticket.ID, runID, core.PhaseValidationStep, "running %s", stepNow(at))
+			o.note(ctx, ticket.ID, runID, core.KindValidationStep, "running %s", stepNow(at))
 			return
 		}
 		r := at.Result
@@ -734,7 +754,7 @@ func (o *Orchestrator) runValidation(ctx context.Context, h host.Host, ticket co
 		if aerr := o.store.AddValidation(ctx, id, runID, r.Step, r.ExitCode, r.Duration.Milliseconds(), r.LogPath); aerr != nil && recordErr == nil {
 			recordErr = fmt.Errorf("agentrun: record validation: %w", aerr)
 		}
-		o.note(ctx, ticket.ID, runID, core.PhaseValidationStep, "%s %s in %s (exit %d)",
+		o.note(ctx, ticket.ID, runID, core.KindValidationStep, "%s %s in %s (exit %d)",
 			r.Step, r.Outcome, took(r.Duration), r.ExitCode)
 	})
 	if err != nil {
@@ -798,16 +818,21 @@ func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ti
 		// every host for one host's missing program.
 		cooldown = 0
 	}
+	until := time.Now().Add(cooldown)
 	if cooldown > 0 {
 		if err := o.store.SetProviderUnavailable(ctx, core.ProviderAvailability{
 			ProviderID: a.ProviderID,
 			Model:      a.Model,
 			Class:      outcome.Class,
-			Until:      time.Now().Add(cooldown),
+			Until:      until,
 			Note:       outcome.Note,
 		}); err != nil {
 			return fmt.Errorf("agentrun: record cooldown: %w", err)
 		}
+	}
+	cooldownPayload := map[string]any{
+		"class": outcome.Class.String(), "until": until.UTC().Format(time.RFC3339),
+		"provider": a.ProviderID, "model": a.Model,
 	}
 
 	if outcome.Class == provider.QuotaExhausted || outcome.Class == provider.RateLimited {
@@ -820,10 +845,17 @@ func (o *Orchestrator) handleProviderFailure(ctx context.Context, ticket core.Ti
 		}
 		o.log.Info("provider limit; ticket returned to routing", "ticket", ticket.ID,
 			"provider", a.ProviderID, "model", a.Model, "class", outcome.Class.String())
-		o.note(ctx, ticket.ID, "", core.PhaseHandoff,
+		o.noteWith(ctx, ticket.ID, "", core.KindCooldown, cooldownPayload,
 			"requeued: %s cooldown on %s/%s for %s",
 			cooldownWord(outcome.Class), a.ProviderID, a.Model, cooldown)
 		return nil
+	}
+
+	// The model is out of the fleet for a while even though this ticket parks rather than
+	// requeues, and the history is where a human will look for why nothing else is using it.
+	if cooldown > 0 {
+		o.noteWith(ctx, ticket.ID, "", core.KindCooldown, cooldownPayload,
+			"%s/%s cooling down for %s after %s", a.ProviderID, a.Model, cooldown, outcome.Class.String())
 	}
 
 	reason := core.ReasonValidationFailed
@@ -906,6 +938,8 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 		}
 	}
 
+	o.noteWith(ctx, ticket.ID, runID, core.KindParked, map[string]any{"reason": string(reason)},
+		"parked in Needs You: %s", reason)
 	if err := o.raiseAttention(ctx, core.Attention{
 		ID:        o.newID(),
 		ProjectID: ticket.ProjectID,
@@ -918,9 +952,6 @@ func (o *Orchestrator) park(ctx context.Context, ticket core.Ticket, runID strin
 		return state, fmt.Errorf("agentrun: open attention: %w", err)
 	}
 
-	// Every route into Needs You passes through here, so narrating it here is what stops the
-	// next reason added from being the silent one.
-	o.note(ctx, ticket.ID, runID, core.PhaseHandoff, "parked in Needs You: %s", reason)
 	return state, nil
 }
 
