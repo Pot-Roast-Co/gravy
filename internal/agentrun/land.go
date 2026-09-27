@@ -50,6 +50,17 @@ type LandResult struct {
 // Nothing reaches a target branch except through here, and this is only reachable from Review by
 // an explicit human action. There is no configuration flag that skips it.
 func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval) (LandResult, error) {
+	return l.approve(ctx, ticketID, how, core.KindApproved)
+}
+
+// approve is Approve, naming the human action that started it in the ticket's history.
+//
+// The entry is written here rather than by the service that called: the CLI lands without going
+// through the service at all, and a history that records an approval only from one of the two
+// places a human can give one has a hole exactly where someone will look. It is written after
+// the gate has let the ticket through, so a refused approval leaves no row claiming otherwise,
+// and before anything landing does, so the history reads in the order it happened.
+func (l *Lander) approve(ctx context.Context, ticketID string, how core.Approval, kind core.ActivityKind) (LandResult, error) {
 	o := l.orch
 	how = how.OrDefault()
 	if !how.Valid() {
@@ -88,6 +99,22 @@ func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval
 		return res, fmt.Errorf("land: %w", err)
 	}
 
+	// Landing is not a run, but it is landing a run's work: its entries carry that run so a
+	// reader can tell which attempt reached the target.
+	runID := o.latestRunID(ctx, ticketID)
+	what := "approved"
+	if kind == core.KindContinued {
+		what = "continued the landing"
+	}
+	o.record(ctx, core.Activity{
+		TicketID: ticketID, RunID: runID, Kind: kind, Actor: core.ActorHuman,
+		Payload: map[string]any{"approval": string(how)},
+		Detail:  fmt.Sprintf("%s: %s", what, how),
+	})
+	o.noteWith(ctx, ticketID, runID, core.KindLanding, map[string]any{
+		"approval": string(how), "target": project.TargetBranch, "branch": ticket.Branch,
+	}, "landing %s onto %s", ticket.Branch, project.TargetBranch)
+
 	// The human has just given the judgement the queue was waiting for. Any row still open for
 	// this ticket — review_pending, or the merge_conflict that Continue came back from — is
 	// answered by that approval; a fresh one is opened if landing parks the ticket again.
@@ -98,9 +125,9 @@ func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval
 	wt := git.Worktree{Path: ticket.WorktreePath, Branch: ticket.Branch, Base: project.TargetBranch}
 	res.Target = project.TargetBranch
 
-	state, err := l.land(ctx, &res, ticket, project, repo, wt, h, how)
+	state, err := l.land(ctx, &res, ticket, runID, project, repo, wt, h, how)
 	if err != nil && res.MergeCommit == "" {
-		if parked, ok := l.parkAfterError(ctx, ticket, err); ok {
+		if parked, ok := l.parkAfterError(ctx, ticket, runID, err); ok {
 			state = parked
 		}
 	}
@@ -118,13 +145,13 @@ func (l *Lander) Approve(ctx context.Context, ticketID string, how core.Approval
 // It parks only when nothing merged; the caller checks that, because retrying a landing that
 // already merged would land it twice. It uses a context that outlives cancellation, so a
 // landing cut short by a shutdown still leaves its ticket somewhere a human will find it.
-func (l *Lander) parkAfterError(ctx context.Context, ticket core.Ticket, cause error) (core.State, bool) {
+func (l *Lander) parkAfterError(ctx context.Context, ticket core.Ticket, runID string, cause error) (core.State, bool) {
 	ctx = context.WithoutCancel(ctx)
 	current, err := l.orch.store.GetTicket(ctx, ticket.ID)
 	if err != nil || current.State != core.StateLanding {
 		return "", false
 	}
-	state, err := l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
+	state, err := l.park(ctx, ticket, runID, core.ReasonMergeConflict, map[string]any{
 		"error":  cause.Error(),
 		"stage":  "landing",
 		"reason": "landing stopped with an error before anything was merged",
@@ -134,6 +161,16 @@ func (l *Lander) parkAfterError(ctx context.Context, ticket core.Ticket, cause e
 		return "", false
 	}
 	return state, true
+}
+
+// latestRunID is the ticket's newest run, or empty when it has none or it cannot be read — which
+// costs the history a link, and is no reason to refuse a landing.
+func (o *Orchestrator) latestRunID(ctx context.Context, ticketID string) string {
+	runs, err := o.store.ListRunsForTicket(ctx, ticketID)
+	if err != nil || len(runs) == 0 {
+		return ""
+	}
+	return runs[0].ID
 }
 
 // Continue retries landing after a human has resolved a conflict in the worktree.
@@ -153,11 +190,11 @@ func (l *Lander) Continue(ctx context.Context, ticketID string, how core.Approva
 	if _, err := o.store.SetTicketState(ctx, ticketID, core.EventReturnToReview); err != nil {
 		return res, fmt.Errorf("land: %w", err)
 	}
-	return l.Approve(ctx, ticketID, how)
+	return l.approve(ctx, ticketID, how, core.KindContinued)
 }
 
 // land performs fetch, rebase, validation, squash-merge and cleanup.
-func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, project core.Project, repo Repo, wt git.Worktree, h host.Host, how core.Approval) (core.State, error) {
+func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, runID string, project core.Project, repo Repo, wt git.Worktree, h host.Host, how core.Approval) (core.State, error) {
 	o := l.orch
 
 	lander, ok := repo.(landRepo)
@@ -165,10 +202,10 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		return "", fmt.Errorf("land: repository does not support landing")
 	}
 
-	o.note(ctx, ticket.ID, "", core.PhaseFetch,
+	o.note(ctx, ticket.ID, runID, core.KindFetch,
 		"fetching origin before landing onto %s", project.TargetBranch)
 	if err := repo.Fetch(ctx); err != nil {
-		return l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
+		return l.park(ctx, ticket, runID, core.ReasonMergeConflict, map[string]any{
 			"error": fmt.Sprintf("fetch failed: %v", err),
 		})
 	}
@@ -181,7 +218,7 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 	// worktree on purpose, so running the test suite there is expected, and a build that
 	// writes a tracked file leaves exactly this state behind.
 	if dirt, derr := lander.DirtyFiles(ctx, wt); derr == nil && len(dirt) > 0 {
-		return l.park(ctx, ticket, core.ReasonValidationFailed, map[string]any{
+		return l.park(ctx, ticket, runID, core.ReasonValidationFailed, map[string]any{
 			"reason":   "the worktree has uncommitted changes, so nothing can be rebased",
 			"files":    dirt,
 			"worktree": wt.Path,
@@ -195,13 +232,13 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 
 	// The rebase phase is narrated as worktree work, which is what it is: the ticket's branch
 	// being replayed onto a target that has moved since the work was reviewed.
-	o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebasing %s onto %s", wt.Branch, target)
+	o.note(ctx, ticket.ID, runID, core.KindWorktree, "rebasing %s onto %s", wt.Branch, target)
 	rebase, err := lander.Rebase(ctx, wt, target)
 	if err != nil {
 		return "", fmt.Errorf("land: %w", err)
 	}
 	if !rebase.Clean {
-		o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebase stopped: %s",
+		o.note(ctx, ticket.ID, runID, core.KindWorktree, "rebase stopped: %s",
 			rebaseTrouble(rebase))
 		// Gravy attempts nothing further. No resolution, no retry loop, no three-way
 		// cleverness: the worktree is preserved exactly as the human needs to find it, and
@@ -221,12 +258,12 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		// worktree — commonly by whoever last opened a shell there to run the tests.
 		if rebase.Refused {
 			payload["reason"] = "git would not start the rebase"
-			return l.park(ctx, ticket, core.ReasonValidationFailed, payload)
+			return l.park(ctx, ticket, runID, core.ReasonValidationFailed, payload)
 		}
-		return l.park(ctx, ticket, core.ReasonMergeConflict, payload)
+		return l.park(ctx, ticket, runID, core.ReasonMergeConflict, payload)
 	}
 
-	o.note(ctx, ticket.ID, "", core.PhaseWorktree, "rebased cleanly onto %s", target)
+	o.note(ctx, ticket.ID, runID, core.KindWorktree, "rebased cleanly onto %s", target)
 
 	// Validate every landing attempt. A no-op rebase can follow a failed validation
 	// or a human resolution, so it is not evidence that this tree is green.
@@ -237,12 +274,12 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		results, err := runSteps(ctx, o.newValidator(o.newID()), h, wt.Path, project.Validation,
 			func(at validate.Observation) {
 				if at.Kind == validate.StepStarted {
-					o.note(ctx, ticket.ID, "", core.PhaseValidationStep,
+					o.note(ctx, ticket.ID, runID, core.KindValidationStep,
 						"re-validating before landing: running %s", stepNow(at))
 					return
 				}
 				r := at.Result
-				o.note(ctx, ticket.ID, "", core.PhaseValidationStep,
+				o.note(ctx, ticket.ID, runID, core.KindValidationStep,
 					"re-validating before landing: %s %s in %s (exit %d)",
 					r.Step, r.Outcome, took(r.Duration), r.ExitCode)
 			})
@@ -251,7 +288,7 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 			return "", fmt.Errorf("land: re-validation: %w", err)
 		}
 		if !results.Green() {
-			return l.park(ctx, ticket, core.ReasonValidationFailed, map[string]any{
+			return l.park(ctx, ticket, runID, core.ReasonValidationFailed, map[string]any{
 				"stage":   "validation before landing",
 				"summary": results.Summary(),
 			})
@@ -266,7 +303,7 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		if err != nil {
 			return "", fmt.Errorf("land: %w", err)
 		}
-		o.note(ctx, ticket.ID, "", core.PhaseHandoff,
+		o.note(ctx, ticket.ID, runID, core.KindHandoff,
 			"handed over to you: %s is rebased onto %s and green, not merged", wt.Branch, target)
 		return state, nil
 	}
@@ -280,7 +317,7 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		// no conflicting files, and nothing to do.
 		var dirty *git.DirtyCheckoutError
 		if errors.As(err, &dirty) {
-			return l.park(ctx, ticket, core.ReasonCheckoutDirty, map[string]any{
+			return l.park(ctx, ticket, runID, core.ReasonCheckoutDirty, map[string]any{
 				"reason":   "the main checkout has uncommitted changes, which a squash would carry into the merge",
 				"files":    dirty.Files,
 				"checkout": dirty.Checkout,
@@ -289,14 +326,16 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 		}
 		// A push rejection leaves the local target ahead of the remote; the ticket parks so
 		// a human can look rather than Gravy retrying into a worse state.
-		return l.park(ctx, ticket, core.ReasonMergeConflict, map[string]any{
+		return l.park(ctx, ticket, runID, core.ReasonMergeConflict, map[string]any{
 			"error":  err.Error(),
 			"stage":  "merge and push",
 			"branch": wt.Branch,
 		})
 	}
 	res.MergeCommit, res.Pushed = merged.MergeCommit, merged.Pushed
-	o.note(ctx, ticket.ID, "", core.PhaseHandoff, "squashed onto %s as %s%s",
+	o.noteWith(ctx, ticket.ID, runID, core.KindLanded, map[string]any{
+		"commit": merged.MergeCommit, "target": project.TargetBranch, "pushed": merged.Pushed,
+	}, "squashed onto %s as %s%s",
 		project.TargetBranch, shortCommit(merged.MergeCommit), pushedWord(merged.Pushed))
 
 	// Done, then clean up. The order matters: a failure to remove a worktree must not undo a
@@ -335,12 +374,14 @@ func (l *Lander) land(ctx context.Context, res *LandResult, ticket core.Ticket, 
 }
 
 // park moves a landing ticket to Needs You with a reason.
-func (l *Lander) park(ctx context.Context, ticket core.Ticket, reason core.AttentionReason, payload map[string]any) (core.State, error) {
+func (l *Lander) park(ctx context.Context, ticket core.Ticket, runID string, reason core.AttentionReason, payload map[string]any) (core.State, error) {
 	o := l.orch
 	state, err := o.store.SetTicketState(ctx, ticket.ID, core.EventLandFailed)
 	if err != nil {
 		return "", fmt.Errorf("land: park %s: %w", ticket.ID, err)
 	}
+	o.noteWith(ctx, ticket.ID, runID, core.KindParked, map[string]any{"reason": string(reason)},
+		"parked in Needs You: %s", reason)
 	if err := o.raiseAttention(ctx, core.Attention{
 		ID:        o.newID(),
 		ProjectID: ticket.ProjectID,
@@ -351,7 +392,6 @@ func (l *Lander) park(ctx context.Context, ticket core.Ticket, reason core.Atten
 	}, ticket.Title); err != nil {
 		return state, fmt.Errorf("land: open attention: %w", err)
 	}
-	o.note(ctx, ticket.ID, "", core.PhaseHandoff, "parked in Needs You: %s", reason)
 	return state, nil
 }
 

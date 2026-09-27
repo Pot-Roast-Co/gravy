@@ -26,9 +26,9 @@ func (passingReviewModel) Complete(context.Context, core.Project, string) (strin
 }
 
 // journal reads a ticket's progress entries, oldest first.
-func (h *harness) journal(ticketID string) []core.Progress {
+func (h *harness) journal(ticketID string) []core.Activity {
 	h.t.Helper()
-	entries, err := h.db.ListProgress(context.Background(), ticketID)
+	entries, err := h.db.ListHistory(context.Background(), ticketID)
 	if err != nil {
 		h.t.Fatalf("ListProgress: %v", err)
 	}
@@ -36,19 +36,19 @@ func (h *harness) journal(ticketID string) []core.Progress {
 }
 
 // phasesOf renders a journal as its phase tokens, which is what an ordering assertion is about.
-func phasesOf(entries []core.Progress) []core.ProgressPhase {
-	out := make([]core.ProgressPhase, 0, len(entries))
+func phasesOf(entries []core.Activity) []core.ActivityKind {
+	out := make([]core.ActivityKind, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, e.Phase)
+		out = append(out, e.Kind)
 	}
 	return out
 }
 
 // detailsFor returns the sentences recorded for one phase.
-func detailsFor(entries []core.Progress, phase core.ProgressPhase) []string {
+func detailsFor(entries []core.Activity, phase core.ActivityKind) []string {
 	var out []string
 	for _, e := range entries {
-		if e.Phase == phase {
+		if e.Kind == phase {
 			out = append(out, e.Detail)
 		}
 	}
@@ -57,10 +57,10 @@ func detailsFor(entries []core.Progress, phase core.ProgressPhase) []string {
 
 // dumpJournal renders a journal for a failure message, because a test that says only "the
 // phases are wrong" sends the reader back to the database.
-func dumpJournal(entries []core.Progress) string {
+func dumpJournal(entries []core.Activity) string {
 	var b strings.Builder
 	for _, e := range entries {
-		b.WriteString("  " + string(e.Phase) + ": " + e.Detail + "\n")
+		b.WriteString("  " + string(e.Kind) + ": " + e.Detail + "\n")
 	}
 	return b.String()
 }
@@ -89,20 +89,22 @@ func TestARunLeavesAnOrderedJournal(t *testing.T) {
 	}
 
 	entries := h.journal("GR-100")
-	want := []core.ProgressPhase{
-		core.PhaseFetch,
-		core.PhaseWorktree,
-		core.PhasePrompt,
-		core.PhaseAgentStart,
-		core.PhaseAgentExit,
-		core.PhaseValidationStep, // build, running
-		core.PhaseValidationStep, // build, settled
-		core.PhaseValidationStep, // test, running
-		core.PhaseValidationStep, // test, settled
-		core.PhaseSummary,
-		core.PhaseReview, // reading the diff
-		core.PhaseReview, // the verdict
-		core.PhaseHandoff,
+	want := []core.ActivityKind{
+		core.KindFetch,
+		core.KindWorktree,
+		core.KindPrompt,
+		core.KindAgentStart,
+		core.KindAgentExit,
+		core.KindCommit,
+		core.KindValidationStep, // build, running
+		core.KindValidationStep, // build, settled
+		core.KindValidationStep, // test, running
+		core.KindValidationStep, // test, settled
+		core.KindSummary,
+		core.KindReview,  // reading the diff
+		core.KindVerdict, // the verdict, stored on the run
+		core.KindReview,  // the verdict, narrated
+		core.KindHandoff,
 	}
 	got := phasesOf(entries)
 	if len(got) != len(want) {
@@ -117,17 +119,17 @@ func TestARunLeavesAnOrderedJournal(t *testing.T) {
 	// Each entry has to carry the facts a human would otherwise dig for, or the journal is a
 	// list of state names with extra steps.
 	facts := []struct {
-		phase core.ProgressPhase
+		phase core.ActivityKind
 		want  []string
 		why   string
 	}{
-		{core.PhaseFetch, []string{"main"}, "the branch the work is based on"},
-		{core.PhaseWorktree, []string{res.Worktree.Path, res.Worktree.Branch}, "where the work is happening"},
-		{core.PhasePrompt, []string{"attempt 1 of 3", "tokens"}, "the attempt and the prompt size"},
-		{core.PhaseAgentStart, []string{"fake/m", "attempt 1 of 3"}, "provider, model and attempt"},
-		{core.PhaseAgentExit, []string{"fake/m", "success"}, "the exit class"},
-		{core.PhaseSummary, []string{"commit", "validation green"}, "what the result was built from"},
-		{core.PhaseHandoff, []string{"Review"}, "where the ticket went"},
+		{core.KindFetch, []string{"main"}, "the branch the work is based on"},
+		{core.KindWorktree, []string{res.Worktree.Path, res.Worktree.Branch}, "where the work is happening"},
+		{core.KindPrompt, []string{"attempt 1 of 3", "tokens"}, "the attempt and the prompt size"},
+		{core.KindAgentStart, []string{"fake/m", "attempt 1 of 3"}, "provider, model and attempt"},
+		{core.KindAgentExit, []string{"fake/m", "success"}, "the exit class"},
+		{core.KindSummary, []string{"commit", "validation green"}, "what the result was built from"},
+		{core.KindHandoff, []string{"Review"}, "where the ticket went"},
 	}
 	for _, f := range facts {
 		lines := strings.Join(detailsFor(entries, f.phase), "\n")
@@ -141,7 +143,7 @@ func TestARunLeavesAnOrderedJournal(t *testing.T) {
 
 	// Each executed step is narrated twice: once when it starts, naming what a human is
 	// waiting on and how far through the sequence it is, and once when it settles.
-	steps := detailsFor(entries, core.PhaseValidationStep)
+	steps := detailsFor(entries, core.KindValidationStep)
 	wantSteps := []string{
 		"running build (true), step 1 of 2",
 		"build passed in ",
@@ -175,11 +177,11 @@ func TestARunLeavesAnOrderedJournal(t *testing.T) {
 		t.Fatalf("got %d runs, want 1", len(runs))
 	}
 	for _, e := range entries {
-		switch e.Phase {
-		case core.PhaseAgentStart, core.PhaseAgentExit, core.PhaseValidationStep,
-			core.PhaseSummary, core.PhaseReview:
+		switch e.Kind {
+		case core.KindAgentStart, core.KindAgentExit, core.KindCommit, core.KindValidationStep,
+			core.KindSummary, core.KindReview, core.KindVerdict:
 			if e.RunID != runs[0].ID {
-				t.Errorf("%s entry has run %q, want %q", e.Phase, e.RunID, runs[0].ID)
+				t.Errorf("%s entry has run %q, want %q", e.Kind, e.RunID, runs[0].ID)
 			}
 		}
 	}
@@ -202,7 +204,7 @@ func TestARetriedRunNarratesItsRetries(t *testing.T) {
 	}
 
 	entries := h.journal("GR-100")
-	retries := detailsFor(entries, core.PhaseRetry)
+	retries := detailsFor(entries, core.KindRetry)
 	if len(retries) != 1 {
 		t.Fatalf("retry entries = %v, want one for the single retry:\n%s", retries, dumpJournal(entries))
 	}
@@ -211,22 +213,26 @@ func TestARetriedRunNarratesItsRetries(t *testing.T) {
 	}
 
 	// A retry is a second pass through the phases, not an extra line on the first.
-	if n := len(detailsFor(entries, core.PhaseAgentStart)); n != 2 {
+	if n := len(detailsFor(entries, core.KindAgentStart)); n != 2 {
 		t.Errorf("got %d agent_start entries, want one per attempt:\n%s", n, dumpJournal(entries))
 	}
-	if n := len(detailsFor(entries, core.PhaseValidationStep)); n != 4 {
+	if n := len(detailsFor(entries, core.KindValidationStep)); n != 4 {
 		t.Errorf("got %d validation_step entries, want a start and a result per attempt:\n%s",
 			n, dumpJournal(entries))
 	}
 
-	handoff := detailsFor(entries, core.PhaseHandoff)
-	if len(handoff) != 1 || !strings.Contains(handoff[0], string(core.ReasonValidationFailed)) {
-		t.Errorf("handoff = %v, want it to name why the ticket was parked", handoff)
+	parked := detailsFor(entries, core.KindParked)
+	if len(parked) != 1 || !strings.Contains(parked[0], string(core.ReasonValidationFailed)) {
+		t.Errorf("parked = %v, want it to name why the ticket was parked", parked)
 	}
 	// The journal is what the dashboard reads as Activity, so the last word on a parked ticket
 	// must be where it went rather than the step that failed.
-	if last := entries[len(entries)-1]; last.Phase != core.PhaseHandoff {
-		t.Errorf("the journal ends on %q, want the hand-off:\n%s", last.Phase, dumpJournal(entries))
+	last := entries[len(entries)-1]
+	if last.Kind != core.KindParked {
+		t.Errorf("the journal ends on %q, want the parking:\n%s", last.Kind, dumpJournal(entries))
+	}
+	if last.Payload["reason"] != string(core.ReasonValidationFailed) {
+		t.Errorf("parked payload = %v, want the reason", last.Payload)
 	}
 }
 
@@ -247,14 +253,25 @@ func TestAQuotaFailureNarratesItsRequeue(t *testing.T) {
 	}
 
 	entries := h.journal("GR-100")
-	handoff := detailsFor(entries, core.PhaseHandoff)
-	if len(handoff) != 1 {
-		t.Fatalf("handoff entries = %v, want one:\n%s", handoff, dumpJournal(entries))
+	cooldown := detailsFor(entries, core.KindCooldown)
+	if len(cooldown) != 1 {
+		t.Fatalf("cooldown entries = %v, want one:\n%s", cooldown, dumpJournal(entries))
 	}
 	for _, want := range []string{"requeued", "quota", "fake/m", "42m"} {
-		if !strings.Contains(handoff[0], want) {
-			t.Errorf("requeue entry %q does not carry %q", handoff[0], want)
+		if !strings.Contains(cooldown[0], want) {
+			t.Errorf("requeue entry %q does not carry %q", cooldown[0], want)
 		}
+	}
+	last := entries[len(entries)-1]
+	if last.Payload["class"] != "quota_exhausted" {
+		t.Errorf("cooldown payload class = %v, want quota_exhausted", last.Payload["class"])
+	}
+	until, err := time.Parse(time.RFC3339, fmt.Sprint(last.Payload["until"]))
+	if err != nil {
+		t.Fatalf("cooldown payload until = %v: %v", last.Payload["until"], err)
+	}
+	if d := time.Until(until); d < 41*time.Minute || d > 43*time.Minute {
+		t.Errorf("cooldown until is %s away, want about 42m", d)
 	}
 }
 
@@ -267,10 +284,10 @@ func TestAQuotaFailureNarratesItsRequeue(t *testing.T) {
 type watchingRunner struct {
 	steps func(step string) validate.Result
 	// inspect reads the journal as it stands right now.
-	inspect func() []core.Progress
+	inspect func() []core.Activity
 
 	mu       sync.Mutex
-	observed map[string][]core.Progress
+	observed map[string][]core.Activity
 }
 
 func (w *watchingRunner) Run(ctx context.Context, h host.Host, worktree string, steps []validate.Step) (validate.Results, error) {
@@ -303,7 +320,7 @@ func (w *watchingRunner) RunObserved(_ context.Context, _ host.Host, worktree st
 	return out, nil
 }
 
-func (w *watchingRunner) snapshot(step string) []core.Progress {
+func (w *watchingRunner) snapshot(step string) []core.Activity {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.observed[step]
@@ -318,7 +335,7 @@ func (w *watchingRunner) snapshot(step string) []core.Progress {
 func TestValidationIsNarratedStepByStep(t *testing.T) {
 	var h *harness
 	watcher := &watchingRunner{
-		observed: map[string][]core.Progress{},
+		observed: map[string][]core.Activity{},
 		steps: func(string) validate.Result {
 			return validate.Result{Outcome: validate.Passed, Duration: 1200 * time.Millisecond}
 		},
@@ -326,7 +343,7 @@ func TestValidationIsNarratedStepByStep(t *testing.T) {
 	h = newHarnessWithValidator(t, []fake.Script{successScript()}, agentrun.Config{
 		RunTimeout: time.Minute,
 	}, func(string) validate.Runner { return watcher })
-	watcher.inspect = func() []core.Progress { return h.journal("GR-100") }
+	watcher.inspect = func() []core.Activity { return h.journal("GR-100") }
 
 	h.seed([]core.Step{
 		{Name: "build", Cmd: "true", Required: true},
@@ -338,13 +355,13 @@ func TestValidationIsNarratedStepByStep(t *testing.T) {
 	}
 
 	// Nothing about validation has been said when the first step starts.
-	if got := detailsFor(watcher.snapshot("build"), core.PhaseValidationStep); len(got) != 0 {
+	if got := detailsFor(watcher.snapshot("build"), core.KindValidationStep); len(got) != 0 {
 		t.Errorf("validation was narrated before the first step ran: %v", got)
 	}
 
 	// By the time the second step begins, the first one's start and result are both readable —
 	// which is the whole point, and what a batch at the end of the sequence cannot do.
-	atTest := detailsFor(watcher.snapshot("test"), core.PhaseValidationStep)
+	atTest := detailsFor(watcher.snapshot("test"), core.KindValidationStep)
 	if len(atTest) != 2 {
 		t.Fatalf("journal at the start of step 2 has %d validation entries, want the first "+
 			"step's start and result:\n%s", len(atTest), dumpJournal(watcher.snapshot("test")))
@@ -387,10 +404,10 @@ type inspectingHost struct {
 	// match is a token in the command this is about, so the many git commands a run executes
 	// through the same host are ignored.
 	match   string
-	inspect func() []core.Progress
+	inspect func() []core.Activity
 
 	mu   sync.Mutex
-	seen []core.Progress
+	seen []core.Activity
 }
 
 func (h *inspectingHost) Exec(ctx context.Context, spec host.ExecSpec) (host.Process, error) {
@@ -404,7 +421,7 @@ func (h *inspectingHost) Exec(ctx context.Context, spec host.ExecSpec) (host.Pro
 	return proc, err
 }
 
-func (h *inspectingHost) snapshot() []core.Progress {
+func (h *inspectingHost) snapshot() []core.Activity {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.seen
@@ -420,7 +437,7 @@ func (h *inspectingHost) snapshot() []core.Progress {
 func TestTheJournalNamesTheStepRunningRightNow(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	watcher := &inspectingHost{Host: h.h, match: "slow-second-step"}
-	watcher.inspect = func() []core.Progress { return h.journal("GR-100") }
+	watcher.inspect = func() []core.Activity { return h.journal("GR-100") }
 	// Same id, so the assignment's host is this one; git still goes through the plain host.
 	h.orch.RegisterHost(watcher)
 
@@ -433,7 +450,7 @@ func TestTheJournalNamesTheStepRunningRightNow(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	seen := detailsFor(watcher.snapshot(), core.PhaseValidationStep)
+	seen := detailsFor(watcher.snapshot(), core.KindValidationStep)
 	if len(seen) != 3 {
 		t.Fatalf("journal while step 2 was running had %d validation entries, want the first "+
 			"step's start and result and the second step's start:\n%s",
@@ -449,8 +466,9 @@ func TestTheJournalNamesTheStepRunningRightNow(t *testing.T) {
 	}
 }
 
-// TestLandingNarratesItsOwnPhases: landing happens long after the run ended, so it has no run
-// row to hang anything from and is the half of a ticket's life that used to be entirely silent.
+// TestLandingNarratesItsOwnPhases: landing happens long after the run ended and is the half of a
+// ticket's life that used to be entirely silent. Every entry it writes carries the run whose work
+// it is landing, so a reader can tell which attempt reached the target.
 func TestLandingNarratesItsOwnPhases(t *testing.T) {
 	h := newHarness(t, []fake.Script{successScript()}, agentrun.Config{RunTimeout: time.Minute})
 	h.seed([]core.Step{
@@ -469,15 +487,17 @@ func TestLandingNarratesItsOwnPhases(t *testing.T) {
 	}
 
 	landing := h.journal("GR-100")[before:]
-	want := []core.ProgressPhase{
-		core.PhaseFetch,
-		core.PhaseWorktree,       // rebasing
-		core.PhaseWorktree,       // rebased cleanly
-		core.PhaseValidationStep, // build, running
-		core.PhaseValidationStep, // build, settled
-		core.PhaseValidationStep, // test, running
-		core.PhaseValidationStep, // test, settled
-		core.PhaseHandoff,        // squashed and pushed
+	want := []core.ActivityKind{
+		core.KindApproved,
+		core.KindLanding,
+		core.KindFetch,
+		core.KindWorktree,       // rebasing
+		core.KindWorktree,       // rebased cleanly
+		core.KindValidationStep, // build, running
+		core.KindValidationStep, // build, settled
+		core.KindValidationStep, // test, running
+		core.KindValidationStep, // test, settled
+		core.KindLanded,         // squashed and pushed
 	}
 	got := phasesOf(landing)
 	if len(got) != len(want) {
@@ -491,7 +511,7 @@ func TestLandingNarratesItsOwnPhases(t *testing.T) {
 
 	// Re-validation is narrated step by step here too, start and result: an approval that sits
 	// for ten minutes on a test suite should say which step it is on while it is on it.
-	steps := detailsFor(landing, core.PhaseValidationStep)
+	steps := detailsFor(landing, core.KindValidationStep)
 	wantSteps := []string{
 		"re-validating before landing: running build (true), step 1 of 2",
 		"re-validating before landing: build passed",
@@ -502,6 +522,22 @@ func TestLandingNarratesItsOwnPhases(t *testing.T) {
 		if !strings.HasPrefix(steps[i], want) {
 			t.Errorf("re-validation entry %d = %q, want it to begin %q", i, steps[i], want)
 		}
+	}
+
+	runs, err := h.db.ListRunsForTicket(context.Background(), "GR-100")
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("runs = %v, %v", runs, err)
+	}
+	for _, e := range landing {
+		if e.RunID != runs[0].ID {
+			t.Errorf("landing %s entry has run %q, want the landed run %q", e.Kind, e.RunID, runs[0].ID)
+		}
+	}
+	if landing[0].Actor != core.ActorHuman {
+		t.Errorf("the approval's actor = %q, want human", landing[0].Actor)
+	}
+	if p := landing[len(landing)-1].Payload; p["pushed"] != true || p["target"] != "main" || p["commit"] == "" {
+		t.Errorf("landed payload = %v, want the commit, the target and that it was pushed", p)
 	}
 
 	last := landing[len(landing)-1].Detail
@@ -526,7 +562,7 @@ func TestSkippedStepsAreNarratedToo(t *testing.T) {
 	}
 
 	entries := h.journal("GR-100")
-	steps := detailsFor(entries, core.PhaseValidationStep)
+	steps := detailsFor(entries, core.KindValidationStep)
 	// The step that ran is announced and then settled; the one that never ran is settled only.
 	// Announcing a skipped step would put a command that was never executed on the Running
 	// screen as the thing happening now.

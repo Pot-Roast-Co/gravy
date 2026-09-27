@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -126,32 +127,66 @@ func TestRoundTripEveryMethod(t *testing.T) {
 		}
 	})
 
-	t.Run("ListProgress", func(t *testing.T) {
+	t.Run("ListHistory", func(t *testing.T) {
 		// Seeded through the store rather than by running a ticket: what can break at this
-		// layer is the wire — a phase that arrives empty, or entries that come back reordered.
+		// layer is the wire — a kind or actor that arrives empty, a payload that is dropped, or
+		// entries that come back reordered.
 		at := time.Unix(1700000500, 0).UTC()
-		seeded := []core.Progress{
-			{ID: "pg1", TicketID: "GR-1", At: at, Phase: core.PhaseFetch,
-				Detail: "fetching origin so the work starts on top of the latest main"},
+		seeded := []core.Activity{
+			{ID: "pg1", TicketID: "GR-1", At: at, Kind: core.KindFetch, Actor: core.ActorGravy,
+				Detail:  "fetching origin so the work starts on top of the latest main",
+				Payload: map[string]any{}},
 			{ID: "pg2", TicketID: "GR-1", RunID: "run-1", At: at.Add(time.Second),
-				Phase: core.PhaseValidationStep, Detail: "test passed in 1.2s (exit 0)"},
+				Kind: core.KindCommit, Actor: core.ActorGravy, Detail: "committed abc: 1 file(s), +2 -0",
+				Payload: map[string]any{"hash": "abc", "files": float64(1),
+					"insertions": float64(2), "deletions": float64(0)}},
+			{ID: "pg3", TicketID: "GR-1", At: at.Add(2 * time.Second), Kind: core.KindKilled,
+				Actor: core.ActorHuman, Detail: "killed fake/m", Payload: map[string]any{"model": "m"}},
 		}
 		for _, e := range seeded {
-			if err := local.db.AddProgress(ctx, e); err != nil {
-				t.Fatalf("AddProgress %s: %v", e.ID, err)
+			if err := local.db.AddActivity(ctx, e); err != nil {
+				t.Fatalf("AddActivity %s: %v", e.ID, err)
 			}
 		}
 
-		got, err := c.ListProgress(ctx, "GR-1")
-		if err != nil {
-			t.Fatal(err)
+		var got []core.Activity
+		if err := c.call(ctx, mListHistory, ticketIDParams{TicketID: "GR-1"}, &got); err != nil {
+			t.Fatalf("ListHistory: %v", err)
 		}
 		if len(got) != len(seeded) {
-			t.Fatalf("got %d entries, want %d: %+v", len(got), len(seeded), got)
+			t.Fatalf("ListHistory: got %d entries, want %d: %+v", len(got), len(seeded), got)
 		}
 		for i, want := range seeded {
-			if got[i] != want {
-				t.Errorf("entry %d = %+v, want %+v", i, got[i], want)
+			if !reflect.DeepEqual(got[i], want) {
+				t.Errorf("ListHistory: entry %d = %+v, want %+v", i, got[i], want)
+			}
+		}
+		if _, err := c.ListHistory(ctx, "GR-1"); err != nil {
+			t.Fatalf("ListHistory: %v", err)
+		}
+
+		// ListProgress is what a client built before the rename still calls, decoding into the
+		// pre-rename shape. Without Phase on the wire that client reads every row as blank.
+		type oldProgress struct {
+			ID       string
+			TicketID string
+			RunID    string
+			At       time.Time
+			Phase    string
+			Detail   string
+		}
+		var old []oldProgress
+		if err := c.call(ctx, mListProgress, ticketIDParams{TicketID: "GR-1"}, &old); err != nil {
+			t.Fatalf("ListProgress: %v", err)
+		}
+		if len(old) != len(seeded) {
+			t.Fatalf("ListProgress: got %d entries, want %d: %+v", len(old), len(seeded), old)
+		}
+		for i, s := range seeded {
+			want := oldProgress{ID: s.ID, TicketID: s.TicketID, RunID: s.RunID, At: s.At,
+				Phase: string(s.Kind), Detail: s.Detail}
+			if old[i].Phase == "" || old[i] != want {
+				t.Errorf("ListProgress: entry %d = %+v, want %+v", i, old[i], want)
 			}
 		}
 	})

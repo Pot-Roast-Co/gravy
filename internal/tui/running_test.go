@@ -197,24 +197,24 @@ func TestAgentOutputEndingIsReported(t *testing.T) {
 
 var (
 	t0      = time.Date(2026, 9, 23, 14, 0, 0, 0, time.UTC)
-	fetched = core.Progress{TicketID: "c9d4aa01", At: t0, Phase: core.PhaseFetch,
+	fetched = core.Activity{TicketID: "c9d4aa01", At: t0, Kind: core.KindFetch,
 		Detail: "fetching origin so the work starts on top of the latest main"}
-	cut = core.Progress{TicketID: "c9d4aa01", At: t0.Add(2 * time.Second), Phase: core.PhaseWorktree,
+	cut = core.Activity{TicketID: "c9d4aa01", At: t0.Add(2 * time.Second), Kind: core.KindWorktree,
 		Detail: "worktree cut at /tmp/wt on gravy/c9d4-divide, based on origin/main"}
-	started = core.Progress{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(5 * time.Second),
-		Phase: core.PhaseAgentStart, Detail: "claude-code/sonnet started (pid 42), attempt 2 of 3"}
-	exited = core.Progress{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(time.Minute),
-		Phase: core.PhaseAgentExit, Detail: "claude-code/sonnet exited success after 5 turns in 55s"}
-	buildOK = core.Progress{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(61 * time.Second),
-		Phase: core.PhaseValidationStep, Detail: "build passed in 1.2s (exit 0)"}
-	vetOK = core.Progress{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(63 * time.Second),
-		Phase: core.PhaseValidationStep, Detail: "vet passed in 800ms (exit 0)"}
-	testing3 = core.Progress{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(64 * time.Second),
-		Phase: core.PhaseValidationStep, Detail: "running test (go test ./...), step 3 of 3"}
+	started = core.Activity{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(5 * time.Second),
+		Kind: core.KindAgentStart, Detail: "claude-code/sonnet started (pid 42), attempt 2 of 3"}
+	exited = core.Activity{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(time.Minute),
+		Kind: core.KindAgentExit, Detail: "claude-code/sonnet exited success after 5 turns in 55s"}
+	buildOK = core.Activity{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(61 * time.Second),
+		Kind: core.KindValidationStep, Detail: "build passed in 1.2s (exit 0)"}
+	vetOK = core.Activity{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(63 * time.Second),
+		Kind: core.KindValidationStep, Detail: "vet passed in 800ms (exit 0)"}
+	testing3 = core.Activity{TicketID: "c9d4aa01", RunID: "run-2", At: t0.Add(64 * time.Second),
+		Kind: core.KindValidationStep, Detail: "running test (go test ./...), step 3 of 3"}
 )
 
 // openTall is openRunning with room for the timeline and the log together, and a journal.
-func openTall(t *testing.T, f *fakeService, journal ...core.Progress) Model {
+func openTall(t *testing.T, f *fakeService, journal ...core.Activity) Model {
 	t.Helper()
 	f.progress = journal
 	m := boot(t, f, 110, 44)
@@ -234,7 +234,7 @@ func TestRunningScreenByPhase(t *testing.T) {
 		state   core.State
 		run     core.Run
 		runs    []core.Run
-		journal []core.Progress
+		journal []core.Activity
 		lines   []api.LogLine
 		// activity is the snapshot's; the API appends the silence to it past the threshold.
 		activity string
@@ -244,7 +244,7 @@ func TestRunningScreenByPhase(t *testing.T) {
 		{
 			name:    "assigned",
 			state:   core.StateAssigned,
-			journal: []core.Progress{fetched},
+			journal: []core.Activity{fetched},
 			want: []string{
 				"fetching origin", "fetching ·", "▾ timeline", "no agent yet", "attempt 1",
 			},
@@ -256,7 +256,7 @@ func TestRunningScreenByPhase(t *testing.T) {
 			// The snapshot's row is newer than the run list the screen read on entry.
 			run: core.Run{ID: "run-2", ProviderID: "claude-code", Model: "sonnet", HostID: "local",
 				Turns: 9, TokensIn: 4800, TokensOut: 910},
-			journal:  []core.Progress{fetched, cut, started},
+			journal:  []core.Activity{fetched, cut, started},
 			activity: "claude-code/sonnet started (pid 42), attempt 2 of 3 — no output for 6m",
 			lines: []api.LogLine{
 				{RunID: "run-2", Stream: "event", Kind: provider.EventToolUse, Tool: "Edit", Text: "Edit divide.go"},
@@ -272,7 +272,7 @@ func TestRunningScreenByPhase(t *testing.T) {
 		{
 			name:    "validating",
 			state:   core.StateValidating,
-			journal: []core.Progress{fetched, cut, started, exited, buildOK, vetOK, testing3},
+			journal: []core.Activity{fetched, cut, started, exited, buildOK, vetOK, testing3},
 			want: []string{
 				"validating ·", "▾ timeline",
 				"build passed in 1.2s (exit 0)", "vet passed in 800ms (exit 0)",
@@ -324,7 +324,7 @@ func TestRefreshNoticesPhaseChanges(t *testing.T) {
 	m := openTall(t, f, fetched, cut, started)
 
 	f.status.Running[0].Ticket.State = core.StateValidating
-	f.progress = []core.Progress{fetched, cut, started, exited, buildOK}
+	f.progress = []core.Activity{fetched, cut, started, exited, buildOK}
 	m, cmd := sendCmd(t, m, statusMsg{status: f.status})
 	if cmd == nil {
 		t.Fatal("a refresh did not re-read the run and its journal")
@@ -362,10 +362,10 @@ func TestTimelineToggles(t *testing.T) {
 func TestTimelineCannotStarveTheLog(t *testing.T) {
 	f := runningFixture()
 	f.status.Running[0].Ticket.State = core.StateValidating
-	var journal []core.Progress
+	var journal []core.Activity
 	for i := 0; i < 60; i++ {
-		journal = append(journal, core.Progress{TicketID: "c9d4aa01", At: t0.Add(time.Duration(i) * time.Second),
-			Phase: core.PhaseValidationStep, Detail: fmt.Sprintf("step%02d passed in 1s (exit 0)", i)})
+		journal = append(journal, core.Activity{TicketID: "c9d4aa01", At: t0.Add(time.Duration(i) * time.Second),
+			Kind: core.KindValidationStep, Detail: fmt.Sprintf("step%02d passed in 1s (exit 0)", i)})
 	}
 	m := openTall(t, f, journal...)
 	m = send(t, m, logLineMsg{runID: "run-2", line: api.LogLine{Text: "the newest output", Stream: "agent"}})
@@ -396,13 +396,13 @@ func TestRetrySwitchesLogStreams(t *testing.T) {
 	ended := t0.Add(time.Minute)
 	first.EndedAt = &ended
 	first.FailureClass, first.FailureNote = core.TaskFailure, "go test ./... failed: divide_test.go:12"
-	retry := core.Progress{TicketID: "c9d4aa01", RunID: "run-1", At: t0.Add(70 * time.Second),
-		Phase: core.PhaseRetry, Detail: "attempt 1 of 2 did not pass; retrying with the failure in the prompt"}
+	retry := core.Activity{TicketID: "c9d4aa01", RunID: "run-1", At: t0.Add(70 * time.Second),
+		Kind: core.KindRetry, Detail: "attempt 1 of 2 did not pass; retrying with the failure in the prompt"}
 	second := core.Run{ID: "run-2", ProviderID: "claude-code", Model: "sonnet", HostID: "local"}
 
 	m, cmd := sendCmd(t, m, runDetailMsg{
 		ticketID: "c9d4aa01", runs: []core.Run{second, first},
-		journal: []core.Progress{fetched, cut, retry}, journalOK: true,
+		journal: []core.Activity{fetched, cut, retry}, journalOK: true,
 	})
 	if cmd == nil {
 		t.Fatal("a newer run did not open its log stream")
@@ -448,7 +448,7 @@ func TestHandoffDestinations(t *testing.T) {
 		name    string
 		state   core.State
 		reason  core.AttentionReason
-		journal []core.Progress
+		journal []core.Activity
 		want    string
 	}{
 		{name: "review", state: core.StateReview, reason: core.ReasonReviewPending,
@@ -458,8 +458,8 @@ func TestHandoffDestinations(t *testing.T) {
 		{name: "blocked", state: core.StateBlocked, reason: core.ReasonAgentQuestion,
 			want: "blocked on a question · press 8"},
 		{name: "needs you before its row arrives", state: core.StateNeedsYou,
-			journal: []core.Progress{{TicketID: "c9d4aa01", At: t0.Add(2 * time.Minute),
-				Phase: core.PhaseHandoff, Detail: "parked in Needs You: provider_auth"}},
+			journal: []core.Activity{{TicketID: "c9d4aa01", At: t0.Add(2 * time.Minute),
+				Kind: core.KindHandoff, Detail: "parked in Needs You: provider_auth"}},
 			want: "parked in Needs You: provider_auth · press 8"},
 	}
 
@@ -478,7 +478,7 @@ func TestHandoffDestinations(t *testing.T) {
 				}}
 			}
 			f.explain.State = tc.state
-			f.progress = append([]core.Progress{fetched, cut, started, exited, buildOK}, tc.journal...)
+			f.progress = append([]core.Activity{fetched, cut, started, exited, buildOK}, tc.journal...)
 			m, cmd := sendCmd(t, m, statusMsg{status: f.status})
 			if cmd == nil {
 				t.Fatal("the ticket leaving did not re-read it")

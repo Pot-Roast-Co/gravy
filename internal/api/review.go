@@ -170,9 +170,14 @@ func (l *Local) requestChanges(ctx context.Context, ticketID, feedback string) e
 	if t.State == core.StateNeedsYou {
 		ev = core.EventRequeue
 	}
-	if _, err := l.db.SetTicketState(ctx, ticketID, ev); err != nil {
+	state, err := l.db.SetTicketState(ctx, ticketID, ev)
+	if err != nil {
 		return err
 	}
+	kind, detail := moveKind(ev)
+	l.recordHuman(ctx, ticketID, "", kind, map[string]any{
+		"event": string(ev), "state": string(state), "feedback": feedback,
+	}, "%s: %s", detail, flattenLine(feedback, 120))
 	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
 		return err
 	}
@@ -212,6 +217,13 @@ func (l *Local) MarkMerged(ctx context.Context, ticketID string) (core.State, er
 	if err != nil {
 		return "", err
 	}
+	// Landed, by a human: Gravy did not do this merge and is only writing down that it happened.
+	var runID string
+	if runs, err := l.db.ListRunsForTicket(context.WithoutCancel(ctx), ticketID); err == nil && len(runs) > 0 {
+		runID = runs[0].ID
+	}
+	l.recordHuman(ctx, ticketID, runID, core.KindLanded, map[string]any{"branch": t.Branch},
+		"merged %s by hand", t.Branch)
 	l.events.publish(Event{Kind: EventTicketChanged, TicketID: ticketID})
 	return state, nil
 }
@@ -237,6 +249,9 @@ func (l *Local) Requeue(ctx context.Context, ticketID string) (core.State, error
 	if err != nil {
 		return "", err
 	}
+	l.recordHuman(ctx, ticketID, "", core.KindRequeued, map[string]any{
+		"event": string(core.EventRequeue), "state": string(state),
+	}, "requeued")
 	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
 		return state, err
 	}
@@ -255,6 +270,9 @@ func (l *Local) Reject(ctx context.Context, ticketID string) error {
 	if err != nil {
 		return err
 	}
+	l.recordHuman(ctx, ticketID, "", core.KindRejected, map[string]any{
+		"event": string(core.EventReject), "state": string(state),
+	}, "rejected")
 	if _, err := l.db.ResolveAttentionForTicket(ctx, ticketID); err != nil {
 		return err
 	}

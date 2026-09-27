@@ -93,8 +93,8 @@ func (s *PublishingStore) AddValidation(ctx context.Context, id, runID, step str
 	return err
 }
 
-func (s *PublishingStore) AddProgress(ctx context.Context, p core.Progress) error {
-	err := s.Store.AddProgress(ctx, p)
+func (s *PublishingStore) AddActivity(ctx context.Context, p core.Activity) error {
+	err := s.Store.AddActivity(ctx, p)
 	if err == nil {
 		// A ticket-changed event rather than a run-changed one: the journal belongs to the
 		// ticket, the phases before an agent starts have no run at all, and the Activity a

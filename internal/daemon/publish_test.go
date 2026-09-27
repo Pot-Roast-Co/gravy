@@ -29,7 +29,7 @@ func (silentStore) AddValidation(context.Context, string, string, string, int, i
 func (silentStore) SetProviderUnavailable(context.Context, core.ProviderAvailability) error {
 	return nil
 }
-func (silentStore) AddProgress(context.Context, core.Progress) error { return nil }
+func (silentStore) AddActivity(context.Context, core.Activity) error { return nil }
 
 type recorder struct{ events []api.Event }
 
@@ -101,8 +101,8 @@ func TestProgressWakesClients(t *testing.T) {
 	rec := &recorder{}
 	s := WithEvents(silentStore{}, rec)
 
-	if err := s.AddProgress(context.Background(), core.Progress{
-		ID: "pg1", TicketID: "t1", Phase: core.PhaseFetch, Detail: "fetching origin",
+	if err := s.AddActivity(context.Background(), core.Activity{
+		ID: "pg1", TicketID: "t1", Kind: core.KindFetch, Detail: "fetching origin",
 	}); err != nil {
 		t.Fatal(err)
 	}
